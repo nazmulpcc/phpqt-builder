@@ -7,13 +7,26 @@
         "ext-cparser": "*",
         "symfony/console": "^8.0",
         "symfony/process": "^8.0",
-        "laravel/prompts": "^0.3.13"
+        "laravel/prompts": "^0.3.13",
+        "symfony/dependency-injection": "^8.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11.5",
+        "psy/psysh": "^0.12.20"
     },
     "license": "MIT",
     "autoload": {
         "psr-4": {
             "QtBuilder\\": "src/"
         }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "QtBuilder\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit"
     },
     "authors": [
         {
