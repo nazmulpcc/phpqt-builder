@@ -1,0 +1,16 @@
+#!/bin/env php
+<?php
+
+use QtBuilder\Commands\DoctorCommand;
+use Symfony\Component\Console\Application;
+
+require 'vendor/autoload.php';
+
+$app = new Application();
+
+$app->setName('Qt Builder');
+$app->setVersion('0.1.0');
+
+$app->addCommand(new DoctorCommand());
+
+$app->run();

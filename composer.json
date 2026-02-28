@@ -1,0 +1,25 @@
+{
+    "name": "nazmulpcc/phpqt-builder",
+    "description": "Parse QT classes and build a PHP extension",
+    "type": "project",
+    "require": {
+        "php": "^8.4",
+        "ext-cparser": "*",
+        "symfony/console": "^8.0",
+        "symfony/process": "^8.0",
+        "laravel/prompts": "^0.3.13"
+    },
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "QtBuilder\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "Nazmul Alam",
+            "email": "n@zmul.dev"
+        }
+    ],
+    "minimum-stability": "stable"
+}
