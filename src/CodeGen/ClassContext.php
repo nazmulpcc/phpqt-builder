@@ -98,11 +98,15 @@ class ClassContext
     /** INIT_NS_CLASS_ENTRY namespace string (e.g. "Qt\\Widgets") */
     public readonly string $initNsString;
 
+    /** TypeBridge for templates that need dynamic type lookups */
+    public readonly TypeBridge $typeBridge;
+
     public function __construct(
         PhpClass $phpClass,
         string $namespace,
         TypeBridge $typeBridge,
     ) {
+        $this->typeBridge = $typeBridge;
         $this->phpNamespace = $namespace;
         $this->phpClassName = $phpClass->name;
         $this->nativeCppType = $phpClass->name;
@@ -183,6 +187,23 @@ class ClassContext
             $this->methods,
             static fn(MethodContext $m): bool => $m->access === 'protected',
         ));
+    }
+
+    /**
+     * Get the PHP stub default value expression for an optional parameter.
+     *
+     * Used in .stub.php generation for gen_stub.php to produce _arginfo.h.
+     */
+    public function stubDefault(ParamContext $param): string
+    {
+        return match ($param->phpType) {
+            'int' => '0',
+            'float' => '0.0',
+            'bool' => 'false',
+            'string' => "''",
+            'array' => '[]',
+            default => 'null',
+        };
     }
 
     /**
