@@ -247,6 +247,7 @@ class ClassDefinitionBuilder
         }
 
         $parameters = [];
+        $usedNames = [];
 
         for ($i = 0; $i < $maxParams; $i++) {
             $phpTypes = [];
@@ -265,7 +266,7 @@ class ClassDefinitionBuilder
                 $phpTypes[] = $this->typeMapper->map($params[$i]['type']);
 
                 $pName = $params[$i]['name'];
-                if ($pName !== '') {
+                if ($pName !== '' && !\in_array($pName, $names, true)) {
                     $names[] = $pName;
                 }
 
@@ -275,7 +276,10 @@ class ClassDefinitionBuilder
             }
 
             $hasDefault = $someVariantsShorter || $allHaveDefault;
-            $name = $names[0] ?? 'p' . $i;
+
+            // Pick a unique name. Try names from the variants first, then fallback.
+            $name = $this->pickUniqueName($names, $i, $usedNames);
+            $usedNames[$name] = true;
 
             $parameters[] = new PhpParameter(
                 name: $name,
@@ -286,6 +290,43 @@ class ClassDefinitionBuilder
         }
 
         return $parameters;
+    }
+
+    /**
+     * Pick a unique parameter name that hasn't been used yet.
+     *
+     * @param list<string> $candidates  Names from variant parameters at this position
+     * @param int $position             Parameter position (for fallback)
+     * @param array<string, true> $usedNames  Already-used names
+     */
+    private function pickUniqueName(array $candidates, int $position, array $usedNames): string
+    {
+        // Try each candidate name from variants
+        foreach ($candidates as $name) {
+            if (!isset($usedNames[$name])) {
+                return $name;
+            }
+        }
+
+        // All candidate names are taken. Try suffixing the first candidate.
+        if ($candidates !== []) {
+            $base = $candidates[0];
+            for ($suffix = 2; $suffix <= 20; $suffix++) {
+                $try = $base . $suffix;
+                if (!isset($usedNames[$try])) {
+                    return $try;
+                }
+            }
+        }
+
+        // Fallback: positional name
+        $fallback = 'p' . $position;
+        if (!isset($usedNames[$fallback])) {
+            return $fallback;
+        }
+
+        // Last resort
+        return 'arg' . $position;
     }
 
     /**

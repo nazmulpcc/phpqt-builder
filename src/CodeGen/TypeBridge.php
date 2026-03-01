@@ -378,15 +378,47 @@ class TypeBridge
      * @param string $phpType  PHP type name
      * @param string $cppType  Original C++ type (from overload)
      * @param string $varName  C variable name holding the parsed value
+     * @param bool   $varIsZval  Whether the variable is a zval* (from union/object merged param)
      * @return string  C++ expression
      */
-    public function phpToNativeExpr(string $phpType, string $cppType, string $varName): string
+    public function phpToNativeExpr(string $phpType, string $cppType, string $varName, bool $varIsZval = false): string
     {
+        // If the variable is a zval* but the overload expects a scalar,
+        // we need to extract the value from the zval first.
+        if ($varIsZval) {
+            return $this->zvalToNativeExpr($phpType, $cppType, $varName);
+        }
+
         return match ($phpType) {
             'int' => sprintf('(%s)%s', $this->cppCastType($cppType), $varName),
             'float' => sprintf('(%s)%s', $this->cppCastType($cppType), $varName),
             'bool' => $varName,
             'string' => $this->phpStringToNativeExpr($cppType, $varName),
+            default => $this->isObjectType($phpType)
+                ? $this->phpObjectToNativeExpr($phpType, $cppType, $varName)
+                : $varName,
+        };
+    }
+
+    /**
+     * Generate a C++ expression that extracts a value from a zval* variable
+     * and converts it to the target C++ type.
+     *
+     * Used when a merged parameter is zval* (union type or object) but a
+     * specific overload branch needs it as a scalar or different type.
+     *
+     * @param string $phpType  The PHP type this overload expects (e.g. "int", "float", "string")
+     * @param string $cppType  Original C++ type (from overload)
+     * @param string $varName  C variable name (zval*)
+     * @return string  C++ expression
+     */
+    public function zvalToNativeExpr(string $phpType, string $cppType, string $varName): string
+    {
+        return match ($phpType) {
+            'int' => sprintf('(%s)Z_LVAL_P(%s)', $this->cppCastType($cppType), $varName),
+            'float' => sprintf('(%s)Z_DVAL_P(%s)', $this->cppCastType($cppType), $varName),
+            'bool' => sprintf('Z_TYPE_P(%s) == IS_TRUE', $varName),
+            'string' => $this->phpStringToNativeExpr($cppType, sprintf('Z_STR_P(%s)', $varName)),
             default => $this->isObjectType($phpType)
                 ? $this->phpObjectToNativeExpr($phpType, $cppType, $varName)
                 : $varName,
@@ -586,6 +618,10 @@ class TypeBridge
 
         return match ($normalized) {
             'short', 'unsigned short', 'qint8', 'qint16', 'quint8', 'quint16' => $normalized,
+            'float' => 'float',
+            'double', 'qreal' => 'double',
+            'long', 'unsigned long' => $normalized,
+            'long long', 'unsigned long long', 'qint64', 'quint64', 'qlonglong', 'qulonglong' => $normalized,
             default => 'int',
         };
     }
