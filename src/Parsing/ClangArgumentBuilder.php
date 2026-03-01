@@ -49,6 +49,15 @@ class ClangArgumentBuilder
         $args = [...$args, ...$this->platformDefines()];
 
         foreach ($this->extraIncludePaths as $path) {
+            if ($path === '') {
+                continue;
+            }
+
+            if (str_starts_with($path, '-')) {
+                $args[] = $path;
+                continue;
+            }
+
             $args[] = '-I' . $path;
         }
 

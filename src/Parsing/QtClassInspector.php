@@ -81,7 +81,127 @@ class QtClassInspector
             return null;
         }
 
-        return $this->extractClassData($classCursor);
+        if ($this->hasDirectMembers($classCursor)) {
+            return $this->extractClassData($classCursor);
+        }
+
+        return $this->extractClassDataFromTranslationUnit($className, $classCursor);
+    }
+
+    private function hasDirectMembers(ClassCursor $class): bool
+    {
+        foreach ($class->getFields() as $_) {
+            return true;
+        }
+
+        foreach ($class->getMethods() as $_) {
+            return true;
+        }
+
+        foreach ($class->getChildren(CursorKind::CXXConstructor) as $_) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Some Qt classes, notably exported QObject-style classes inside QT_BEGIN_NAMESPACE,
+     * are exposed by ext-cparser as a forward-declaration ClassCursor plus generic Cursor
+     * nodes for the actual definition. In that case we recover members by scanning the
+     * translation unit for methods/fields whose parent spelling matches the class name.
+     *
+     * @return array{name: string, is_abstract: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>}
+     */
+    private function extractClassDataFromTranslationUnit(string $className, ?ClassCursor $classCursor = null): array
+    {
+        $properties = [];
+        $propertySignatures = [];
+        foreach ($this->tu->cursors(CursorKind::FieldDecl) as $field) {
+            if (!$field instanceof FieldCursor || !$this->belongsToClass($field, $className)) {
+                continue;
+            }
+
+            $signature = $field->getSpelling() . '|' . ($field->getType()?->toString() ?? 'unknown');
+            if (isset($propertySignatures[$signature])) {
+                continue;
+            }
+            $propertySignatures[$signature] = true;
+
+            $properties[] = $this->extractField($field);
+        }
+
+        $methods = [];
+        $methodSignatures = [];
+
+        foreach ($this->tu->cursors(CursorKind::CXXConstructor) as $ctor) {
+            if (!$this->belongsToClass($ctor, $className)) {
+                continue;
+            }
+
+            $parameters = [];
+            foreach ($ctor->getChildren(CursorKind::ParmDecl) as $param) {
+                /** @var ParameterCursor $param */
+                $parameters[] = $this->extractParameter($param);
+            }
+
+            $signature = $className . '|void|' . json_encode($parameters);
+            if (isset($methodSignatures[$signature])) {
+                continue;
+            }
+            $methodSignatures[$signature] = true;
+
+            $methods[] = [
+                'name' => $className,
+                'return_type' => 'void',
+                'access' => 'public',
+                'parameters' => $parameters,
+                'is_static' => false,
+                'is_const' => false,
+                'is_virtual' => false,
+                'is_pure_virtual' => false,
+                'is_override' => false,
+            ];
+        }
+
+        foreach ($this->tu->cursors(CursorKind::CXXMethod) as $method) {
+            if (!$method instanceof MethodCursor || !$this->belongsToClass($method, $className)) {
+                continue;
+            }
+
+            $extracted = $this->extractMethod($method);
+            $signature = $extracted['name']
+                . '|' . $extracted['return_type']
+                . '|' . json_encode($extracted['parameters'])
+                . '|' . ($extracted['is_const'] ? '1' : '0')
+                . '|' . ($extracted['is_static'] ? '1' : '0');
+
+            if (isset($methodSignatures[$signature])) {
+                continue;
+            }
+            $methodSignatures[$signature] = true;
+
+            $methods[] = $extracted;
+        }
+
+        return [
+            'name' => $className,
+            'is_abstract' => $classCursor?->isAbstract() ?? false,
+            'is_struct' => $classCursor?->isStruct() ?? false,
+            'bases' => $classCursor !== null ? array_values(array_map(
+                static fn(ClassCursor $base): string => $base->getSpelling(),
+                iterator_to_array($classCursor->getBases(), false),
+            )) : [],
+            'properties' => $properties,
+            'methods' => $methods,
+        ];
+    }
+
+    private function belongsToClass(Cursor $cursor, string $className): bool
+    {
+        $parent = $cursor->getParent();
+
+        return $parent !== null && $parent->getSpelling() === $className;
     }
 
     /**

@@ -72,6 +72,13 @@ class QtInstallationResolver
             $includeRoots[] = $headersPath;
         }
 
+        if ($this->systemInformation->getOsFamily() === 'Darwin') {
+            $frameworkLibRoot = $rootPath . '/lib';
+            if (is_dir($frameworkLibRoot)) {
+                $includeRoots[] = '-F' . $frameworkLibRoot;
+            }
+        }
+
         $moduleHeaderRoots = [];
         foreach ($modules as $module) {
             $headerRoot = null;
