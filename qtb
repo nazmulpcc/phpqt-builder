@@ -1,6 +1,7 @@
 #!/usr/bin/env php
 <?php
 
+use QtBuilder\Commands\DefineCommand;
 use QtBuilder\Commands\DoctorCommand;
 use QtBuilder\Commands\InspectCommand;
 use QtBuilder\UnixSystemInformation;
@@ -13,5 +14,6 @@ $app = new Application('QT Builder', '0.1.0');
 
 $app->addCommand(new DoctorCommand($systemInformation));
 $app->addCommand(new InspectCommand());
+$app->addCommand(new DefineCommand());
 
 $app->run();
