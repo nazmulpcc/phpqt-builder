@@ -10,9 +10,12 @@ $returnClass = $method->returnType;
 $returnCe = $ctx->typeBridge->ceVarName($returnClass);
 $returnFromObj = $ctx->typeBridge->fromObjFuncName($returnClass);
 $returnStruct = $ctx->typeBridge->objectStructName($returnClass);
+$callPrefix = $method->isStatic
+    ? "{$ctx->nativeCppType}::"
+    : "intern->native_ptr->";
 @endphp
 @if($method->hasNoParams())
-@php $callExpr = "intern->native_ptr->{$method->cppName}()"; @endphp
+@php $callExpr = "{$callPrefix}{$method->cppName}()"; @endphp
 @else
 @php
     $args = [];
@@ -20,7 +23,7 @@ $returnStruct = $ctx->typeBridge->objectStructName($returnClass);
         $cppType = $overload && isset($overload->params[$i]) ? $overload->params[$i]->cppType : '';
         $args[] = $ctx->typeBridge->phpToNativeExpr($param->phpType, $cppType, $param->cVarName);
     }
-    $callExpr = "intern->native_ptr->{$method->cppName}(" . implode(', ', $args) . ')';
+    $callExpr = "{$callPrefix}{$method->cppName}(" . implode(', ', $args) . ')';
 @endphp
 @endif
     {!! $returnClass !!} _result = {!! $callExpr !!};

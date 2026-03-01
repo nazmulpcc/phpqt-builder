@@ -7,9 +7,12 @@
  */
 $overload = $method->overloads[0] ?? null;
 $cppReturnType = $overload ? $overload->cppReturnType : 'QString';
+$callPrefix = $method->isStatic
+    ? "{$ctx->nativeCppType}::"
+    : "intern->native_ptr->";
 @endphp
 @if($method->hasNoParams())
-@php $callExpr = "intern->native_ptr->{$method->cppName}()"; @endphp
+@php $callExpr = "{$callPrefix}{$method->cppName}()"; @endphp
 @else
 @php
     $args = [];
@@ -17,7 +20,7 @@ $cppReturnType = $overload ? $overload->cppReturnType : 'QString';
         $cppType = $overload && isset($overload->params[$i]) ? $overload->params[$i]->cppType : '';
         $args[] = $ctx->typeBridge->phpToNativeExpr($param->phpType, $cppType, $param->cVarName);
     }
-    $callExpr = "intern->native_ptr->{$method->cppName}(" . implode(', ', $args) . ')';
+    $callExpr = "{$callPrefix}{$method->cppName}(" . implode(', ', $args) . ')';
 @endphp
 @endif
 @php

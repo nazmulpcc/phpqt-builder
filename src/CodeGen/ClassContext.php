@@ -143,7 +143,8 @@ class ClassContext
 
         // Namespace for INIT_NS_CLASS_ENTRY
         $this->namespaceParts = explode('\\', $namespace);
-        $this->initNsString = $namespace;
+        // INIT_NS_CLASS_ENTRY requires C string with escaped backslashes
+        $this->initNsString = str_replace('\\', '\\\\', $namespace);
 
         // Build method contexts
         $methods = [];

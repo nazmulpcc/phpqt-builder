@@ -387,8 +387,34 @@ class TypeBridge
             'float' => sprintf('(%s)%s', $this->cppCastType($cppType), $varName),
             'bool' => $varName,
             'string' => $this->phpStringToNativeExpr($cppType, $varName),
-            default => $varName,
+            default => $this->isObjectType($phpType)
+                ? $this->phpObjectToNativeExpr($phpType, $cppType, $varName)
+                : $varName,
         };
+    }
+
+    /**
+     * Generate a C++ expression that unwraps a zval* holding a PHP object
+     * to the native C++ type needed by the Qt method call.
+     *
+     * @param string $phpType  PHP class name (e.g. "QPoint")
+     * @param string $cppType  Original C++ type (e.g. "const QPoint &")
+     * @param string $varName  C variable name (zval *)
+     * @return string  C++ expression
+     */
+    public function phpObjectToNativeExpr(string $phpType, string $cppType, string $varName): string
+    {
+        $fromObj = $this->fromObjFuncName($phpType);
+        $baseExpr = sprintf('%s(Z_OBJ_P(%s))->native_ptr', $fromObj, $varName);
+
+        // If C++ expects a pointer, pass the pointer directly
+        $normalized = $this->normalizeCppType($cppType);
+        if (str_contains($cppType, '*') && !str_contains($cppType, '&')) {
+            return $baseExpr;
+        }
+
+        // Otherwise (const ref, value), dereference
+        return '*' . $baseExpr;
     }
 
     /**

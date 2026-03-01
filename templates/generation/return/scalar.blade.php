@@ -6,11 +6,14 @@
  * @var \QtBuilder\CodeGen\MethodContext $method
  */
 $overload = $method->overloads[0] ?? null;
+$callPrefix = $method->isStatic
+    ? "{$ctx->nativeCppType}::"
+    : "intern->native_ptr->";
 @endphp
 @if($method->hasNoParams())
-    {!! $method->returnMacro !!}(intern->native_ptr->{!! $method->cppName !!}());
+    {!! $method->returnMacro !!}({!! $callPrefix !!}{!! $method->cppName !!}());
 @else
-    {!! $method->returnMacro !!}(intern->native_ptr->{!! $method->cppName !!}(@foreach($method->params as $i => $param)@php
+    {!! $method->returnMacro !!}({!! $callPrefix !!}{!! $method->cppName !!}(@foreach($method->params as $i => $param)@php
     $cppType = $overload && isset($overload->params[$i]) ? $overload->params[$i]->cppType : '';
     $expr = $ctx->typeBridge->phpToNativeExpr($param->phpType, $cppType, $param->cVarName);
 @endphp{!! $expr !!}@if(!$loop->last), @endif @endforeach));

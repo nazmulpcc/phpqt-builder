@@ -33,8 +33,9 @@ class ClassDefinitionBuilder
      */
     public function build(array $classData): PhpClass
     {
+        $className = $classData['name'];
         $properties = $this->buildProperties($classData['properties']);
-        $methods = $this->buildMethods($classData['methods']);
+        $methods = $this->buildMethods($classData['methods'], $className);
 
         // Use the first base class as the PHP parent (single inheritance).
         $parent = $classData['bases'][0] ?? null;
@@ -85,7 +86,7 @@ class ClassDefinitionBuilder
      * @param list<array{name: string, return_type: string, access: string, parameters: list<array{name: string, type: string, has_default: bool}>, is_static: bool, is_const: bool, is_virtual: bool, is_pure_virtual: bool, is_override: bool}> $methods
      * @return list<PhpMethod>
      */
-    private function buildMethods(array $methods): array
+    private function buildMethods(array $methods, string $className): array
     {
         // Filter private methods.
         $methods = array_filter($methods, static fn(array $m): bool => $m['access'] !== 'private');
@@ -96,6 +97,25 @@ class ClassDefinitionBuilder
         $methods = array_filter(
             $methods,
             static fn(array $m): bool => !str_starts_with($m['name'], 'operator'),
+        );
+
+        // Filter out C++ destructors (e.g. ~QPoint) — not needed in PHP.
+        $methods = array_filter(
+            $methods,
+            static fn(array $m): bool => !str_starts_with($m['name'], '~'),
+        );
+
+        // Rename constructors: C++ constructors have the class name (e.g. "QPoint"),
+        // PHP uses __construct.
+        $methods = array_map(
+            static function (array $m) use ($className): array {
+                if ($m['name'] === $className) {
+                    $m['name'] = '__construct';
+                    $m['return_type'] = 'void'; // constructors have no return type
+                }
+                return $m;
+            },
+            $methods,
         );
 
         // Group by method name.

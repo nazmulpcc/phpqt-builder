@@ -6,6 +6,8 @@ namespace QtBuilder\Parsing;
 
 use CParser\Access;
 use CParser\ClassCursor;
+use CParser\Cursor;
+use CParser\CursorKind;
 use CParser\FieldCursor;
 use CParser\MethodCursor;
 use CParser\ParameterCursor;
@@ -100,6 +102,14 @@ class QtClassInspector
         }
 
         $methods = [];
+
+        // Extract constructors (CXXConstructor kind = 24, not returned by getMethods()).
+        // These are generic Cursor objects; parameters are ParameterCursor children.
+        $constructors = $this->extractConstructors($class);
+        foreach ($constructors as $ctor) {
+            $methods[] = $ctor;
+        }
+
         foreach ($class->getMethods() as $method) {
             $methods[] = $this->extractMethod($method);
         }
@@ -160,6 +170,53 @@ class QtClassInspector
             'type' => $param->getType()?->toString() ?? 'unknown',
             'has_default' => $param->hasDefaultValue(),
         ];
+    }
+
+    /**
+     * Extract constructors from a ClassCursor.
+     *
+     * ClassCursor::getMethods() only returns CXXMethod cursors, not constructors.
+     * Constructors are CXXConstructor cursors that must be fetched via getChildren().
+     * We deduplicate by display name since Qt headers may produce duplicate entries.
+     *
+     * @return list<array{name: string, return_type: string, access: string, parameters: list<array<string, mixed>>, is_static: bool, is_const: bool, is_virtual: bool, is_pure_virtual: bool, is_override: bool}>
+     */
+    private function extractConstructors(ClassCursor $class): array
+    {
+        $constructors = [];
+        $seen = [];
+
+        foreach ($class->getChildren(CursorKind::CXXConstructor) as $ctor) {
+            $displayName = $ctor->getDisplayName();
+
+            // Deduplicate — Qt headers sometimes produce identical constructor entries
+            if (isset($seen[$displayName])) {
+                continue;
+            }
+            $seen[$displayName] = true;
+
+            $parameters = [];
+            foreach ($ctor->getChildren(CursorKind::ParmDecl) as $param) {
+                /** @var ParameterCursor $param */
+                $parameters[] = $this->extractParameter($param);
+            }
+
+            // Constructor name in the IR is the class name; the ClassDefinitionBuilder
+            // will rename it to __construct.
+            $constructors[] = [
+                'name' => $ctor->getSpelling(),
+                'return_type' => 'void',
+                'access' => 'public', // generic Cursor lacks getAccessSpecifier()
+                'parameters' => $parameters,
+                'is_static' => false,
+                'is_const' => false,
+                'is_virtual' => false,
+                'is_pure_virtual' => false,
+                'is_override' => false,
+            ];
+        }
+
+        return $constructors;
     }
 
     public static function accessLabel(?int $access): string

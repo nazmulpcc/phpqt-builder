@@ -7,9 +7,12 @@
  * @var \QtBuilder\CodeGen\OverloadContext $overload
  * @var string $indent
  */
+$callPrefix = $method->isStatic
+    ? "{$ctx->nativeCppType}::"
+    : "intern->native_ptr->";
 @endphp
 @if($overload->returnStrategy === 'void')
-{!! $indent !!}intern->native_ptr->{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
+{!! $indent !!}{!! $callPrefix !!}{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
     $mergedParam = $method->params[$i] ?? null;
     $varName = $mergedParam ? $mergedParam->cVarName : $op->name;
     $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName);
@@ -18,7 +21,7 @@
 @php
     $macro = $ctx->typeBridge->returnMacro($method->returnType) ?? 'RETURN_LONG';
 @endphp
-{!! $indent !!}{!! $macro !!}(intern->native_ptr->{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
+{!! $indent !!}{!! $macro !!}({!! $callPrefix !!}{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
     $mergedParam = $method->params[$i] ?? null;
     $varName = $mergedParam ? $mergedParam->cVarName : $op->name;
     $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName);
@@ -27,7 +30,7 @@
 @php
     $normalized = trim(str_replace(['const ', '&'], '', $overload->cppReturnType));
 @endphp
-{!! $indent !!}{!! $normalized !!} _result = intern->native_ptr->{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
+{!! $indent !!}{!! $normalized !!} _result = {!! $callPrefix !!}{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
     $mergedParam = $method->params[$i] ?? null;
     $varName = $mergedParam ? $mergedParam->cVarName : $op->name;
     $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName);
@@ -40,7 +43,7 @@
     $returnFromObj = $ctx->typeBridge->fromObjFuncName($returnClass);
     $returnStruct = $ctx->typeBridge->objectStructName($returnClass);
 @endphp
-{!! $indent !!}{!! $returnClass !!} _result = intern->native_ptr->{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
+{!! $indent !!}{!! $returnClass !!} _result = {!! $callPrefix !!}{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
     $mergedParam = $method->params[$i] ?? null;
     $varName = $mergedParam ? $mergedParam->cVarName : $op->name;
     $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName);
@@ -54,7 +57,7 @@
     $wrapFunc = $ctx->typeBridge->wrapNativeFuncName($returnClass);
     $returnCe = $ctx->typeBridge->ceVarName($returnClass);
 @endphp
-{!! $indent !!}{!! $returnClass !!} *_result = intern->native_ptr->{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
+{!! $indent !!}{!! $returnClass !!} *_result = {!! $callPrefix !!}{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
     $mergedParam = $method->params[$i] ?? null;
     $varName = $mergedParam ? $mergedParam->cVarName : $op->name;
     $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName);
