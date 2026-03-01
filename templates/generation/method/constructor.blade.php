@@ -40,7 +40,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
 @elseif($method->isOverloaded)
 @include('generation.method.constructor_dispatch', ['ctx' => $ctx, 'method' => $method])
 @else
-    intern->native_ptr = new {!! $ctx->nativeCppType !!}(@foreach($method->params as $i => $param){!! $ctx->typeBridge->phpToNativeExpr($param->phpType, $method->overloads[0]->params[$i]->cppType ?? '', $param->cVarName) !!}@if(!$loop->last), @endif @endforeach);
+    intern->native_ptr = new {!! $ctx->nativeCppType !!}(@foreach($method->params as $i => $param){!! $ctx->typeBridge->phpToNativeExpr($param->phpType, $method->overloads[0]->params[$i]->cppType ?? '', $param->cVarName, false, $param->isOptional) !!}@if(!$loop->last), @endif @endforeach);
 @if($ctx->hasPreventDestroy)
 @foreach($method->params as $param)
 @if($param->isObject && !$param->isUnion)
@@ -53,4 +53,3 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
 @endif
 @endif
 }
-

@@ -260,7 +260,7 @@ class TypeBridge
     public function zppMacroOptional(string $phpType, string $varName, ?string $ceVar = null): string
     {
         if ($phpType === 'int') {
-            return sprintf('Z_PARAM_LONG(% s)', $varName);
+            return sprintf('Z_PARAM_LONG(%s)', $varName);
         }
 
         // For objects with optional, accept null too
@@ -269,6 +269,30 @@ class TypeBridge
         }
 
         return $this->zppMacro($phpType, $varName, $ceVar);
+    }
+
+    /**
+     * Build the PHP stub type, appending "|null" when an optional parameter defaults to null.
+     */
+    public function stubType(string $phpType, bool $hasDefault): string
+    {
+        if (
+            !$hasDefault
+            || $phpType === 'mixed'
+            || $phpType === 'null'
+            || in_array($phpType, ['int', 'float', 'bool', 'string', 'array'], true)
+            || $this->typeIncludes($phpType, 'null')
+        ) {
+            return $phpType;
+        }
+
+        $parts = array_values(array_filter(
+            explode('|', $phpType),
+            static fn(string $part): bool => $part !== '' && $part !== 'null',
+        ));
+        $parts[] = 'null';
+
+        return implode('|', $parts);
     }
 
     // ------------------------------------------------------------------
@@ -381,12 +405,18 @@ class TypeBridge
      * @param bool   $varIsZval  Whether the variable is a zval* (from union/object merged param)
      * @return string  C++ expression
      */
-    public function phpToNativeExpr(string $phpType, string $cppType, string $varName, bool $varIsZval = false): string
+    public function phpToNativeExpr(
+        string $phpType,
+        string $cppType,
+        string $varName,
+        bool $varIsZval = false,
+        bool $nullable = false,
+    ): string
     {
         // If the variable is a zval* but the overload expects a scalar,
         // we need to extract the value from the zval first.
         if ($varIsZval) {
-            return $this->zvalToNativeExpr($phpType, $cppType, $varName);
+            return $this->zvalToNativeExpr($phpType, $cppType, $varName, $nullable);
         }
 
         return match ($phpType) {
@@ -395,7 +425,7 @@ class TypeBridge
             'bool' => $varName,
             'string' => $this->phpStringToNativeExpr($cppType, $varName),
             default => $this->isObjectType($phpType)
-                ? $this->phpObjectToNativeExpr($phpType, $cppType, $varName)
+                ? $this->phpObjectToNativeExpr($phpType, $cppType, $varName, $nullable)
                 : $varName,
         };
     }
@@ -412,7 +442,7 @@ class TypeBridge
      * @param string $varName  C variable name (zval*)
      * @return string  C++ expression
      */
-    public function zvalToNativeExpr(string $phpType, string $cppType, string $varName): string
+    public function zvalToNativeExpr(string $phpType, string $cppType, string $varName, bool $nullable = false): string
     {
         return match ($phpType) {
             'int' => sprintf('(%s)Z_LVAL_P(%s)', $this->cppCastType($cppType), $varName),
@@ -420,7 +450,7 @@ class TypeBridge
             'bool' => sprintf('Z_TYPE_P(%s) == IS_TRUE', $varName),
             'string' => $this->phpStringToNativeExpr($cppType, sprintf('Z_STR_P(%s)', $varName)),
             default => $this->isObjectType($phpType)
-                ? $this->phpObjectToNativeExpr($phpType, $cppType, $varName)
+                ? $this->phpObjectToNativeExpr($phpType, $cppType, $varName, $nullable)
                 : $varName,
         };
     }
@@ -434,18 +464,25 @@ class TypeBridge
      * @param string $varName  C variable name (zval *)
      * @return string  C++ expression
      */
-    public function phpObjectToNativeExpr(string $phpType, string $cppType, string $varName): string
+    public function phpObjectToNativeExpr(string $phpType, string $cppType, string $varName, bool $nullable = false): string
     {
         $fromObj = $this->fromObjFuncName($phpType);
         $baseExpr = sprintf('%s(Z_OBJ_P(%s))->native_ptr', $fromObj, $varName);
 
         // If C++ expects a pointer, pass the pointer directly
-        $normalized = $this->normalizeCppType($cppType);
         if (str_contains($cppType, '*') && !str_contains($cppType, '&')) {
+            if ($nullable) {
+                return sprintf('(%s != NULL ? %s : NULL)', $varName, $baseExpr);
+            }
+
             return $baseExpr;
         }
 
         // Otherwise (const ref, value), dereference
+        if ($nullable) {
+            return sprintf('(%s != NULL ? *%s : %s())', $varName, $baseExpr, $this->normalizeCppType($cppType));
+        }
+
         return '*' . $baseExpr;
     }
 
@@ -644,6 +681,11 @@ class TypeBridge
         }
 
         return trim($type);
+    }
+
+    private function typeIncludes(string $phpType, string $needle): bool
+    {
+        return in_array($needle, explode('|', $phpType), true);
     }
 
     /**

@@ -15,7 +15,7 @@ $callPrefix = $method->isStatic
 {!! $indent !!}{!! $callPrefix !!}{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
     $mergedParam = $method->params[$i] ?? null;
     $varName = $mergedParam ? $mergedParam->cVarName : $op->name;
-    $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName);
+    $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName, false, $mergedParam?->isOptional ?? false);
 @endphp{!! $expr !!}@if(!$loop->last), @endif @endforeach);
 @elseif($overload->returnStrategy === 'scalar')
 @php
@@ -24,7 +24,7 @@ $callPrefix = $method->isStatic
 {!! $indent !!}{!! $macro !!}({!! $callPrefix !!}{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
     $mergedParam = $method->params[$i] ?? null;
     $varName = $mergedParam ? $mergedParam->cVarName : $op->name;
-    $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName);
+    $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName, false, $mergedParam?->isOptional ?? false);
 @endphp{!! $expr !!}@if(!$loop->last), @endif @endforeach));
 @elseif($overload->returnStrategy === 'string')
 @php
@@ -33,7 +33,7 @@ $callPrefix = $method->isStatic
 {!! $indent !!}{!! $normalized !!} _result = {!! $callPrefix !!}{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
     $mergedParam = $method->params[$i] ?? null;
     $varName = $mergedParam ? $mergedParam->cVarName : $op->name;
-    $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName);
+    $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName, false, $mergedParam?->isOptional ?? false);
 @endphp{!! $expr !!}@if(!$loop->last), @endif @endforeach);
 {!! $indent !!}{!! $ctx->typeBridge->nativeStringToPhpReturn($overload->cppReturnType, '_result') !!};
 @elseif($overload->returnStrategy === 'value_object')
@@ -46,7 +46,7 @@ $callPrefix = $method->isStatic
 {!! $indent !!}{!! $returnClass !!} _result = {!! $callPrefix !!}{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
     $mergedParam = $method->params[$i] ?? null;
     $varName = $mergedParam ? $mergedParam->cVarName : $op->name;
-    $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName);
+    $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName, false, $mergedParam?->isOptional ?? false);
 @endphp{!! $expr !!}@if(!$loop->last), @endif @endforeach);
 {!! $indent !!}object_init_ex(return_value, {!! $returnCe !!});
 {!! $indent !!}{!! $returnStruct !!} *_ret_intern = {!! $returnFromObj !!}(Z_OBJ_P(return_value));
@@ -60,7 +60,7 @@ $callPrefix = $method->isStatic
 {!! $indent !!}{!! $returnClass !!} *_result = {!! $callPrefix !!}{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
     $mergedParam = $method->params[$i] ?? null;
     $varName = $mergedParam ? $mergedParam->cVarName : $op->name;
-    $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName);
+    $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName, false, $mergedParam?->isOptional ?? false);
 @endphp{!! $expr !!}@if(!$loop->last), @endif @endforeach);
 {!! $indent !!}{!! $wrapFunc !!}(return_value, _result, {!! $returnCe !!}, true);
 @else

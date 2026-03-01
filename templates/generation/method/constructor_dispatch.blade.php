@@ -23,7 +23,7 @@
         intern->native_ptr = new {!! $ctx->nativeCppType !!}(@foreach($ol->params as $i => $op)@php
     $mergedParam = $method->params[$i] ?? null;
     $varName = $mergedParam ? $mergedParam->cVarName : $op->name;
-    $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName);
+    $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName, false, $mergedParam?->isOptional ?? false);
 @endphp{!! $expr !!}@if(!$loop->last), @endif @endforeach);
 @else
 @php $innerFirst = true; @endphp
@@ -42,7 +42,7 @@
             intern->native_ptr = new {!! $ctx->nativeCppType !!}(@foreach($ol->params as $i => $op)@php
     $mergedParam2 = $method->params[$i] ?? null;
     $varName = $mergedParam2 ? $mergedParam2->cVarName : $op->name;
-    $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName);
+    $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName, false, $mergedParam2?->isOptional ?? false);
 @endphp{!! $expr !!}@if(!$loop->last), @endif @endforeach);
 @php $innerFirst = false; @endphp
 @endif

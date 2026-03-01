@@ -98,7 +98,9 @@ class GenerateWorkerPool
             $command[] = '--qt-path=' . $task->qtPath;
         }
 
-        if ($task->allowedClasses !== []) {
+        if ($task->allowedClassesFile !== null && $task->allowedClassesFile !== '') {
+            $command[] = '--allowed-classes-file=' . $task->allowedClassesFile;
+        } elseif ($task->allowedClasses !== []) {
             $command[] = '--allowed-classes=' . implode(',', $task->allowedClasses);
         }
 

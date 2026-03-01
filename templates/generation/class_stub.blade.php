@@ -26,10 +26,10 @@ namespace {!! $ctx->phpNamespace !!};
     if ($method->isStatic) $modifiers .= ' static';
 @endphp
 @if($method->isConstructor)
-    {!! $modifiers !!} function __construct(@foreach($method->params as $param){!! $param->phpType !!} ${!! $param->name !!}@if($param->isOptional) = {!! $ctx->stubDefault($param) !!}@endif @if(!$loop->last), @endif @endforeach) {}
+    {!! $modifiers !!} function __construct(@foreach($method->params as $param){!! $ctx->stubParamType($param) !!} ${!! $param->name !!}@if($param->isOptional) = {!! $ctx->stubDefault($param) !!}@endif @if(!$loop->last), @endif @endforeach) {}
 
 @else
-    {!! $modifiers !!} function {!! $method->name !!}(@foreach($method->params as $param){!! $param->phpType !!} ${!! $param->name !!}@if($param->isOptional) = {!! $ctx->stubDefault($param) !!}@endif @if(!$loop->last), @endif @endforeach): {!! $method->returnType !!} {}
+    {!! $modifiers !!} function {!! $method->name !!}(@foreach($method->params as $param){!! $ctx->stubParamType($param) !!} ${!! $param->name !!}@if($param->isOptional) = {!! $ctx->stubDefault($param) !!}@endif @if(!$loop->last), @endif @endforeach): {!! $method->returnType !!} {}
 
 @endif
 @endforeach

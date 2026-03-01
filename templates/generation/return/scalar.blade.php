@@ -15,6 +15,6 @@ $callPrefix = $method->isStatic
 @else
     {!! $method->returnMacro !!}({!! $callPrefix !!}{!! $method->cppName !!}(@foreach($method->params as $i => $param)@php
     $cppType = $overload && isset($overload->params[$i]) ? $overload->params[$i]->cppType : '';
-    $expr = $ctx->typeBridge->phpToNativeExpr($param->phpType, $cppType, $param->cVarName);
+    $expr = $ctx->typeBridge->phpToNativeExpr($param->phpType, $cppType, $param->cVarName, false, $param->isOptional);
 @endphp{!! $expr !!}@if(!$loop->last), @endif @endforeach));
 @endif

@@ -207,6 +207,11 @@ class ClassContext
         };
     }
 
+    public function stubParamType(ParamContext $param): string
+    {
+        return $param->stubPhpType;
+    }
+
     /**
      * Scan all methods' parameter types and return types for cross-class
      * references that need #include directives.

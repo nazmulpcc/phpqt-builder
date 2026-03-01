@@ -32,6 +32,9 @@ class ParamContext
     /** Whether this is a union type */
     public readonly bool $isUnion;
 
+    /** PHP stub type string, including "|null" when required for null defaults */
+    public readonly string $stubPhpType;
+
     /** C variable type for declaration (e.g. "zend_long", "zval *") */
     public readonly string $cVarType;
 
@@ -55,6 +58,7 @@ class ParamContext
         $this->isOptional = $param->hasDefault;
         $this->position = $param->position;
         $this->isUnion = $typeBridge->isUnionType($param->phpType);
+        $this->stubPhpType = $typeBridge->stubType($param->phpType, $param->hasDefault);
 
         // For union types or object types, use zval*
         $primaryType = $this->primaryType($param->phpType);
@@ -67,7 +71,9 @@ class ParamContext
                 ? $typeBridge->ceVarName($primaryType)
                 : null;
             $this->zppMacro = $this->isObject && !$this->isUnion
-                ? $typeBridge->zppMacro($primaryType, $this->cVarName, $this->ceVarName)
+                ? ($this->isOptional
+                    ? $typeBridge->zppMacroOptional($primaryType, $this->cVarName, $this->ceVarName)
+                    : $typeBridge->zppMacro($primaryType, $this->cVarName, $this->ceVarName))
                 : sprintf('Z_PARAM_ZVAL(%s)', $this->cVarName);
         } else {
             $this->cVarType = $typeBridge->cVarType($primaryType);

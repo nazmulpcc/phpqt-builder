@@ -44,6 +44,7 @@ class GenerateCommand extends Command
             ->addOption('module', null, InputOption::VALUE_REQUIRED, 'Qt module name for build mode', 'QtCore')
             ->addOption('extension-name', null, InputOption::VALUE_REQUIRED, 'Extension name for build mode', 'qt')
             ->addOption('allowed-classes', null, InputOption::VALUE_REQUIRED, 'Comma-separated allow-list of generated classes')
+            ->addOption('allowed-classes-file', null, InputOption::VALUE_REQUIRED, 'Path to a JSON file containing the allow-list of generated classes')
             ->addOption('build-mode', null, InputOption::VALUE_NONE, 'Emit machine-readable JSON and apply conservative filtering');
     }
 
@@ -122,7 +123,19 @@ class GenerateCommand extends Command
         InputInterface $input,
         OutputInterface $output,
     ): int {
-        $allowedClasses = $this->parseCsvOption($input->getOption('allowed-classes'));
+        try {
+            $allowedClasses = $this->resolveAllowedClasses($input);
+        } catch (\RuntimeException $e) {
+            return $this->renderFailure(
+                $output,
+                true,
+                $className,
+                $headerPath,
+                'allowed_classes_load_failed',
+                $e->getMessage(),
+            );
+        }
+
         $service = new ClassGenerationService();
         $result = $service->generate($headerPath, $className, $includePaths, $allowedClasses);
 
@@ -179,6 +192,35 @@ class GenerateCommand extends Command
         $parts = array_map('trim', explode(',', $value));
 
         return array_values(array_filter($parts, static fn(string $part): bool => $part !== ''));
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function resolveAllowedClasses(InputInterface $input): array
+    {
+        $allowedClasses = $this->parseCsvOption($input->getOption('allowed-classes'));
+        $allowedClassesFile = $input->getOption('allowed-classes-file');
+
+        if (!is_string($allowedClassesFile) || trim($allowedClassesFile) === '') {
+            return $allowedClasses;
+        }
+
+        if (!is_file($allowedClassesFile)) {
+            throw new \RuntimeException(sprintf('Allowed classes file not found: %s', $allowedClassesFile));
+        }
+
+        $decoded = json_decode((string) file_get_contents($allowedClassesFile), true);
+        if (!is_array($decoded)) {
+            throw new \RuntimeException(sprintf('Allowed classes file is not valid JSON: %s', $allowedClassesFile));
+        }
+
+        $fromFile = array_values(array_filter(
+            array_map(static fn(mixed $value): string => is_string($value) ? trim($value) : '', $decoded),
+            static fn(string $value): bool => $value !== '',
+        ));
+
+        return array_values(array_unique([...$fromFile, ...$allowedClasses]));
     }
 
     /**

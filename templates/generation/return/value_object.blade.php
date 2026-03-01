@@ -21,7 +21,7 @@ $callPrefix = $method->isStatic
     $args = [];
     foreach ($method->params as $i => $param) {
         $cppType = $overload && isset($overload->params[$i]) ? $overload->params[$i]->cppType : '';
-        $args[] = $ctx->typeBridge->phpToNativeExpr($param->phpType, $cppType, $param->cVarName);
+        $args[] = $ctx->typeBridge->phpToNativeExpr($param->phpType, $cppType, $param->cVarName, false, $param->isOptional);
     }
     $callExpr = "{$callPrefix}{$method->cppName}(" . implode(', ', $args) . ')';
 @endphp

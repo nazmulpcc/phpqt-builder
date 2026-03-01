@@ -4,14 +4,15 @@ declare(strict_types=1);
 
 namespace QtBuilder\Commands;
 
+use QtBuilder\Build\ClassGenerationService;
 use QtBuilder\Build\ExtensionBuildContext;
 use QtBuilder\Build\ExtensionScaffolder;
 use QtBuilder\Build\GenerateTask;
 use QtBuilder\Build\GenerateWorkerPool;
-use QtBuilder\CodeGen\TypeBridge;
 use QtBuilder\Contracts\SystemInformation;
 use QtBuilder\Filtering\ClassExposurePolicy;
 use QtBuilder\Qt\QtInstallationResolver;
+use QtBuilder\Scanning\HeaderCandidate;
 use QtBuilder\Scanning\ModuleHeaderScanner;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -61,13 +62,14 @@ class BuildCommand extends Command
 
         $scanner = new ModuleHeaderScanner();
         $classPolicy = new ClassExposurePolicy();
-        $typeBridge = new TypeBridge();
 
         $acceptedCandidates = [];
         $skippedClasses = [];
+        $candidateCount = 0;
 
         foreach ($modules as $module) {
             foreach ($scanner->scan($installation, $module) as $candidate) {
+                $candidateCount++;
                 $decision = $classPolicy->decideCandidate($candidate);
                 if (!$decision->accepted) {
                     $skippedClasses[] = [
@@ -83,10 +85,12 @@ class BuildCommand extends Command
             }
         }
 
-        $allowedClasses = array_values(array_filter(
-            array_map(static fn($candidate) => $candidate->className, $acceptedCandidates),
-            static fn(string $className): bool => $typeBridge->isValueType($className),
-        ));
+        [$acceptedCandidates, $preflightSkippedClasses, $allowedClasses] = $this->resolveViableCandidates(
+            $acceptedCandidates,
+            $installation->includeRoots,
+        );
+        array_push($skippedClasses, ...$preflightSkippedClasses);
+        $allowedClassesFile = $this->writeAllowedClassesManifest($outputDir, $allowedClasses);
 
         $tasks = [];
         foreach ($acceptedCandidates as $candidate) {
@@ -98,7 +102,7 @@ class BuildCommand extends Command
                 outputDir: $outputDir,
                 extensionName: $extensionName,
                 qtPath: $installation->rootPath,
-                allowedClasses: $allowedClasses,
+                allowedClassesFile: $allowedClassesFile,
             );
         }
 
@@ -149,7 +153,7 @@ class BuildCommand extends Command
 
         $summary = [
             'modules' => $modules,
-            'candidate_classes' => count($acceptedCandidates) + count($skippedClasses),
+            'candidate_classes' => $candidateCount,
             'generated_classes' => count($generatedClasses),
             'skipped_classes' => count($skippedClasses),
             'failed_classes' => count($errors),
@@ -200,5 +204,72 @@ class BuildCommand extends Command
     private function namespaceForModule(string $module): string
     {
         return 'Qt\\' . preg_replace('/^Qt/', '', $module);
+    }
+
+    /**
+     * @param list<string> $allowedClasses
+     */
+    private function writeAllowedClassesManifest(string $outputDir, array $allowedClasses): string
+    {
+        $generatedDir = $outputDir . '/generated';
+        $manifestPath = $generatedDir . '/allowed_classes.json';
+        $realGeneratedDir = realpath($generatedDir);
+        if ($realGeneratedDir !== false) {
+            $manifestPath = $realGeneratedDir . '/allowed_classes.json';
+        }
+
+        file_put_contents(
+            $manifestPath,
+            json_encode(array_values($allowedClasses), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]',
+        );
+
+        return $manifestPath;
+    }
+
+    /**
+     * @param list<HeaderCandidate> $acceptedCandidates
+     * @param list<string> $includePaths
+     * @return array{0: list<HeaderCandidate>, 1: list<array<string, string|null>>, 2: list<string>}
+     */
+    private function resolveViableCandidates(array $acceptedCandidates, array $includePaths): array
+    {
+        $service = new ClassGenerationService();
+        $viableCandidates = [];
+        foreach ($acceptedCandidates as $candidate) {
+            $viableCandidates[$candidate->className] = $candidate;
+        }
+
+        /** @var array<string, array{class: string, header: string, reason_code: string|null, reason_message: string|null}> $skippedByClass */
+        $skippedByClass = [];
+
+        do {
+            $allowedClasses = array_keys($viableCandidates);
+            $nextViableCandidates = [];
+
+            foreach ($viableCandidates as $className => $candidate) {
+                $result = $service->generate($candidate->parseHeader, $candidate->className, $includePaths, $allowedClasses);
+                if ($result->status === 'ok') {
+                    $nextViableCandidates[$className] = $candidate;
+                    unset($skippedByClass[$className]);
+                    continue;
+                }
+
+                $skippedByClass[$className] = [
+                    'class' => $candidate->className,
+                    'header' => $candidate->parseHeader,
+                    'reason_code' => $result->reasonCode,
+                    'reason_message' => $result->reasonMessage,
+                ];
+            }
+
+            $changed = array_keys($nextViableCandidates) !== array_keys($viableCandidates);
+            $viableCandidates = $nextViableCandidates;
+        } while ($changed && $viableCandidates !== []);
+
+        $finalCandidates = array_values($viableCandidates);
+        $allowedClasses = array_keys($viableCandidates);
+        $skippedClasses = array_values($skippedByClass);
+
+        return [$finalCandidates, $skippedClasses, $allowedClasses];
     }
 }

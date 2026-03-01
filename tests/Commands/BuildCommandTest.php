@@ -31,13 +31,23 @@ final class BuildCommandTest extends TestCase
         self::assertFileExists($outputDir . '/php_qt.h');
         self::assertFileExists($outputDir . '/qt.cpp');
         self::assertFileExists($outputDir . '/classes/qt_qpoint.cpp');
+        self::assertFileExists($outputDir . '/classes/qt_qtree.cpp');
+        self::assertFileExists($outputDir . '/classes/qt_qnode.cpp');
+        self::assertFileExists($outputDir . '/classes/qt_qabstractitemmodel.cpp');
         self::assertFileExists($outputDir . '/generated/build_summary.json');
+        self::assertFileExists($outputDir . '/generated/allowed_classes.json');
 
         $summary = json_decode((string) file_get_contents($outputDir . '/generated/build_summary.json'), true, 512, JSON_THROW_ON_ERROR);
-        self::assertSame(1, $summary['generated_classes']);
+        self::assertSame(5, $summary['generated_classes']);
         self::assertSame(1, $summary['skipped_classes']);
 
         $classmap = json_decode((string) file_get_contents($outputDir . '/generated/classmap.json'), true, 512, JSON_THROW_ON_ERROR);
-        self::assertSame('QPoint', $classmap[0]['class']);
+        self::assertSame(['QAbstractItemModel', 'QModelIndex', 'QNode', 'QPoint', 'QTree'], array_column($classmap, 'class'));
+
+        $allowedClasses = json_decode((string) file_get_contents($outputDir . '/generated/allowed_classes.json'), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(['QAbstractItemModel', 'QModelIndex', 'QNode', 'QPoint', 'QTree'], $allowedClasses);
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qtree.stub.php');
+        self::assertStringContainsString('QNode|null $node = null', $stub);
     }
 }
