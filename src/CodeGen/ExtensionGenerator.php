@@ -30,6 +30,10 @@ class ExtensionGenerator
         $templatePath ??= $projectRoot . '/templates';
         $compiledPath ??= $projectRoot . '/storage/blade';
 
+        if (!is_dir($compiledPath)) {
+            mkdir($compiledPath, 0755, true);
+        }
+
         $this->blade = new BladeOne(
             $templatePath,
             $compiledPath,
