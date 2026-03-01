@@ -5,7 +5,7 @@
  * @var \QtBuilder\CodeGen\ClassContext $ctx
  */
 @endphp
-<?php
+{!! '<?php' !!}
 
 /** @generate-class-entries */
 

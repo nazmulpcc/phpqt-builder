@@ -84,7 +84,11 @@ class ParamContext
     {
         $default = $this->isOptional ? ' = ' . $this->cDefault : '';
 
-        return sprintf('%s%s%s', $this->cVarType, $this->cVarName, $default);
+        // For pointer types (e.g. "zval *"), the space + * is already part of cVarType.
+        // For non-pointer types (e.g. "zend_long"), we need an explicit space.
+        $separator = str_ends_with($this->cVarType, '*') ? '' : ' ';
+
+        return sprintf('%s%s%s%s', $this->cVarType, $separator, $this->cVarName, $default);
     }
 
     private function primaryType(string $phpType): string

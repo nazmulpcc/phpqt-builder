@@ -90,6 +90,14 @@ class ClassDefinitionBuilder
         // Filter private methods.
         $methods = array_filter($methods, static fn(array $m): bool => $m['access'] !== 'private');
 
+        // Filter out C++ operator overloads — these aren't valid PHP method names.
+        // Operators like operator+=, operator==, etc. need PHP-specific alternatives
+        // (e.g. __add, __equals) which can be added via template overrides later.
+        $methods = array_filter(
+            $methods,
+            static fn(array $m): bool => !str_starts_with($m['name'], 'operator'),
+        );
+
         // Group by method name.
         /** @var array<string, list<array<string, mixed>>> $grouped */
         $grouped = [];

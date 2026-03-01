@@ -296,7 +296,11 @@ class TypeBridge
         $cType = $this->cVarType($phpType);
         $default = $optional ? ' = ' . $this->cDefaultValue($phpType) : '';
 
-        return sprintf('%s%s%s', $cType, $varName, $default);
+        // For pointer types (e.g. "zval *"), the space + * is already part of cType.
+        // For non-pointer types (e.g. "zend_long"), we need an explicit space.
+        $separator = str_ends_with($cType, '*') ? '' : ' ';
+
+        return sprintf('%s%s%s%s', $cType, $separator, $varName, $default);
     }
 
     /**
