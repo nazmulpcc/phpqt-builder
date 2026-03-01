@@ -2,6 +2,7 @@
 <?php
 
 use QtBuilder\Commands\DoctorCommand;
+use QtBuilder\Commands\InspectCommand;
 use QtBuilder\UnixSystemInformation;
 use Symfony\Component\Console\Application;
 
@@ -11,5 +12,6 @@ $systemInformation = new UnixSystemInformation();
 $app = new Application('QT Builder', '0.1.0');
 
 $app->addCommand(new DoctorCommand($systemInformation));
+$app->addCommand(new InspectCommand());
 
 $app->run();
