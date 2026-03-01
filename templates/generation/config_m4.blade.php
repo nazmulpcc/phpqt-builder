@@ -9,7 +9,11 @@ PHP_ARG_ENABLE([{!! $ctx->extensionName !!}],
 AS_VAR_IF([PHP_{!! strtoupper($ctx->extensionName) !!}], [no],, [
   PHP_REQUIRE_CXX()
 @foreach($ctx->installation->includeRoots as $includeRoot)
+@if(str_starts_with($includeRoot, '-'))
+  PHP_EVAL_INCLINE([{!! $includeRoot !!}])
+@else
   PHP_ADD_INCLUDE([{!! $includeRoot !!}])
+@endif
 @endforeach
 @if($ctx->installation->libraryRoots !== [])
 @if($ctx->installation->isDarwin())

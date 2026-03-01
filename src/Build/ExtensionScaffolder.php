@@ -27,7 +27,7 @@ class ExtensionScaffolder
     {
         @mkdir($context->outputDir, 0755, true);
         @mkdir($context->outputDir . '/classes', 0755, true);
-        @mkdir($context->outputDir . '/generated', 0755, true);
+        @mkdir($context->metadataDir(), 0755, true);
 
         $this->writeCoreFiles($context);
     }

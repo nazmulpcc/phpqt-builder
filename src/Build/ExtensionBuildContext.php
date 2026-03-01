@@ -44,6 +44,22 @@ readonly class ExtensionBuildContext
         return sprintf('%s.cpp', $this->extensionName);
     }
 
+    public function buildRootDir(): string
+    {
+        $trimmed = rtrim($this->outputDir, '/');
+
+        if (basename($trimmed) === 'ext') {
+            return dirname($trimmed);
+        }
+
+        return $trimmed;
+    }
+
+    public function metadataDir(): string
+    {
+        return $this->buildRootDir() . '/generated';
+    }
+
     /**
      * @return list<string>
      */

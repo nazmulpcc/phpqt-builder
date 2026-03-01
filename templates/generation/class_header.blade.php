@@ -18,12 +18,10 @@
 #include "php.h"
 #include "zend_exceptions.h"
 #include {!! $ctx->qtInclude !!}
-@if($ctx->parentCeVarName)
-#include "{!! $ctx->filePrefix !!}_parent.h"
-@endif
-@foreach($ctx->requiredIncludes as $include)
-#include "{!! $include !!}"
-@endforeach
+
+#ifndef PHP_QT_API
+#define PHP_QT_API
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Object struct                                                       */
