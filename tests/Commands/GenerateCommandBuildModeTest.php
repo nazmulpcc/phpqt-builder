@@ -184,6 +184,34 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringContainsString('(node != NULL ? qt_qnode_from_obj(Z_OBJ_P(node))->native_ptr : NULL)', $cpp);
     }
 
+    public function testGenerateBuildModeCastsConstObjectPointerReturnsForWrapping(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/const-pointer';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qconstnodeholder.h',
+            'class' => 'QNodeConstHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QNodeConstHolder,QNode',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qnodeconstholder.cpp');
+        self::assertStringContainsString('const QNode * _result = intern->native_ptr->node();', $cpp);
+        self::assertStringContainsString('qt_qnode_wrap_native(return_value, const_cast<QNode *>(_result), qt_ce_QNode, true);', $cpp);
+    }
+
     public function testGenerateBuildModeCanLoadAllowedClassesFromJsonFile(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/qt';
@@ -919,7 +947,7 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertSame(Command::SUCCESS, $exitCode);
 
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qvariantpointerholder.cpp');
-        self::assertStringContainsString('QVariant *_result = intern->native_ptr->current();', $cpp);
+        self::assertStringContainsString('QVariant * _result = intern->native_ptr->current();', $cpp);
         self::assertStringContainsString('object_init_ex(return_value, qt_ce_QVariant);', $cpp);
         self::assertStringContainsString('_ret_intern->native_ptr = new QVariant(*_result);', $cpp);
         self::assertStringNotContainsString('qt_qvariant_wrap_native', $cpp);

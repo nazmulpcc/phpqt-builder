@@ -7,6 +7,9 @@
  */
 $overload = $method->overloads[0] ?? null;
 $returnClass = $method->returnType;
+$cppReturnType = $overload?->cppReturnType ?? ($returnClass . ' *');
+$resultDeclType = $ctx->typeBridge->objectPointerReturnDeclarationType($cppReturnType, $returnClass);
+$writableResultExpr = $ctx->typeBridge->writableObjectPointerExpr($cppReturnType, $returnClass, '_result');
 $returnCe = $ctx->typeBridge->ceVarName($returnClass);
 $returnFromObj = $ctx->typeBridge->fromObjFuncName($returnClass);
 $returnStruct = $ctx->typeBridge->objectStructName($returnClass);
@@ -28,7 +31,7 @@ $callPrefix = $method->isStatic
     $callExpr = "{$callPrefix}{$method->cppName}(" . implode(', ', $args) . ')';
 @endphp
 @endif
-    {!! $returnClass !!} *_result = {!! $callExpr !!};
+    {!! $resultDeclType !!} _result = {!! $callExpr !!};
 @if($isValueType)
     if (_result == NULL) {
         RETURN_NULL();
@@ -37,5 +40,5 @@ $callPrefix = $method->isStatic
     {!! $returnStruct !!} *_ret_intern = {!! $returnFromObj !!}(Z_OBJ_P(return_value));
     _ret_intern->native_ptr = new {!! $returnClass !!}(*_result);
 @else
-    {!! $wrapFunc !!}(return_value, _result, {!! $returnCe !!}, true);
+    {!! $wrapFunc !!}(return_value, {!! $writableResultExpr !!}, {!! $returnCe !!}, true);
 @endif

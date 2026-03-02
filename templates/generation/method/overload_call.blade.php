@@ -57,13 +57,15 @@ $callPrefix = $method->isStatic
 @elseif($overload->returnStrategy === 'qobject_pointer')
 @php
     $returnClass = trim(str_replace(['const ', '&', '*'], '', $overload->cppReturnType));
+    $resultDeclType = $ctx->typeBridge->objectPointerReturnDeclarationType($overload->cppReturnType, $returnClass);
     $returnCe = $ctx->typeBridge->ceVarName($returnClass);
     $returnFromObj = $ctx->typeBridge->fromObjFuncName($returnClass);
     $returnStruct = $ctx->typeBridge->objectStructName($returnClass);
     $wrapFunc = $ctx->typeBridge->wrapNativeFuncName($returnClass);
     $isValueType = $ctx->typeBridge->isValueType($returnClass);
+    $writableResultExpr = $ctx->typeBridge->writableObjectPointerExpr($overload->cppReturnType, $returnClass, '_result');
 @endphp
-{!! $indent !!}{!! $returnClass !!} *_result = {!! $callPrefix !!}{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
+{!! $indent !!}{!! $resultDeclType !!} _result = {!! $callPrefix !!}{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
     $mergedParam = $method->params[$i] ?? null;
     $varName = $mergedParam ? $mergedParam->cVarName : $op->name;
     $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName, false, $mergedParam?->isOptional ?? false);
@@ -76,7 +78,7 @@ $callPrefix = $method->isStatic
 {!! $indent !!}{!! $returnStruct !!} *_ret_intern = {!! $returnFromObj !!}(Z_OBJ_P(return_value));
 {!! $indent !!}_ret_intern->native_ptr = new {!! $returnClass !!}(*_result);
 @else
-{!! $indent !!}{!! $wrapFunc !!}(return_value, _result, {!! $returnCe !!}, true);
+{!! $indent !!}{!! $wrapFunc !!}(return_value, {!! $writableResultExpr !!}, {!! $returnCe !!}, true);
 @endif
 @else
 {!! $indent !!}/* TODO: unsupported overload return strategy '{!! $overload->returnStrategy !!}' */

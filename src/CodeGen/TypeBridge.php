@@ -415,6 +415,34 @@ class TypeBridge
     }
 
     /**
+     * Build the declaration type for a returned object pointer variable.
+     *
+     * Preserves const qualifiers from the original C++ signature when present.
+     */
+    public function objectPointerReturnDeclarationType(string $cppType, string $phpClass): string
+    {
+        $normalized = trim(preg_replace('/\s+/', ' ', $cppType) ?? $cppType);
+        if ($normalized === '' || !str_contains($normalized, '*')) {
+            return sprintf('%s *', $phpClass);
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * Return an expression suitable for wrap_native() calls that need a
+     * non-const pointer.
+     */
+    public function writableObjectPointerExpr(string $cppType, string $phpClass, string $expr): string
+    {
+        if (preg_match('/\bconst\b/', $cppType) === 1) {
+            return sprintf('const_cast<%s *>(%s)', $phpClass, $expr);
+        }
+
+        return $expr;
+    }
+
+    /**
      * Cast a native C++ scalar expression into the PHP-facing scalar type
      * expected by RETURN_LONG / RETURN_DOUBLE / RETURN_BOOL.
      */
