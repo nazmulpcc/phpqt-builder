@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace QtBuilder\Tests\Commands;
 
 use PHPUnit\Framework\TestCase;
+use QtBuilder\Build\ClassGenerationService;
 use QtBuilder\Commands\GenerateCommand;
 use QtBuilder\Tests\Support\FakeSystemInformation;
 use Symfony\Component\Console\Command\Command;
@@ -541,5 +542,31 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringContainsString('intern->native_ptr->setFormat((QPartsHolder::NameFormat)format);', $cpp);
         self::assertStringNotContainsString('public function partsFromDate', $stub);
         self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QPartsHolder, partsFromDate)', $cpp);
+    }
+
+    public function testClassGenerationDetectsQDisableCopyAndSkipsCopyConstructorExposure(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $service = new ClassGenerationService();
+        $result = $service->generate(
+            $fixtureRoot . '/include/QtCore/qnocopything.h',
+            'QNoCopyThing',
+            [$fixtureRoot . '/include', $fixtureRoot . '/include/QtCore'],
+            ['QNoCopyThing'],
+        );
+
+        self::assertSame('ok', $result->status);
+        self::assertNotNull($result->phpClass);
+        self::assertFalse($result->phpClass->isCopyConstructible);
+
+        $skippedMethodNames = array_column($result->skippedMethods, 'name');
+        $skippedReasonCodes = array_column($result->skippedMethods, 'reason_code');
+
+        self::assertContains('QNoCopyThing', $skippedMethodNames);
+        self::assertContains('noncopyable_copy_constructor', $skippedReasonCodes);
+        self::assertCount(1, array_values(array_filter(
+            $result->phpClass->methods,
+            static fn(\QtBuilder\Definition\PhpMethod $method): bool => $method->name === 'value',
+        )));
     }
 }

@@ -8,7 +8,10 @@ use PHPUnit\Framework\TestCase;
 use QtBuilder\Build\ExtensionBuildContext;
 use QtBuilder\Build\ExtensionScaffolder;
 use QtBuilder\CodeGen\ExtensionGenerator;
+use QtBuilder\Definition\MethodOverload;
 use QtBuilder\Definition\PhpClass;
+use QtBuilder\Definition\PhpMethod;
+use QtBuilder\Definition\PhpParameter;
 use QtBuilder\Qt\QtInstallation;
 
 final class ExtensionScaffolderTest extends TestCase
@@ -46,6 +49,7 @@ final class ExtensionScaffolderTest extends TestCase
             name: 'QAbstractAnimation',
             parent: 'QObject',
             isAbstract: true,
+            isCopyConstructible: true,
             properties: [],
             methods: [],
         );
@@ -56,5 +60,65 @@ final class ExtensionScaffolderTest extends TestCase
 
         self::assertStringContainsString('#ifndef QT_QABSTRACTANIMATION_H', $header);
         self::assertStringNotContainsString('#ifndef QABSTRACTANIMATION_H', $header);
+    }
+
+    public function testGeneratedSourceIncludesQStringAndQByteArrayHeaders(): void
+    {
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generator-' . bin2hex(random_bytes(4));
+        $generator = new ExtensionGenerator();
+        $phpClass = new PhpClass(
+            name: 'QStringEmitter',
+            parent: null,
+            isAbstract: false,
+            isCopyConstructible: true,
+            properties: [],
+            methods: [
+                new PhpMethod(
+                    name: 'label',
+                    returnType: 'string',
+                    access: 'public',
+                    isStatic: false,
+                    parameters: [],
+                    overloads: [
+                        new MethodOverload(
+                            returnType: 'QString',
+                            parameters: [],
+                            isConst: true,
+                            isStatic: false,
+                            isVirtual: false,
+                            isPureVirtual: false,
+                        ),
+                    ],
+                ),
+            ],
+        );
+
+        $generator->generate($phpClass, 'Qt\\Core', $outputDir);
+
+        $source = (string) file_get_contents($outputDir . '/qt_qstringemitter.cpp');
+
+        self::assertStringContainsString('#include <QString>', $source);
+        self::assertStringContainsString('#include <QByteArray>', $source);
+    }
+
+    public function testGeneratedValueTypeDisablesCloneWhenCopyConstructorIsUnavailable(): void
+    {
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generator-' . bin2hex(random_bytes(4));
+        $generator = new ExtensionGenerator();
+        $phpClass = new PhpClass(
+            name: 'QPoint',
+            parent: null,
+            isAbstract: false,
+            isCopyConstructible: false,
+            properties: [],
+            methods: [],
+        );
+
+        $generator->generate($phpClass, 'Qt\\Core', $outputDir);
+
+        $source = (string) file_get_contents($outputDir . '/qt_qpoint.cpp');
+
+        self::assertStringNotContainsString('static zend_object *qt_qpoint_clone_object', $source);
+        self::assertStringContainsString('qt_qpoint_handlers.clone_obj = NULL;', $source);
     }
 }

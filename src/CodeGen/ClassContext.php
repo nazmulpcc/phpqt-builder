@@ -50,6 +50,9 @@ class ClassContext
     /** Whether this is a value type (copyable, no ownership model) */
     public readonly bool $isValueType;
 
+    /** Whether the native class has a usable copy constructor */
+    public readonly bool $isCopyConstructible;
+
     /** Whether clone is supported */
     public readonly bool $isCloneable;
 
@@ -125,7 +128,8 @@ class ClassContext
 
         // Type classification
         $this->isValueType = $typeBridge->isValueType($phpClass->name);
-        $this->isCloneable = $this->isValueType;
+        $this->isCopyConstructible = $phpClass->isCopyConstructible;
+        $this->isCloneable = $this->isValueType && $this->isCopyConstructible;
         $this->isAbstract = $phpClass->isAbstract;
         $this->isFinal = !$phpClass->isAbstract && $this->isValueType;
         $this->hasPreventDestroy = !$this->isValueType;

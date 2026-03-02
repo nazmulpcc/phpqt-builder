@@ -10,6 +10,8 @@
 
 #include "{!! $ctx->filePrefix !!}.h"
 #include "{!! $ctx->filePrefix !!}_arginfo.h"
+#include <QString>
+#include <QByteArray>
 @if($ctx->parentCeVarName)
 #include "{!! 'qt_' . strtolower($ctx->parentClassName) !!}.h"
 @endif

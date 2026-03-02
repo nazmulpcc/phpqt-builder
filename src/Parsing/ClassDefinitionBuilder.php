@@ -29,7 +29,7 @@ class ClassDefinitionBuilder
     /**
      * Build a PhpClass from the array produced by QtClassInspector::inspect().
      *
-     * @param array{name: string, is_abstract: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>} $classData
+     * @param array{name: string, is_abstract: bool, is_copy_constructible?: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>} $classData
      */
     public function build(array $classData): PhpClass
     {
@@ -44,6 +44,7 @@ class ClassDefinitionBuilder
             name: $classData['name'],
             parent: $parent,
             isAbstract: $classData['is_abstract'],
+            isCopyConstructible: (bool) ($classData['is_copy_constructible'] ?? true),
             properties: $properties,
             methods: $methods,
         );

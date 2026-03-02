@@ -48,6 +48,7 @@ class ClassGenerationService
         if ($classData === null) {
             return ClassGenerationResult::skipped($className, $headerPath, 'class_not_found', 'Class definition was not found in the parsed header.');
         }
+        $classData['is_copy_constructible'] = $this->detectCopyConstructible($headerPath, $className);
         $classData['flag_aliases'] = $this->discoverFlagAliases($headerPath);
         $classData['enum_names'] = $this->discoverEnumNames($headerPath);
 
@@ -85,6 +86,30 @@ class ClassGenerationService
         }
 
         return ClassGenerationResult::ok($className, $headerPath, $phpClass, $filtered['skipped_methods']);
+    }
+
+    private function detectCopyConstructible(string $headerPath, string $className): bool
+    {
+        $contents = @file_get_contents($headerPath);
+        if (!is_string($contents) || $contents === '') {
+            return true;
+        }
+
+        $classPattern = preg_quote($className, '/');
+
+        $patterns = [
+            '/Q_DISABLE_COPY(?:_MOVE)?\(\s*' . $classPattern . '\s*\)/',
+            '/' . $classPattern . '\s*\(\s*const\s+' . $classPattern . '\s*&\s*\)\s*=\s*delete\s*;/',
+            '/' . $classPattern . '\s*\(\s*' . $classPattern . '\s*&&\s*\)\s*=\s*delete\s*;/',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $contents) === 1) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function isTemplateClassDeclaration(string $headerPath, string $className): bool

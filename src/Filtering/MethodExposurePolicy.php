@@ -57,8 +57,10 @@ class MethodExposurePolicy
             $grouped[$method['name']][] = $method;
         }
 
+        $isCopyConstructible = (bool) ($classData['is_copy_constructible'] ?? true);
+
         foreach ($grouped as $methodName => $variants) {
-            $result = $this->selectVariant($classData['name'], $methodName, $variants, $allowedClasses, $flagAliases, $enumNames);
+            $result = $this->selectVariant($classData['name'], $methodName, $variants, $allowedClasses, $flagAliases, $enumNames, $isCopyConstructible);
             if ($result['selected'] !== null) {
                 $selectedMethods[] = $result['selected'];
             }
@@ -80,7 +82,7 @@ class MethodExposurePolicy
      * @param list<string> $enumNames
      * @return array{selected: ?array<string, mixed>, skipped: list<array<string, string>>}
      */
-    private function selectVariant(string $className, string $methodName, array $variants, array $allowedClasses, array $flagAliases, array $enumNames): array
+    private function selectVariant(string $className, string $methodName, array $variants, array $allowedClasses, array $flagAliases, array $enumNames, bool $isCopyConstructible): array
     {
         if (str_starts_with($methodName, '~') || str_starts_with($methodName, 'operator') || in_array($methodName, self::NAME_SKIP, true)) {
             return [
@@ -104,7 +106,7 @@ class MethodExposurePolicy
             }
             $seenSignatures[$signature] = true;
 
-            $unsupportedReason = $this->unsupportedReason($className, $variant, $allowedClasses, $flagAliases, $enumNames);
+            $unsupportedReason = $this->unsupportedReason($className, $variant, $allowedClasses, $flagAliases, $enumNames, $isCopyConstructible);
             if ($unsupportedReason !== null) {
                 $skipped[] = [
                     'name' => $methodName,
@@ -149,11 +151,15 @@ class MethodExposurePolicy
      * @param list<string> $enumNames
      * @return array{code: string, message: string}|null
      */
-    private function unsupportedReason(string $className, array $variant, array $allowedClasses, array $flagAliases = [], array $enumNames = []): ?array
+    private function unsupportedReason(string $className, array $variant, array $allowedClasses, array $flagAliases = [], array $enumNames = [], bool $isCopyConstructible = true): ?array
     {
         $access = (string) ($variant['access'] ?? 'unknown');
         if ($access !== 'public') {
             return ['code' => 'non_public_method', 'message' => sprintf('Methods with %s access are not exposed.', $access)];
+        }
+
+        if (!$isCopyConstructible && $this->isCopyConstructor($className, $variant)) {
+            return ['code' => 'noncopyable_copy_constructor', 'message' => 'Copy constructor is disabled by the native class definition.'];
         }
 
         if (($variant['is_pure_virtual'] ?? false) === true) {
@@ -183,6 +189,44 @@ class MethodExposurePolicy
         }
 
         return null;
+    }
+
+    /**
+     * @param array<string, mixed> $variant
+     */
+    private function isCopyConstructor(string $className, array $variant): bool
+    {
+        if (($variant['name'] ?? null) !== $className) {
+            return false;
+        }
+
+        $parameters = is_array($variant['parameters'] ?? null) ? $variant['parameters'] : [];
+        if (count($parameters) !== 1) {
+            return false;
+        }
+
+        $type = is_string($parameters[0]['type'] ?? null) ? $parameters[0]['type'] : '';
+        if ($type === '') {
+            return false;
+        }
+
+        return $this->normalizeSelfType($type) === $className;
+    }
+
+    private function normalizeSelfType(string $cppType): string
+    {
+        $type = trim($cppType);
+        $type = preg_replace('/\bconst\b/', '', $type) ?? $type;
+        $type = trim(preg_replace('/\s+/', ' ', $type) ?? $type);
+        $type = rtrim($type, '& ');
+
+        if (!str_contains($type, '<')) {
+            while (str_ends_with($type, '*')) {
+                $type = rtrim(substr($type, 0, -1));
+            }
+        }
+
+        return trim($type);
     }
 
     private function isUnsafeReferenceReturn(string $cppType): bool
