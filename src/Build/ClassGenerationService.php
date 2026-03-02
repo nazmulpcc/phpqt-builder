@@ -71,15 +71,6 @@ class ClassGenerationService
             (bool) ($classData['is_struct'] ?? false),
         );
 
-        if (($classData['is_abstract'] ?? false) === true) {
-            return ClassGenerationResult::skipped(
-                $className,
-                $headerPath,
-                'abstract_class',
-                'Abstract classes are skipped in the current build mode.',
-            );
-        }
-
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
         if ($parentClass !== null && !in_array($parentClass, $allowedClasses, true)) {
             return ClassGenerationResult::skipped(
@@ -104,7 +95,7 @@ class ClassGenerationService
         $phpClass = $inheritanceFiltered['class'];
         $skippedMethods = [...$filtered['skipped_methods'], ...$inheritanceFiltered['skipped_methods']];
 
-        if (count($phpClass->methods) === 0) {
+        if (count($phpClass->methods) === 0 && !$phpClass->isAbstract) {
             return ClassGenerationResult::skipped(
                 $className,
                 $headerPath,

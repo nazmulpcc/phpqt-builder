@@ -285,7 +285,7 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertFileExists($outputDir . '/classes/qt_qtree.cpp');
     }
 
-    public function testGenerateBuildModeSkipsAbstractClasses(): void
+    public function testGenerateBuildModeGeneratesAbstractClassesAndSkipsPureVirtualMethods(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
@@ -306,9 +306,83 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertSame(Command::SUCCESS, $exitCode);
 
         $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
-        self::assertSame('skipped', $payload['status']);
-        self::assertSame('abstract_class', $payload['reason_code']);
-        self::assertFileDoesNotExist($outputDir . '/classes/qt_qabstractthing.cpp');
+        self::assertSame('ok', $payload['status']);
+        self::assertContains('QAbstractThing', array_column($payload['skipped_methods'], 'name'));
+        self::assertContains('abstract_constructor', array_column($payload['skipped_methods'], 'reason_code'));
+        self::assertContains('size', array_column($payload['skipped_methods'], 'name'));
+        self::assertContains('pure_virtual_method', array_column($payload['skipped_methods'], 'reason_code'));
+        self::assertFileExists($outputDir . '/classes/qt_qabstractthing.cpp');
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qabstractthing.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qabstractthing.cpp');
+
+        self::assertStringContainsString('abstract class QAbstractThing', $stub);
+        self::assertStringNotContainsString('public function __construct()', $stub);
+        self::assertStringNotContainsString('function size', $stub);
+        self::assertStringContainsString('ce_flags |= ZEND_ACC_ABSTRACT;', $cpp);
+    }
+
+    public function testGenerateBuildModeGeneratesEmptyAbstractShellClasses(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/abstract-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qabstractshell.h',
+            'class' => 'QAbstractShell',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QAbstractShell',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertContains('size', array_column($payload['skipped_methods'], 'name'));
+        self::assertContains('pure_virtual_method', array_column($payload['skipped_methods'], 'reason_code'));
+        self::assertFileExists($outputDir . '/classes/qt_qabstractshell.cpp');
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qabstractshell.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qabstractshell.cpp');
+
+        self::assertStringContainsString('abstract class QAbstractShell', $stub);
+        self::assertStringNotContainsString('function __construct', $stub);
+        self::assertStringNotContainsString('function size', $stub);
+        self::assertStringContainsString('ZEND_FE_END', $cpp);
+    }
+
+    public function testGenerateBuildModeAllowsConcreteChildrenOfAbstractParents(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/abstract-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qabstractparentthing.h',
+            'class' => 'QConcreteChildThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QAbstractParentThing,QConcreteChildThing',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertFileExists($outputDir . '/classes/qt_qconcretechildthing.cpp');
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qconcretechildthing.stub.php');
+        self::assertStringContainsString('class QConcreteChildThing extends QAbstractParentThing', $stub);
     }
 
     public function testGenerateBuildModeSkipsProtectedMethods(): void
@@ -482,6 +556,36 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringContainsString('_ret_intern->native_ptr = new QBitArray(_result);', $cpp);
         self::assertStringNotContainsString('QBitArray *_result = QBitArray::fromBits', $cpp);
         self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QBitArray, toUInt32)', $cpp);
+    }
+
+    public function testGenerateBuildModeSkipsObjectDoublePointerOutParameters(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qdoublepointerholder.h',
+            'class' => 'QDoublePointerHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QDoublePointerHolder,QDoublePointerPeer',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertContains('locate', array_column($payload['skipped_methods'], 'name'));
+        self::assertContains('unsupported_output_parameter', array_column($payload['skipped_methods'], 'reason_code'));
+
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qdoublepointerholder.cpp');
+        self::assertStringContainsString('ZEND_METHOD(Qt_Core_QDoublePointerHolder, value)', $cpp);
+        self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QDoublePointerHolder, locate)', $cpp);
     }
 
     public function testGenerateBuildModeUsesFromIntForFlagAliases(): void

@@ -122,6 +122,44 @@ final class BuildCommandTest extends TestCase
         self::assertSame(['QPoint'], array_column($classmap, 'class'));
     }
 
+    public function testBuildGeneratesAbstractShellsAndConcreteChildren(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/abstract-qt';
+        $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-abstract-' . bin2hex(random_bytes(4));
+        $outputDir = $buildRoot . '/ext';
+        $metadataDir = $buildRoot . '/generated';
+        $bootstrapper = new FakeExtensionBootstrapper();
+
+        $command = new BuildCommand(FakeSystemInformation::passing(), $bootstrapper);
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            '--qt-path' => $fixtureRoot,
+            '--modules' => 'QtCore',
+            '--output' => $outputDir,
+            '--jobs' => '2',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+        self::assertFileExists($outputDir . '/classes/qt_qabstractshell.cpp');
+        self::assertFileExists($outputDir . '/classes/qt_qabstractparentthing.cpp');
+        self::assertFileExists($outputDir . '/classes/qt_qconcretechildthing.cpp');
+
+        $classmap = json_decode((string) file_get_contents($metadataDir . '/classmap.json'), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(
+            ['QAbstractParentThing', 'QAbstractShell', 'QConcreteChildThing'],
+            array_column($classmap, 'class'),
+        );
+
+        $allowedClasses = json_decode((string) file_get_contents($metadataDir . '/allowed_classes.json'), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(['QAbstractParentThing', 'QAbstractShell', 'QConcreteChildThing'], $allowedClasses);
+
+        $skippedClasses = json_decode((string) file_get_contents($metadataDir . '/skipped_classes.json'), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame([], $skippedClasses);
+
+        $abstractStub = (string) file_get_contents($outputDir . '/classes/qt_qabstractparentthing.stub.php');
+        self::assertStringContainsString('abstract class QAbstractParentThing', $abstractStub);
+    }
+
     public function testBuildFailsWhenBootstrapStepFails(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/qt';

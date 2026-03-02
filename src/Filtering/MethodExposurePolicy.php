@@ -61,6 +61,7 @@ class MethodExposurePolicy
         $hasPublicConstructor = (bool) ($classData['has_public_constructor'] ?? true);
         $hasPublicDefaultConstructor = (bool) ($classData['has_public_default_constructor'] ?? true);
         $hasPublicDestructor = (bool) ($classData['has_public_destructor'] ?? true);
+        $isAbstractClass = (bool) ($classData['is_abstract'] ?? false);
 
         foreach ($grouped as $methodName => $variants) {
             $result = $this->selectVariants(
@@ -74,6 +75,7 @@ class MethodExposurePolicy
                 $hasPublicConstructor,
                 $hasPublicDefaultConstructor,
                 $hasPublicDestructor,
+                $isAbstractClass,
             );
             foreach ($result['selected'] as $selectedVariant) {
                 $selectedMethods[] = $selectedVariant;
@@ -107,6 +109,7 @@ class MethodExposurePolicy
         bool $hasPublicConstructor,
         bool $hasPublicDefaultConstructor,
         bool $hasPublicDestructor,
+        bool $isAbstractClass,
     ): array
     {
         if (str_starts_with($methodName, '~') || str_starts_with($methodName, 'operator') || in_array($methodName, self::NAME_SKIP, true)) {
@@ -142,6 +145,7 @@ class MethodExposurePolicy
                 $hasPublicConstructor,
                 $hasPublicDefaultConstructor,
                 $hasPublicDestructor,
+                $isAbstractClass,
             );
             if ($unsupportedReason !== null) {
                 $skipped[] = [
@@ -217,6 +221,7 @@ class MethodExposurePolicy
         bool $hasPublicConstructor = true,
         bool $hasPublicDefaultConstructor = true,
         bool $hasPublicDestructor = true,
+        bool $isAbstractClass = false,
     ): ?array
     {
         $access = (string) ($variant['access'] ?? 'unknown');
@@ -230,6 +235,10 @@ class MethodExposurePolicy
         }
 
         if ($isConstructor) {
+            if ($isAbstractClass) {
+                return ['code' => 'abstract_constructor', 'message' => 'Constructors on abstract classes are skipped in the current build mode.'];
+            }
+
             if (($variant['is_deleted'] ?? false) === true) {
                 return ['code' => 'deleted_constructor', 'message' => 'Deleted constructors are not exposed.'];
             }
@@ -364,6 +373,10 @@ class MethodExposurePolicy
             return false;
         }
 
+        if ($this->hasMultiplePointerIndirection($trimmed)) {
+            return true;
+        }
+
         if ($this->isEnumOrFlagType($trimmed, $className, $flagAliases, $enumNames)) {
             return true;
         }
@@ -401,6 +414,10 @@ class MethodExposurePolicy
         }
 
         if (str_contains($trimmed, '<') && !$this->isSupportedTemplateType($trimmed)) {
+            return false;
+        }
+
+        if ($this->hasMultiplePointerIndirection($trimmed) && !$this->isSupportedArrayType($trimmed)) {
             return false;
         }
 
@@ -442,6 +459,14 @@ class MethodExposurePolicy
         }
 
         return false;
+    }
+
+    private function hasMultiplePointerIndirection(string $cppType): bool
+    {
+        $normalized = preg_replace('/\bconst\b/', '', $cppType) ?? $cppType;
+        $normalized = trim(preg_replace('/\s+/', ' ', $normalized) ?? $normalized);
+
+        return preg_match('/\*\s*\*/', $normalized) === 1;
     }
 
     private function isSupportedTemplateType(string $cppType): bool
