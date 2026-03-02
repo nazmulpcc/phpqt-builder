@@ -130,6 +130,32 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringContainsString('(parent != NULL ? *qt_qmodelindex_from_obj(Z_OBJ_P(parent))->native_ptr : QModelIndex())', $cpp);
     }
 
+    public function testGenerateBuildModeSkipsMethodsWithValueObjectDependenciesOutsideAllowList(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qabstractitemmodel.h',
+            'class' => 'QAbstractItemModel',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QAbstractItemModel',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('skipped', $payload['status']);
+        self::assertSame('no_supported_methods', $payload['reason_code']);
+        self::assertFileDoesNotExist($outputDir . '/classes/qt_qabstractitemmodel.cpp');
+    }
+
     public function testGenerateBuildModeUsesNullableUnionForOptionalQObjectParameters(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/qt';
