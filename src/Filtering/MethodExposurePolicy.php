@@ -277,7 +277,12 @@ class MethodExposurePolicy
             return false;
         }
 
-        return $this->normalizeSelfType($type) === $className;
+        $trimmed = trim($type);
+        if (str_contains($trimmed, '*') || !str_contains($trimmed, '&')) {
+            return false;
+        }
+
+        return $this->normalizeSelfType($trimmed) === $className;
     }
 
     /**

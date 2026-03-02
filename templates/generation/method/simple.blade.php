@@ -31,6 +31,13 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
 @if(!$method->isStatic)
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
 
+@if(!$method->isConstructor)
+    if (intern->native_ptr == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+@endif
 @endif
 @if($method->returnStrategy === 'void')
 @include('generation.return.void', ['ctx' => $ctx, 'method' => $method])
@@ -46,4 +53,3 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
     /* TODO: unsupported return strategy '{!! $method->returnStrategy !!}' */
 @endif
 }
-

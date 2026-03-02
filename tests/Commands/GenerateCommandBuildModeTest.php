@@ -869,4 +869,56 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringContainsString('_ret_intern->native_ptr = new QVariant(*_result);', $cpp);
         self::assertStringNotContainsString('qt_qvariant_wrap_native', $cpp);
     }
+
+    public function testGenerateBuildModeDoesNotMistakeSelfPointerConstructorForCopyConstructor(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qselfparentthing.h',
+            'class' => 'QSelfParentThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QSelfParentThing',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qselfparentthing.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qselfparentthing.cpp');
+
+        self::assertStringContainsString('public function __construct(QSelfParentThing|null $parent = null)', $stub);
+        self::assertStringContainsString('intern->native_ptr = new QSelfParentThing((parent != NULL ? qt_qselfparentthing_from_obj(Z_OBJ_P(parent))->native_ptr : NULL));', $cpp);
+    }
+
+    public function testGenerateBuildModeGuardsInstanceMethodsWhenNativePtrIsMissing(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/quninstantiablething.h',
+            'class' => 'QUninstantiableThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QUninstantiableThing',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_quninstantiablething.cpp');
+        self::assertStringContainsString('zend_throw_error(NULL, "QUninstantiableThing native instance is not initialized");', $cpp);
+        self::assertStringContainsString('RETURN_THROWS();', $cpp);
+    }
 }
