@@ -52,11 +52,6 @@ class BuildCommand extends Command
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $modules = $this->parseModules((string) $input->getOption('modules'));
-        if ($modules !== ['QtCore']) {
-            $output->writeln('<error>The first implementation only supports --modules=QtCore.</error>');
-
-            return self::FAILURE;
-        }
 
         $qtResolver = new QtInstallationResolver($this->systemInformation);
         $installation = $qtResolver->resolve($input->getOption('qt-path') !== null ? (string) $input->getOption('qt-path') : null, $modules);
