@@ -8,7 +8,8 @@
         "symfony/console": "^8.0",
         "symfony/process": "^8.0",
         "laravel/prompts": "^0.3.13",
-        "symfony/dependency-injection": "^8.0"
+        "symfony/dependency-injection": "^8.0",
+        "eftec/bladeone": "^4.19"
     },
     "require-dev": {
         "phpunit/phpunit": "^11.5",

@@ -1,0 +1,41 @@
+@php
+/**
+ * QObject pointer return — wrap existing C++ pointer in PHP object.
+ *
+ * @var \QtBuilder\CodeGen\ClassContext $ctx
+ * @var \QtBuilder\CodeGen\MethodContext $method
+ */
+$overload = $method->overloads[0] ?? null;
+$returnClass = $method->returnType;
+$cppReturnType = $overload?->cppReturnType ?? ($returnClass . ' *');
+$resultDeclType = $ctx->typeBridge->objectPointerReturnDeclarationType($cppReturnType, $returnClass);
+$writableResultExpr = $ctx->typeBridge->writableObjectPointerExpr($cppReturnType, $returnClass, '_result');
+$returnCe = $ctx->typeBridge->ceVarName($returnClass);
+$returnFromObj = $ctx->typeBridge->fromObjFuncName($returnClass);
+$returnStruct = $ctx->typeBridge->objectStructName($returnClass);
+$wrapFunc = $ctx->typeBridge->wrapNativeFuncName($returnClass);
+$isValueType = $ctx->typeBridge->isValueType($returnClass);
+$callPrefix = $method->isStatic
+    ? "{$ctx->nativeCppType}::"
+    : "intern->native_ptr->";
+$callPlan = $method->callPlan($ctx, $overload);
+@endphp
+@if($method->hasNoParams())
+@php $callExpr = "{$callPrefix}{$method->cppName}()"; @endphp
+@else
+@foreach($callPlan['setup_lines'] as $line)
+    {!! $line !!}
+@endforeach
+@php $callExpr = "{$callPrefix}{$method->cppName}(" . implode(', ', $callPlan['args']) . ')'; @endphp
+@endif
+    {!! $resultDeclType !!} _result = {!! $callExpr !!};
+@if($isValueType)
+    if (_result == NULL) {
+        RETURN_NULL();
+    }
+    object_init_ex(return_value, {!! $returnCe !!});
+    {!! $returnStruct !!} *_ret_intern = {!! $returnFromObj !!}(Z_OBJ_P(return_value));
+    _ret_intern->native_ptr = new {!! $returnClass !!}(*_result);
+@else
+    {!! $wrapFunc !!}(return_value, {!! $writableResultExpr !!}, {!! $returnCe !!}, true);
+@endif
