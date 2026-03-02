@@ -53,8 +53,8 @@ class ClassGenerationService
         $classData['has_public_constructor'] = $lifecycle['has_public_constructor'];
         $classData['has_public_default_constructor'] = $lifecycle['has_public_default_constructor'];
         $classData['has_public_destructor'] = $lifecycle['has_public_destructor'];
-        $classData['flag_aliases'] = $this->discoverFlagAliases($headerPath);
-        $classData['enum_names'] = $this->discoverEnumNames($headerPath);
+        $classData['flag_aliases'] = $this->discoverFlagAliases($headerPath, $className);
+        $classData['enum_names'] = $this->discoverEnumNames($headerPath, $className);
 
         if (($classData['is_abstract'] ?? false) === true) {
             return ClassGenerationResult::skipped(
@@ -473,10 +473,10 @@ class ClassGenerationService
     /**
      * @return array<string, string>
      */
-    private function discoverFlagAliases(string $headerPath): array
+    private function discoverFlagAliases(string $headerPath, ?string $className = null): array
     {
-        $contents = @file_get_contents($headerPath);
-        if (!is_string($contents) || $contents === '') {
+        $contents = $this->introspectionContents($headerPath, $className);
+        if ($contents === '') {
             return [];
         }
 
@@ -501,10 +501,10 @@ class ClassGenerationService
     /**
      * @return list<string>
      */
-    private function discoverEnumNames(string $headerPath): array
+    private function discoverEnumNames(string $headerPath, ?string $className = null): array
     {
-        $contents = @file_get_contents($headerPath);
-        if (!is_string($contents) || $contents === '') {
+        $contents = $this->introspectionContents($headerPath, $className);
+        if ($contents === '') {
             return [];
         }
 
@@ -523,5 +523,22 @@ class ClassGenerationService
         )));
 
         return $names;
+    }
+
+    private function introspectionContents(string $headerPath, ?string $className = null): string
+    {
+        if ($className !== null && $className !== '') {
+            $resolved = $this->resolveClassDefinitionSource($headerPath, $className);
+            if (is_array($resolved) && is_array($resolved['body'] ?? null) && is_string($resolved['body']['body'] ?? null)) {
+                return $resolved['body']['body'];
+            }
+        }
+
+        $contents = @file_get_contents($headerPath);
+        if (!is_string($contents) || $contents === '') {
+            return '';
+        }
+
+        return $contents;
     }
 }

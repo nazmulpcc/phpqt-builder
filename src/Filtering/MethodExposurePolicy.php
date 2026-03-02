@@ -389,6 +389,14 @@ class MethodExposurePolicy
         }
 
         $phpType = $this->typeMapper->map($trimmed);
+        if (
+            str_contains($trimmed, '::')
+            && in_array($phpType, ['int', 'float', 'bool'], true)
+            && !$this->isKnownQualifiedScalarType($trimmed)
+        ) {
+            return false;
+        }
+
         if (in_array($phpType, ['int', 'float', 'bool', 'string', 'void'], true)) {
             return true;
         }
@@ -426,8 +434,17 @@ class MethodExposurePolicy
         }
 
         if (str_contains($trimmed, '::')) {
+            $prefix = substr($trimmed, 0, (int) strrpos($trimmed, '::'));
             $suffix = substr($trimmed, (int) strrpos($trimmed, '::') + 2);
             if ($suffix === '') {
+                return false;
+            }
+
+            if ($prefix === 'Qt') {
+                return $this->looksLikeQualifiedEnumName($suffix);
+            }
+
+            if ($prefix !== $className) {
                 return false;
             }
 
@@ -549,6 +566,13 @@ class MethodExposurePolicy
         $phpType = $this->typeMapper->map($cppType);
 
         return in_array($phpType, ['int', 'float', 'bool'], true);
+    }
+
+    private function isKnownQualifiedScalarType(string $cppType): bool
+    {
+        $trimmed = trim($cppType);
+
+        return str_starts_with($trimmed, 'std::chrono::');
     }
 
     private function isUnsupportedValueBufferReturn(string $cppType): bool
