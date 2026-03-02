@@ -56,6 +56,8 @@ readonly class ClassGenerationResult
             'status' => $this->status,
             'class' => $this->className,
             'header' => $this->headerPath,
+            'parent_class' => $this->phpClass?->parent,
+            'class_dependencies' => $this->classDependencies(),
             'generated_files' => $this->generatedFiles,
             'reason_code' => $this->reasonCode,
             'reason_message' => $this->reasonMessage,
@@ -65,5 +67,67 @@ readonly class ClassGenerationResult
                 'skipped_methods' => count($this->skippedMethods),
             ],
         ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function classDependencies(): array
+    {
+        if ($this->phpClass === null) {
+            return [];
+        }
+
+        $dependencies = [];
+
+        foreach ($this->phpClass->methods as $method) {
+            foreach ($this->typeParts($method->returnType) as $type) {
+                $dependencies[$type] = true;
+            }
+
+            foreach ($method->parameters as $parameter) {
+                foreach ($this->typeParts($parameter->phpType) as $type) {
+                    $dependencies[$type] = true;
+                }
+            }
+        }
+
+        unset($dependencies[$this->phpClass->name]);
+
+        $resolved = array_keys($dependencies);
+        sort($resolved);
+
+        return $resolved;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function typeParts(string $phpType): array
+    {
+        $parts = [];
+
+        foreach (explode('|', $phpType) as $part) {
+            $part = trim($part);
+            if ($part === '' || $part === 'null' || $part === 'mixed') {
+                continue;
+            }
+
+            if (in_array($part, ['int', 'float', 'string', 'bool', 'array', 'void'], true)) {
+                continue;
+            }
+
+            $part = ltrim($part, '\\');
+            if (str_contains($part, '\\')) {
+                $segments = explode('\\', $part);
+                $part = end($segments) ?: $part;
+            }
+
+            if ($part !== '') {
+                $parts[] = $part;
+            }
+        }
+
+        return array_values(array_unique($parts));
     }
 }

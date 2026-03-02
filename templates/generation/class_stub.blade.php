@@ -16,7 +16,7 @@ namespace {!! $ctx->phpNamespace !!};
     if ($ctx->isAbstract) $classDecl .= 'abstract ';
     if ($ctx->isFinal) $classDecl .= 'final ';
     $classDecl .= 'class ' . $ctx->phpClassName;
-    if ($ctx->parentClassName) $classDecl .= ' extends ' . $ctx->parentClassName;
+    if ($ctx->stubParentClassName) $classDecl .= ' extends ' . $ctx->stubParentClassName;
 @endphp
 {!! $classDecl !!}
 {
@@ -29,7 +29,7 @@ namespace {!! $ctx->phpNamespace !!};
     {!! $modifiers !!} function __construct(@foreach($method->params as $param){!! $ctx->stubParamType($param) !!} ${!! $param->name !!}@if($param->isOptional) = {!! $ctx->stubDefault($param) !!}@endif @if(!$loop->last), @endif @endforeach) {}
 
 @else
-    {!! $modifiers !!} function {!! $method->name !!}(@foreach($method->params as $param){!! $ctx->stubParamType($param) !!} ${!! $param->name !!}@if($param->isOptional) = {!! $ctx->stubDefault($param) !!}@endif @if(!$loop->last), @endif @endforeach): {!! $method->returnType !!} {}
+    {!! $modifiers !!} function {!! $method->name !!}(@foreach($method->params as $param){!! $ctx->stubParamType($param) !!} ${!! $param->name !!}@if($param->isOptional) = {!! $ctx->stubDefault($param) !!}@endif @if(!$loop->last), @endif @endforeach): {!! $method->stubReturnType !!} {}
 
 @endif
 @endforeach

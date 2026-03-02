@@ -45,6 +45,8 @@ class GenerateCommand extends Command
             ->addOption('extension-name', null, InputOption::VALUE_REQUIRED, 'Extension name for build mode', 'qt')
             ->addOption('allowed-classes', null, InputOption::VALUE_REQUIRED, 'Comma-separated allow-list of generated classes')
             ->addOption('allowed-classes-file', null, InputOption::VALUE_REQUIRED, 'Path to a JSON file containing the allow-list of generated classes')
+            ->addOption('class-namespaces-file', null, InputOption::VALUE_REQUIRED, 'Path to a JSON file containing class-to-namespace mappings')
+            ->addOption('class-headers-file', null, InputOption::VALUE_REQUIRED, 'Path to a JSON file containing class-to-header mappings')
             ->addOption('worker-mode', null, InputOption::VALUE_REQUIRED, 'Internal worker mode for build pipelines', 'generate')
             ->addOption('build-mode', null, InputOption::VALUE_NONE, 'Emit machine-readable JSON and apply conservative filtering');
     }
@@ -149,12 +151,38 @@ class GenerateCommand extends Command
             );
         }
 
+        try {
+            $classNamespaces = $this->resolveClassNamespaces($input);
+        } catch (\RuntimeException $e) {
+            return $this->renderFailure(
+                $output,
+                true,
+                $className,
+                $headerPath,
+                'class_namespaces_load_failed',
+                $e->getMessage(),
+            );
+        }
+
+        try {
+            $classHeaders = $this->resolveClassHeaders($input);
+        } catch (\RuntimeException $e) {
+            return $this->renderFailure(
+                $output,
+                true,
+                $className,
+                $headerPath,
+                'class_headers_load_failed',
+                $e->getMessage(),
+            );
+        }
+
         $service = new ClassGenerationService();
-        $result = $service->generate($headerPath, $className, $includePaths, $allowedClasses);
+        $result = $service->generate($headerPath, $className, $includePaths, $allowedClasses, $classHeaders);
 
         if ($workerMode === 'generate' && $result->status === 'ok' && $result->phpClass !== null) {
             $generator = new ExtensionGenerator();
-            $files = $generator->generate($result->phpClass, $namespace, $outputDir);
+            $files = $generator->generate($result->phpClass, $namespace, $outputDir, $classNamespaces);
             $result = $result->withGeneratedFiles($files);
         }
 
@@ -238,6 +266,80 @@ class GenerateCommand extends Command
         ));
 
         return array_values(array_unique([...$fromFile, ...$allowedClasses]));
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function resolveClassNamespaces(InputInterface $input): array
+    {
+        $classNamespacesFile = $input->getOption('class-namespaces-file');
+        if (!is_string($classNamespacesFile) || trim($classNamespacesFile) === '') {
+            return [];
+        }
+
+        if (!is_file($classNamespacesFile)) {
+            throw new \RuntimeException(sprintf('Class namespaces file not found: %s', $classNamespacesFile));
+        }
+
+        $decoded = json_decode((string) file_get_contents($classNamespacesFile), true);
+        if (!is_array($decoded)) {
+            throw new \RuntimeException(sprintf('Class namespaces file is not valid JSON: %s', $classNamespacesFile));
+        }
+
+        $classNamespaces = [];
+        foreach ($decoded as $className => $namespace) {
+            if (!is_string($className) || !is_string($namespace)) {
+                continue;
+            }
+
+            $className = trim($className);
+            $namespace = trim($namespace);
+            if ($className === '' || $namespace === '') {
+                continue;
+            }
+
+            $classNamespaces[$className] = $namespace;
+        }
+
+        return $classNamespaces;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function resolveClassHeaders(InputInterface $input): array
+    {
+        $classHeadersFile = $input->getOption('class-headers-file');
+        if (!is_string($classHeadersFile) || trim($classHeadersFile) === '') {
+            return [];
+        }
+
+        if (!is_file($classHeadersFile)) {
+            throw new \RuntimeException(sprintf('Class headers file not found: %s', $classHeadersFile));
+        }
+
+        $decoded = json_decode((string) file_get_contents($classHeadersFile), true);
+        if (!is_array($decoded)) {
+            throw new \RuntimeException(sprintf('Class headers file is not valid JSON: %s', $classHeadersFile));
+        }
+
+        $classHeaders = [];
+        foreach ($decoded as $className => $headerPath) {
+            if (!is_string($className) || !is_string($headerPath)) {
+                continue;
+            }
+
+            $className = trim($className);
+            $headerPath = trim($headerPath);
+            if ($className === '' || $headerPath === '') {
+                continue;
+            }
+
+            $classHeaders[$className] = $headerPath;
+        }
+
+        return $classHeaders;
     }
 
     /**

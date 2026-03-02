@@ -116,6 +116,7 @@ class BuildCommand extends Command
 
         $acceptedCandidates = $generation['accepted_candidates'];
         $generatedClasses = $generation['generated_classes'];
+        $generatedClassParents = $generation['generated_class_parents'];
         $skippedClasses = $generation['skipped_classes'];
         $skippedMethods = $generation['skipped_methods'];
         $errors = $generation['errors'];
@@ -133,7 +134,11 @@ class BuildCommand extends Command
             ),
         );
 
-        $context = $context->withGeneratedClasses($generatedClasses);
+        $context = $context->withGeneratedClasses(
+            $generatedClasses,
+            $generatedClassParents,
+            $generation['generated_class_dependencies'],
+        );
         $scaffoldFiles = $scaffolder->finalize($context);
 
         $bootstrapResult = null;
@@ -281,6 +286,8 @@ class BuildCommand extends Command
      * @return array{
      *   accepted_candidates: list<HeaderCandidate>,
      *   generated_classes: list<string>,
+     *   generated_class_parents: array<string, string|null>,
+     *   generated_class_dependencies: array<string, list<string>>,
      *   skipped_classes: list<array<string, string|null>>,
      *   skipped_methods: list<array<string, string>>,
      *   errors: list<array<string, string|null>>,
@@ -323,7 +330,13 @@ class BuildCommand extends Command
         $classmap = [];
         /** @var list<string> $generatedClasses */
         $generatedClasses = [];
+        /** @var array<string, string|null> $generatedClassParents */
+        $generatedClassParents = [];
+        /** @var array<string, list<string>> $generatedClassDependencies */
+        $generatedClassDependencies = [];
         $passes = 0;
+        $classNamespacesFile = $this->writeClassNamespacesManifest($metadataDir, $acceptedCandidates);
+        $classHeadersFile = $this->discoveryService->writeClassHeadersManifest($metadataDir, $acceptedCandidates);
 
         do {
             $passes++;
@@ -344,6 +357,8 @@ class BuildCommand extends Command
                     $extensionName,
                     $includePaths,
                     $allowedClassesFile,
+                    $classNamespacesFile,
+                    $classHeadersFile,
                 ),
                 $jobs,
             );
@@ -356,6 +371,8 @@ class BuildCommand extends Command
 
                 if ($result->isOk()) {
                     $generatedClasses[] = $result->className;
+                    $generatedClassParents[$result->className] = $result->parentClassName;
+                    $generatedClassDependencies[$result->className] = $result->classDependencies;
                     $classmap[] = [
                         'class' => $result->className,
                         'header' => $result->headerPath,
@@ -409,6 +426,8 @@ class BuildCommand extends Command
         return [
             'accepted_candidates' => $currentCandidates,
             'generated_classes' => $generatedClasses,
+            'generated_class_parents' => $generatedClassParents,
+            'generated_class_dependencies' => $generatedClassDependencies,
             'skipped_classes' => array_values($skippedByClass),
             'skipped_methods' => $skippedMethods,
             'errors' => array_values($errorsByClass),
@@ -428,6 +447,8 @@ class BuildCommand extends Command
         string $extensionName,
         array $includePaths,
         string $allowedClassesFile,
+        string $classNamespacesFile,
+        string $classHeadersFile,
     ): array {
         $tasks = [];
 
@@ -442,10 +463,31 @@ class BuildCommand extends Command
                 qtPath: null,
                 includePaths: $includePaths,
                 allowedClassesFile: $allowedClassesFile,
+                classNamespacesFile: $classNamespacesFile,
+                classHeadersFile: $classHeadersFile,
             );
         }
 
         return $tasks;
+    }
+
+    /**
+     * @param list<HeaderCandidate> $acceptedCandidates
+     */
+    private function writeClassNamespacesManifest(string $metadataDir, array $acceptedCandidates): string
+    {
+        $payload = [];
+        foreach ($acceptedCandidates as $candidate) {
+            $payload[$candidate->className] = $this->namespaceForModule($candidate->module);
+        }
+
+        $manifestPath = $metadataDir . '/class_namespaces.json';
+        file_put_contents(
+            $manifestPath,
+            json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '{}',
+        );
+
+        return $manifestPath;
     }
 
 }

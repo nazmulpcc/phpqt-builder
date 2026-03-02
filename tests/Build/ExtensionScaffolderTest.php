@@ -41,6 +41,136 @@ final class ExtensionScaffolderTest extends TestCase
         self::assertStringContainsString('classes/qt_qpoint.cpp', $config);
     }
 
+    public function testConfigM4LinksAllRequestedDarwinFrameworkModules(): void
+    {
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-scaffolder-' . bin2hex(random_bytes(4)) . '/ext';
+        $installation = new QtInstallation(
+            rootPath: '/opt/qt',
+            osFamily: 'Darwin',
+            includeRoots: [
+                '/opt/qt/include',
+                '-F/opt/qt/lib',
+                '/opt/qt/lib/QtCore.framework/Headers',
+                '/opt/qt/lib/QtGui.framework/Headers',
+            ],
+            libraryRoots: ['/opt/qt/lib'],
+            moduleHeaderRoots: [
+                'QtCore' => '/opt/qt/lib/QtCore.framework/Headers',
+                'QtGui' => '/opt/qt/lib/QtGui.framework/Headers',
+            ],
+            tools: [],
+        );
+        $context = new ExtensionBuildContext('qt', '0.1.0', $outputDir, $installation, ['QtCore', 'QtGui'], ['QPoint']);
+
+        $scaffolder = new ExtensionScaffolder();
+        $scaffolder->prepare($context);
+        $scaffolder->finalize($context);
+
+        $config = (string) file_get_contents($outputDir . '/config.m4');
+
+        self::assertStringContainsString('-framework QtCore', $config);
+        self::assertStringContainsString('-framework QtGui', $config);
+    }
+
+    public function testConfigM4PrefersResolvedModuleLinkFlags(): void
+    {
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-scaffolder-' . bin2hex(random_bytes(4)) . '/ext';
+        $installation = new QtInstallation(
+            rootPath: '/opt/qt',
+            osFamily: 'Darwin',
+            includeRoots: ['/opt/qt/include', '-F/opt/qt/lib'],
+            libraryRoots: ['/opt/qt/lib'],
+            moduleHeaderRoots: ['QtCore' => '/opt/qt/lib/QtCore.framework/Headers'],
+            moduleLinkFlags: '-F/custom/qt/lib -framework QtGui -framework QtCore',
+            tools: [],
+        );
+        $context = new ExtensionBuildContext('qt', '0.1.0', $outputDir, $installation, ['QtCore', 'QtGui'], ['QPoint']);
+
+        $scaffolder = new ExtensionScaffolder();
+        $scaffolder->prepare($context);
+        $scaffolder->finalize($context);
+
+        $config = (string) file_get_contents($outputDir . '/config.m4');
+
+        self::assertStringContainsString('QT_SHARED_LIBADD="$QT_SHARED_LIBADD -F/custom/qt/lib -framework QtGui -framework QtCore"', $config);
+        self::assertStringNotContainsString('QT_SHARED_LIBADD="$QT_SHARED_LIBADD -F/opt/qt/lib -framework QtCore -framework QtGui"', $config);
+    }
+
+    public function testExtensionSourceRegistersParentsBeforeChildren(): void
+    {
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-scaffolder-' . bin2hex(random_bytes(4)) . '/ext';
+        $installation = new QtInstallation(
+            rootPath: '/opt/qt',
+            osFamily: 'Darwin',
+            includeRoots: ['/opt/qt/include'],
+            libraryRoots: ['/opt/qt/lib'],
+            moduleHeaderRoots: ['QtCore' => '/opt/qt/include/QtCore'],
+            tools: [],
+        );
+        $context = new ExtensionBuildContext(
+            'qt',
+            '0.1.0',
+            $outputDir,
+            $installation,
+            ['QtCore'],
+            ['QCoreApplication', 'QObject'],
+            ['QCoreApplication' => 'QObject'],
+        );
+
+        $scaffolder = new ExtensionScaffolder();
+        $scaffolder->prepare($context);
+        $scaffolder->finalize($context);
+
+        $source = (string) file_get_contents($outputDir . '/qt.cpp');
+
+        self::assertLessThan(
+            strpos($source, 'PHP_MINIT(qt_qcoreapplication)'),
+            strpos($source, 'PHP_MINIT(qt_qobject)'),
+        );
+    }
+
+    public function testExtensionSourceRegistersTypedDependenciesBeforeConsumers(): void
+    {
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-scaffolder-' . bin2hex(random_bytes(4)) . '/ext';
+        $installation = new QtInstallation(
+            rootPath: '/opt/qt',
+            osFamily: 'Darwin',
+            includeRoots: ['/opt/qt/include'],
+            libraryRoots: ['/opt/qt/lib'],
+            moduleHeaderRoots: ['QtGui' => '/opt/qt/include/QtGui'],
+            tools: [],
+        );
+        $context = new ExtensionBuildContext(
+            'qt',
+            '0.1.0',
+            $outputDir,
+            $installation,
+            ['QtGui'],
+            ['QTextTable', 'QTextTableFormat', 'QTextFrame', 'QTextFrameFormat'],
+            [
+                'QTextTable' => 'QTextFrame',
+                'QTextTableFormat' => 'QTextFrameFormat',
+            ],
+            [
+                'QTextTable' => ['QTextCursor', 'QTextDocument', 'QTextTableCell', 'QTextTableFormat'],
+                'QTextTableFormat' => [],
+                'QTextFrame' => [],
+                'QTextFrameFormat' => [],
+            ],
+        );
+
+        $scaffolder = new ExtensionScaffolder();
+        $scaffolder->prepare($context);
+        $scaffolder->finalize($context);
+
+        $source = (string) file_get_contents($outputDir . '/qt.cpp');
+
+        self::assertLessThan(
+            strpos($source, 'PHP_MINIT(qt_qtexttable)'),
+            strpos($source, 'PHP_MINIT(qt_qtexttableformat)'),
+        );
+    }
+
     public function testGeneratedHeaderGuardDoesNotCollideWithQtHeaderGuard(): void
     {
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generator-' . bin2hex(random_bytes(4));
@@ -101,6 +231,50 @@ final class ExtensionScaffolderTest extends TestCase
 
         self::assertStringContainsString('#include <QString>', $source);
         self::assertStringContainsString('#include <QByteArray>', $source);
+    }
+
+    public function testGeneratedStubQualifiesCrossNamespaceQtTypes(): void
+    {
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generator-' . bin2hex(random_bytes(4));
+        $generator = new ExtensionGenerator();
+        $phpClass = new PhpClass(
+            name: 'QGuiApplication',
+            parent: 'QCoreApplication',
+            isAbstract: false,
+            isCopyConstructible: false,
+            hasPublicDestructor: true,
+            properties: [],
+            methods: [
+                new PhpMethod(
+                    name: 'focusObject',
+                    returnType: 'QObject',
+                    access: 'public',
+                    isStatic: true,
+                    parameters: [],
+                    overloads: [
+                        new MethodOverload(
+                            returnType: 'QObject *',
+                            parameters: [],
+                            isConst: false,
+                            isStatic: true,
+                            isVirtual: false,
+                            isPureVirtual: false,
+                        ),
+                    ],
+                ),
+            ],
+        );
+
+        $generator->generate($phpClass, 'Qt\\Gui', $outputDir, [
+            'QGuiApplication' => 'Qt\\Gui',
+            'QCoreApplication' => 'Qt\\Core',
+            'QObject' => 'Qt\\Core',
+        ]);
+
+        $stub = (string) file_get_contents($outputDir . '/qt_qguiapplication.stub.php');
+
+        self::assertStringContainsString('class QGuiApplication extends \\Qt\\Core\\QCoreApplication', $stub);
+        self::assertStringContainsString('function focusObject(): \\Qt\\Core\\QObject {}', $stub);
     }
 
     public function testGeneratedValueTypeDisablesCloneWhenCopyConstructorIsUnavailable(): void

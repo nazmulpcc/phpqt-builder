@@ -12,6 +12,8 @@ readonly class ExtensionBuildContext
     /**
      * @param list<string> $modules
      * @param list<string> $generatedClasses
+     * @param array<string, string|null> $generatedClassParents
+     * @param array<string, list<string>> $generatedClassDependencies
      */
     public function __construct(
         public string $extensionName,
@@ -20,9 +22,15 @@ readonly class ExtensionBuildContext
         public QtInstallation $installation,
         public array $modules,
         public array $generatedClasses = [],
+        public array $generatedClassParents = [],
+        public array $generatedClassDependencies = [],
     ) {}
 
-    public function withGeneratedClasses(array $generatedClasses): self
+    public function withGeneratedClasses(
+        array $generatedClasses,
+        array $generatedClassParents = [],
+        array $generatedClassDependencies = [],
+    ): self
     {
         return new self(
             $this->extensionName,
@@ -31,6 +39,8 @@ readonly class ExtensionBuildContext
             $this->installation,
             $this->modules,
             $generatedClasses,
+            $generatedClassParents,
+            $generatedClassDependencies,
         );
     }
 
@@ -69,7 +79,7 @@ readonly class ExtensionBuildContext
 
         return array_map(
             static fn(string $className): string => 'classes/' . $bridge->minitName($className) . '.h',
-            $this->generatedClasses,
+            $this->orderedGeneratedClasses(),
         );
     }
 
@@ -82,7 +92,7 @@ readonly class ExtensionBuildContext
 
         return array_map(
             static fn(string $className): string => 'classes/' . $bridge->minitName($className) . '.cpp',
-            $this->generatedClasses,
+            $this->orderedGeneratedClasses(),
         );
     }
 
@@ -95,12 +105,96 @@ readonly class ExtensionBuildContext
 
         return array_map(
             static fn(string $className): string => $bridge->minitName($className),
-            $this->generatedClasses,
+            $this->orderedGeneratedClasses(),
         );
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function orderedGeneratedClasses(): array
+    {
+        $classes = array_values(array_unique($this->generatedClasses));
+        if ($classes === []) {
+            return [];
+        }
+
+        $generatedSet = array_fill_keys($classes, true);
+        $ordered = [];
+        $orderedSet = [];
+        $visiting = [];
+        $visited = [];
+
+        $visit = function (string $className) use (&$visit, &$ordered, &$orderedSet, &$visiting, &$visited, $generatedSet): void {
+            if (isset($visited[$className])) {
+                return;
+            }
+
+            if (isset($visiting[$className])) {
+                return;
+            }
+
+            $visiting[$className] = true;
+
+            $parentClass = $this->generatedClassParents[$className] ?? null;
+            if (is_string($parentClass) && isset($generatedSet[$parentClass])) {
+                $visit($parentClass);
+            }
+
+            foreach ($this->generatedClassDependencies[$className] ?? [] as $dependencyClass) {
+                if (isset($generatedSet[$dependencyClass])) {
+                    $visit($dependencyClass);
+                }
+            }
+
+            unset($visiting[$className]);
+            $visited[$className] = true;
+
+            if (!isset($orderedSet[$className])) {
+                $ordered[] = $className;
+                $orderedSet[$className] = true;
+            }
+        };
+
+        foreach ($classes as $className) {
+            $visit($className);
+        }
+
+        return $ordered;
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function moduleLibraryNames(): array
+    {
+        $libraries = array_map(
+            fn(string $module): string => $this->libraryNameForModule($module),
+            $this->modules,
+        );
+
+        return array_values(array_unique($libraries));
     }
 
     public function moduleLibraryName(): string
     {
-        return $this->installation->isDarwin() ? 'QtCore' : 'Qt6Core';
+        return $this->moduleLibraryNames()[0] ?? ($this->installation->isDarwin() ? 'QtCore' : 'Qt6Core');
+    }
+
+    private function libraryNameForModule(string $module): string
+    {
+        if ($this->installation->isDarwin()) {
+            return str_starts_with($module, 'Qt6') ? 'Qt' . substr($module, 3) : $module;
+        }
+
+        if (str_starts_with($module, 'Qt6')) {
+            return $module;
+        }
+
+        if (str_starts_with($module, 'Qt')) {
+            return 'Qt6' . substr($module, 2);
+        }
+
+        return $module;
     }
 }

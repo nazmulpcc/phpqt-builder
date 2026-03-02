@@ -117,14 +117,64 @@ class QtInstallationResolver
             $libraryRoots[] = $libsPath;
         }
 
+        $moduleLinkFlags = $this->resolveModuleLinkFlags($modules, $rootPath, $tools);
+
         return new QtInstallation(
             rootPath: $rootPath,
             osFamily: $this->systemInformation->getOsFamily(),
             includeRoots: array_values(array_unique($includeRoots)),
             libraryRoots: array_values(array_unique($libraryRoots)),
             moduleHeaderRoots: $moduleHeaderRoots,
+            moduleLinkFlags: $moduleLinkFlags,
             tools: $tools,
         );
+    }
+
+    /**
+     * @param list<string> $modules
+     * @param array<string, string> $tools
+     */
+    private function resolveModuleLinkFlags(array $modules, string $rootPath, array $tools): ?string
+    {
+        $pkgConfig = $this->systemInformation->findExecutable('pkg-config');
+        if ($pkgConfig === null) {
+            return null;
+        }
+
+        $packages = array_map(
+            static fn(string $module): string => self::pkgConfigPackageForModule($module),
+            $modules,
+        );
+
+        $prefix = $this->queryTool($pkgConfig, ['--variable=prefix', $packages[0]]);
+        if ($prefix !== null) {
+            $normalizedPrefix = realpath($prefix) ?: $prefix;
+            $normalizedRootPath = realpath($rootPath) ?: $rootPath;
+
+            if ($normalizedPrefix !== $normalizedRootPath && !isset($tools['pkg-config'])) {
+                return null;
+            }
+        }
+
+        $flags = $this->queryTool($pkgConfig, ['--libs', ...$packages]);
+        if ($flags === null) {
+            return null;
+        }
+
+        return $flags;
+    }
+
+    private static function pkgConfigPackageForModule(string $module): string
+    {
+        if (str_starts_with($module, 'Qt6')) {
+            return $module;
+        }
+
+        if (str_starts_with($module, 'Qt')) {
+            return 'Qt6' . substr($module, 2);
+        }
+
+        return $module;
     }
 
     private function frameworkHeaderRoot(string $rootPath, string $module): ?string

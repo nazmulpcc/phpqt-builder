@@ -47,11 +47,12 @@ class ExtensionGenerator
      * @param PhpClass $phpClass  The IR class definition
      * @param string   $namespace PHP namespace (e.g. "Qt\Core")
      * @param string   $outputDir Directory to write generated files
+     * @param array<string, string> $classNamespaces Class-to-namespace map used for stub generation
      * @return list<string> List of files written (absolute paths)
      */
-    public function generate(PhpClass $phpClass, string $namespace, string $outputDir): array
+    public function generate(PhpClass $phpClass, string $namespace, string $outputDir, array $classNamespaces = []): array
     {
-        $ctx = new ClassContext($phpClass, $namespace, $this->typeBridge);
+        $ctx = new ClassContext($phpClass, $namespace, $this->typeBridge, $classNamespaces);
         $files = [];
 
         // Ensure output directory exists
@@ -92,9 +93,9 @@ class ExtensionGenerator
     /**
      * Get the ClassContext for a given PhpClass (useful for inspection/debugging).
      */
-    public function buildContext(PhpClass $phpClass, string $namespace): ClassContext
+    public function buildContext(PhpClass $phpClass, string $namespace, array $classNamespaces = []): ClassContext
     {
-        return new ClassContext($phpClass, $namespace, $this->typeBridge);
+        return new ClassContext($phpClass, $namespace, $this->typeBridge, $classNamespaces);
     }
 
     /**

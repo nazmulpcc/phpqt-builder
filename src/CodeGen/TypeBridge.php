@@ -281,25 +281,63 @@ class TypeBridge
     /**
      * Build the PHP stub type, appending "|null" when an optional parameter defaults to null.
      */
-    public function stubType(string $phpType, bool $hasDefault): string
+    public function stubType(
+        string $phpType,
+        bool $hasDefault,
+        string $currentNamespace = '',
+        array $classNamespaces = [],
+    ): string
     {
-        if (
-            !$hasDefault
-            || $phpType === 'mixed'
-            || $phpType === 'null'
-            || in_array($phpType, ['int', 'float', 'bool', 'string', 'array'], true)
-            || $this->typeIncludes($phpType, 'null')
-        ) {
-            return $phpType;
-        }
-
         $parts = array_values(array_filter(
             explode('|', $phpType),
-            static fn(string $part): bool => $part !== '' && $part !== 'null',
+            static fn(string $part): bool => $part !== '',
         ));
-        $parts[] = 'null';
 
-        return implode('|', $parts);
+        if (
+            $hasDefault
+            && $phpType !== 'mixed'
+            && $phpType !== 'null'
+            && !in_array($phpType, ['int', 'float', 'bool', 'string', 'array'], true)
+            && !$this->typeIncludes($phpType, 'null')
+        ) {
+            $parts = array_values(array_filter(
+                $parts,
+                static fn(string $part): bool => $part !== 'null',
+            ));
+            $parts[] = 'null';
+        }
+
+        $qualifiedParts = [];
+        foreach ($parts as $part) {
+            $qualifiedParts[] = $this->qualifyStubTypePart($part, $currentNamespace, $classNamespaces);
+        }
+
+        return implode('|', $qualifiedParts);
+    }
+
+    /**
+     * @param array<string, string> $classNamespaces
+     */
+    private function qualifyStubTypePart(string $type, string $currentNamespace, array $classNamespaces): string
+    {
+        if ($type === '' || $type === 'null' || $type === 'mixed' || isset(self::ZEND_TYPE_MAP[$type])) {
+            return $type;
+        }
+
+        if (str_starts_with($type, '\\')) {
+            return $type;
+        }
+
+        $namespace = $classNamespaces[$type] ?? null;
+        if (!is_string($namespace) || $namespace === '') {
+            return $type;
+        }
+
+        if ($currentNamespace !== '' && $namespace === $currentNamespace) {
+            return '\\' . $namespace . '\\' . $type;
+        }
+
+        return '\\' . $namespace . '\\' . $type;
     }
 
     // ------------------------------------------------------------------

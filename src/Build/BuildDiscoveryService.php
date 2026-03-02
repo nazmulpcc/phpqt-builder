@@ -242,6 +242,7 @@ class BuildDiscoveryService
         $errorsByClass = [];
         $passes = 0;
         $workerAllowedClassesFile = $this->workerAllowedClassesFile($metadataDir);
+        $classHeadersFile = $this->writeClassHeadersManifest($metadataDir, $acceptedCandidates, 'class_headers.worker.json');
 
         try {
             do {
@@ -264,6 +265,7 @@ class BuildDiscoveryService
                         $outputDir,
                         $includePaths,
                         $allowedClassesFile = $workerAllowedClassesFile,
+                        $classHeadersFile,
                         $extensionName,
                     ),
                     $jobs,
@@ -304,6 +306,7 @@ class BuildDiscoveryService
             } while ($changed && $errorsByClass === [] && $viableCandidates !== []);
         } finally {
             @unlink($workerAllowedClassesFile);
+            @unlink($classHeadersFile);
         }
 
         $allowedClasses = array_keys($viableCandidates);
@@ -328,6 +331,7 @@ class BuildDiscoveryService
         string $outputDir,
         array $includePaths,
         string $allowedClassesFile,
+        string $classHeadersFile,
         string $extensionName,
     ): array {
         $tasks = [];
@@ -343,6 +347,7 @@ class BuildDiscoveryService
                 qtPath: null,
                 includePaths: $includePaths,
                 allowedClassesFile: $allowedClassesFile,
+                classHeadersFile: $classHeadersFile,
                 workerMode: 'probe',
             );
         }
@@ -361,6 +366,25 @@ class BuildDiscoveryService
         $baseDir = $realMetadataDir !== false ? $realMetadataDir : $metadataDir;
 
         return $baseDir . '/allowed_classes.worker.json';
+    }
+
+    /**
+     * @param list<HeaderCandidate> $acceptedCandidates
+     */
+    public function writeClassHeadersManifest(
+        string $metadataDir,
+        array $acceptedCandidates,
+        string $filename = 'class_headers.json',
+    ): string {
+        $payload = [];
+        foreach ($acceptedCandidates as $candidate) {
+            $payload[$candidate->className] = $candidate->parseHeader;
+        }
+
+        $manifestPath = $metadataDir . '/' . $filename;
+        $this->writeJsonFile($manifestPath, $payload, '{}');
+
+        return $manifestPath;
     }
 
     private function writeJsonFile(string $path, mixed $payload, string $fallback): void

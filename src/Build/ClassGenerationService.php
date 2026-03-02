@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace QtBuilder\Build;
 
+use QtBuilder\Definition\PhpClass;
+use QtBuilder\Definition\PhpMethod;
 use QtBuilder\Filtering\ClassExposurePolicy;
 use QtBuilder\Filtering\MethodExposurePolicy;
 use QtBuilder\Parsing\ClassDefinitionBuilder;
@@ -21,8 +23,15 @@ class ClassGenerationService
     /**
      * @param list<string> $includePaths
      * @param list<string> $allowedClasses
+     * @param array<string, string> $classHeaders
      */
-    public function generate(string $headerPath, string $className, array $includePaths, array $allowedClasses = []): ClassGenerationResult
+    public function generate(
+        string $headerPath,
+        string $className,
+        array $includePaths,
+        array $allowedClasses = [],
+        array $classHeaders = [],
+    ): ClassGenerationResult
     {
         $decision = $this->classPolicy->decideClassName($className);
         if (!$decision->accepted) {
@@ -79,17 +88,202 @@ class ClassGenerationService
         $classData['methods'] = $filtered['selected_methods'];
 
         $phpClass = $this->builder->build($classData);
+        $inheritanceFiltered = $this->filterConflictingInheritedMethods(
+            $phpClass,
+            $headerPath,
+            $includePaths,
+            $allowedClasses,
+            $classHeaders,
+        );
+        $phpClass = $inheritanceFiltered['class'];
+        $skippedMethods = [...$filtered['skipped_methods'], ...$inheritanceFiltered['skipped_methods']];
+
         if (count($phpClass->methods) === 0) {
             return ClassGenerationResult::skipped(
                 $className,
                 $headerPath,
                 'no_supported_methods',
                 'No supported methods remained after filtering.',
-                $filtered['skipped_methods'],
+                $skippedMethods,
             );
         }
 
-        return ClassGenerationResult::ok($className, $headerPath, $phpClass, $filtered['skipped_methods']);
+        return ClassGenerationResult::ok($className, $headerPath, $phpClass, $skippedMethods);
+    }
+
+    /**
+     * @param list<string> $includePaths
+     * @param list<string> $allowedClasses
+     * @param array<string, string> $classHeaders
+     * @return array{class: PhpClass, skipped_methods: list<array<string, string>>}
+     */
+    private function filterConflictingInheritedMethods(
+        PhpClass $phpClass,
+        string $headerPath,
+        array $includePaths,
+        array $allowedClasses,
+        array $classHeaders,
+    ): array {
+        $parentClass = $phpClass->parent;
+        if ($parentClass === null || $parentClass === '' || $parentClass === $phpClass->name) {
+            return ['class' => $phpClass, 'skipped_methods' => []];
+        }
+
+        $parentMethods = $this->collectInheritedMethods(
+            $parentClass,
+            $headerPath,
+            $includePaths,
+            $allowedClasses,
+            $classHeaders,
+        );
+        if ($parentMethods === []) {
+            return ['class' => $phpClass, 'skipped_methods' => []];
+        }
+
+        $methods = [];
+        $skippedMethods = [];
+
+        foreach ($phpClass->methods as $method) {
+            $parentMethod = $parentMethods[$method->name] ?? null;
+            if ($parentMethod === null || $this->isCompatibleInheritedMethod($method, $parentMethod)) {
+                $methods[] = $method;
+                continue;
+            }
+
+            $skippedMethods[] = [
+                'name' => $method->name,
+                'reason_code' => 'incompatible_inherited_method',
+                'reason_message' => sprintf(
+                    'Method %s is skipped because its PHP signature is incompatible with an inherited %s() method.',
+                    $method->name,
+                    $parentMethod->name,
+                ),
+            ];
+        }
+
+        return [
+            'class' => new PhpClass(
+                name: $phpClass->name,
+                parent: $phpClass->parent,
+                isAbstract: $phpClass->isAbstract,
+                isCopyConstructible: $phpClass->isCopyConstructible,
+                hasPublicDestructor: $phpClass->hasPublicDestructor,
+                properties: $phpClass->properties,
+                methods: $methods,
+            ),
+            'skipped_methods' => $skippedMethods,
+        ];
+    }
+
+    /**
+     * @param list<string> $includePaths
+     * @param list<string> $allowedClasses
+     * @param array<string, string> $classHeaders
+     * @param array<string, bool> $visited
+     * @return array<string, PhpMethod>
+     */
+    private function collectInheritedMethods(
+        string $className,
+        string $fallbackHeaderPath,
+        array $includePaths,
+        array $allowedClasses,
+        array $classHeaders,
+        array &$visited = [],
+    ): array {
+        if (isset($visited[$className])) {
+            return [];
+        }
+
+        $visited[$className] = true;
+        $headerPath = $classHeaders[$className] ?? $fallbackHeaderPath;
+        $result = $this->generate($headerPath, $className, $includePaths, $allowedClasses, $classHeaders);
+        $phpClass = $result->phpClass;
+        if ($result->status !== 'ok' || $phpClass === null) {
+            return [];
+        }
+
+        $methods = [];
+        if ($phpClass->parent !== null && $phpClass->parent !== '' && $phpClass->parent !== $className) {
+            $methods = $this->collectInheritedMethods(
+                $phpClass->parent,
+                $headerPath,
+                $includePaths,
+                $allowedClasses,
+                $classHeaders,
+                $visited,
+            );
+        }
+
+        foreach ($phpClass->methods as $method) {
+            if ($method->name === '__construct') {
+                continue;
+            }
+
+            $methods[$method->name] = $method;
+        }
+
+        return $methods;
+    }
+
+    private function isCompatibleInheritedMethod(PhpMethod $child, PhpMethod $parent): bool
+    {
+        if ($child->isStatic !== $parent->isStatic) {
+            return false;
+        }
+
+        if ($parent->access === 'public' && $child->access !== 'public') {
+            return false;
+        }
+
+        if (count($child->parameters) < count($parent->parameters)) {
+            return false;
+        }
+
+        if ($this->requiredParameterCount($child) > $this->requiredParameterCount($parent)) {
+            return false;
+        }
+
+        foreach ($parent->parameters as $index => $parentParameter) {
+            $childParameter = $child->parameters[$index] ?? null;
+            if ($childParameter === null) {
+                return false;
+            }
+
+            if ($childParameter->phpType !== $parentParameter->phpType) {
+                return false;
+            }
+
+            if ($parentParameter->hasDefault && !$childParameter->hasDefault) {
+                return false;
+            }
+        }
+
+        for ($index = count($parent->parameters); $index < count($child->parameters); $index++) {
+            if (!($child->parameters[$index]->hasDefault ?? false)) {
+                return false;
+            }
+        }
+
+        if ($child->returnType !== $parent->returnType) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function requiredParameterCount(PhpMethod $method): int
+    {
+        $count = 0;
+
+        foreach ($method->parameters as $parameter) {
+            if ($parameter->hasDefault) {
+                break;
+            }
+
+            $count++;
+        }
+
+        return $count;
     }
 
     /**

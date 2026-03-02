@@ -1,16 +1,12 @@
 <?php
 
-use Qt\Core\QCoreApplication;
+use Qt\Widgets\QApplication;
 
-$app = new QCoreApplication($argc, $argv);
+$app = new QApplication;
 
-$object = new Qt\Core\QObject();
-$object->setObjectName("TestObject");
-echo "Object Name: " . $object->objectName() . PHP_EOL;
-// echo "Is Widget Type: " . ($object->isWidgetType() ? "Yes" : "No") . PHP_EOL;
-// echo "Is Window Type: " . ($object->isWindowType() ? "Yes" : "No") . PHP_EOL;
-// echo "Is Quick Item Type: " . ($object->isQuickItemType() ? "Yes" : "No") . PHP_EOL;
-// echo "Signals Blocked: " . ($object->signalsBlocked() ? "Yes" : "No") . PHP_EOL;
-// echo "Thread: " . $object->thread() . PHP_EOL;
+$widget = new \Qt\Widgets\QMainWindow();
+$widget->setWindowTitle("Hello World");
+$widget->resize(new \Qt\Core\QSize(400, 300));
+$widget->show();
 
-// QCoreApplication::exec();
+$app->exec();

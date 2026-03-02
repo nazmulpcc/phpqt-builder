@@ -107,13 +107,21 @@ class ClassContext
     /** TypeBridge for templates that need dynamic type lookups */
     public readonly TypeBridge $typeBridge;
 
+    /** @var array<string, string> */
+    public readonly array $classNamespaces;
+
+    /** Fully-qualified parent class name for stub generation or null */
+    public readonly ?string $stubParentClassName;
+
     public function __construct(
         PhpClass $phpClass,
         string $namespace,
         TypeBridge $typeBridge,
+        array $classNamespaces = [],
     ) {
         $this->typeBridge = $typeBridge;
         $this->phpNamespace = $namespace;
+        $this->classNamespaces = $classNamespaces;
         $this->phpClassName = $phpClass->name;
         $this->nativeCppType = $phpClass->name;
 
@@ -142,6 +150,9 @@ class ClassContext
         $this->parentClassName = $phpClass->parent;
         $this->parentCeVarName = $phpClass->parent !== null
             ? $typeBridge->ceVarName($phpClass->parent)
+            : null;
+        $this->stubParentClassName = $phpClass->parent !== null
+            ? $typeBridge->stubType($phpClass->parent, false, $namespace, $classNamespaces)
             : null;
 
         // QObject types get wrap_native

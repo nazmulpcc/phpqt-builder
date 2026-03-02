@@ -18,11 +18,18 @@ AS_VAR_IF([PHP_{!! strtoupper($ctx->extensionName) !!}], [no],, [
   PHP_ADD_INCLUDE([{!! $includeRoot !!}])
 @endif
 @endforeach
-@if($ctx->installation->libraryRoots !== [])
+@if($ctx->installation->moduleLinkFlags !== null && $ctx->installation->moduleLinkFlags !== '')
 @if($ctx->installation->isDarwin())
-  {!! $sharedLibAdd !!}="{!! '$' . $sharedLibAdd !!} -F{!! $ctx->installation->libraryRoots[0] !!} -framework {!! $ctx->moduleLibraryName() !!}"
+  {!! $sharedLibAdd !!}="{!! '$' . $sharedLibAdd !!} {!! $ctx->installation->moduleLinkFlags !!}"
 @else
-  PHP_EVAL_LIBLINE([-L{!! $ctx->installation->libraryRoots[0] !!} -l{!! $ctx->moduleLibraryName() !!}], [{!! strtoupper($ctx->extensionName) !!}_SHARED_LIBADD])
+  PHP_EVAL_LIBLINE([{!! $ctx->installation->moduleLinkFlags !!}], [{!! strtoupper($ctx->extensionName) !!}_SHARED_LIBADD])
+@endif
+  PHP_SUBST([{!! strtoupper($ctx->extensionName) !!}_SHARED_LIBADD])
+@elseif($ctx->installation->libraryRoots !== [])
+@if($ctx->installation->isDarwin())
+  {!! $sharedLibAdd !!}="{!! '$' . $sharedLibAdd !!} -F{!! $ctx->installation->libraryRoots[0] !!}@foreach($ctx->moduleLibraryNames() as $libraryName) -framework {!! $libraryName !!}@endforeach"
+@else
+  PHP_EVAL_LIBLINE([-L{!! $ctx->installation->libraryRoots[0] !!}@foreach($ctx->moduleLibraryNames() as $libraryName) -l{!! $libraryName !!}@endforeach], [{!! strtoupper($ctx->extensionName) !!}_SHARED_LIBADD])
 @endif
   PHP_SUBST([{!! strtoupper($ctx->extensionName) !!}_SHARED_LIBADD])
 @endif

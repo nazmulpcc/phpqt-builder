@@ -18,6 +18,7 @@ readonly class QtInstallation
         public array $includeRoots,
         public array $libraryRoots,
         public array $moduleHeaderRoots,
+        public ?string $moduleLinkFlags = null,
         public array $tools = [],
     ) {}
 

@@ -44,6 +44,9 @@ class MethodContext
     /** PHP return type string (may be union) */
     public readonly string $returnType;
 
+    /** PHP stub return type string (may be fully qualified) */
+    public readonly string $stubReturnType;
+
     /** Return strategy: 'scalar', 'string', 'void', 'value_object', 'qobject_pointer', 'mixed', 'array' */
     public readonly string $returnStrategy;
 
@@ -84,6 +87,12 @@ class MethodContext
         $this->isOverloaded = $method->isOverloaded();
         $this->overloadCount = $method->overloadCount();
         $this->returnType = $method->returnType;
+        $this->stubReturnType = $typeBridge->stubType(
+            $method->returnType,
+            false,
+            $classCtx->phpNamespace,
+            $classCtx->classNamespaces,
+        );
 
         // Access flags
         $flags = $method->access === 'public' ? 'ZEND_ACC_PUBLIC' : 'ZEND_ACC_PROTECTED';

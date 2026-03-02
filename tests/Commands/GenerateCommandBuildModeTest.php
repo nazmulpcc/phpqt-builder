@@ -103,6 +103,51 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertFileExists($outputDir . '/classes/qt_qpoint.cpp');
     }
 
+    public function testGenerateBuildModeSkipsChildMethodsWithIncompatibleInheritedSignatures(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-inheritance-' . bin2hex(random_bytes(4));
+        $classHeadersFile = $outputDir . '/class_headers.json';
+        mkdir($outputDir, 0755, true);
+        file_put_contents($classHeadersFile, json_encode([
+            'QBaseSetter' => $fixtureRoot . '/include/QtCore/qbasesetter.h',
+            'QParentSetter' => $fixtureRoot . '/include/QtCore/qparentsetter.h',
+            'QChildSetter' => $fixtureRoot . '/include/QtCore/qchildsetter.h',
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qchildsetter.h',
+            'class' => 'QChildSetter',
+            '--qt-path' => '/definitely/not/a/qt/root',
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+            ],
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QBaseSetter,QParentSetter,QChildSetter',
+            '--class-headers-file' => $classHeadersFile,
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertContains('setPeer', array_column($payload['skipped_methods'], 'name'));
+        self::assertContains('peer', array_column($payload['skipped_methods'], 'name'));
+        self::assertContains('incompatible_inherited_method', array_column($payload['skipped_methods'], 'reason_code'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qchildsetter.stub.php');
+        self::assertStringContainsString('class QChildSetter extends QParentSetter', $stub);
+        self::assertStringContainsString('public function childId(): int {}', $stub);
+        self::assertStringNotContainsString('public function setPeer', $stub);
+        self::assertStringNotContainsString('public function peer', $stub);
+    }
+
     public function testGenerateBuildModeUsesNullableUnionForOptionalValueObjectParameters(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/qt';

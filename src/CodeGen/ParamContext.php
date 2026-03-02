@@ -58,7 +58,12 @@ class ParamContext
         $this->isOptional = $param->hasDefault;
         $this->position = $param->position;
         $this->isUnion = $typeBridge->isUnionType($param->phpType);
-        $this->stubPhpType = $typeBridge->stubType($param->phpType, $param->hasDefault);
+        $this->stubPhpType = $typeBridge->stubType(
+            $param->phpType,
+            $param->hasDefault,
+            $classCtx->phpNamespace,
+            $classCtx->classNamespaces,
+        );
 
         // For union types or object types, use zval*
         $primaryType = $this->primaryType($param->phpType);

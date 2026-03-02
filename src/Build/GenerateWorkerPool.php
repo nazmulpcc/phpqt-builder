@@ -109,6 +109,14 @@ class GenerateWorkerPool
             $command[] = '--allowed-classes=' . implode(',', $task->allowedClasses);
         }
 
+        if ($task->classNamespacesFile !== null && $task->classNamespacesFile !== '') {
+            $command[] = '--class-namespaces-file=' . $task->classNamespacesFile;
+        }
+
+        if ($task->classHeadersFile !== null && $task->classHeadersFile !== '') {
+            $command[] = '--class-headers-file=' . $task->classHeadersFile;
+        }
+
         return $command;
     }
 }

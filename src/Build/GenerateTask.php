@@ -20,6 +20,8 @@ readonly class GenerateTask
         public ?string $qtPath,
         public array $includePaths = [],
         public ?string $allowedClassesFile = null,
+        public ?string $classNamespacesFile = null,
+        public ?string $classHeadersFile = null,
         public array $allowedClasses = [],
         public string $workerMode = 'generate',
     ) {}
