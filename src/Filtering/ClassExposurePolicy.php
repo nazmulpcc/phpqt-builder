@@ -21,6 +21,12 @@ class ClassExposurePolicy
         'QGenericReturnArgument',
         'QFlag',
         'QFlags',
+        'QArrayData',
+        'QArrayDataPointer',
+        'QArrayDataOps',
+        'QFutureInterface',
+        'QFutureInterfaceBase',
+        'QFutureWatcherBase',
     ];
 
     /** @var list<string> */

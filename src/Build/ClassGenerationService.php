@@ -35,9 +35,27 @@ class ClassGenerationService
         }
 
         $inspector = new QtClassInspector(new ClangArgumentBuilder($includePaths));
+        if ($this->isTemplateClassDeclaration($headerPath, $className)) {
+            return ClassGenerationResult::skipped(
+                $className,
+                $headerPath,
+                'template_class',
+                'Template classes are skipped in the current build mode.',
+            );
+        }
+
         $classData = $inspector->inspect($headerPath, $className);
         if ($classData === null) {
             return ClassGenerationResult::skipped($className, $headerPath, 'class_not_found', 'Class definition was not found in the parsed header.');
+        }
+
+        if (($classData['is_abstract'] ?? false) === true) {
+            return ClassGenerationResult::skipped(
+                $className,
+                $headerPath,
+                'abstract_class',
+                'Abstract classes are skipped in the current build mode.',
+            );
         }
 
         $filtered = $this->methodPolicy->filter($classData, $allowedClasses);
@@ -55,5 +73,20 @@ class ClassGenerationService
         }
 
         return ClassGenerationResult::ok($className, $headerPath, $phpClass, $filtered['skipped_methods']);
+    }
+
+    private function isTemplateClassDeclaration(string $headerPath, string $className): bool
+    {
+        $contents = @file_get_contents($headerPath);
+        if (!is_string($contents) || $contents === '') {
+            return false;
+        }
+
+        $pattern = sprintf(
+            '/template\s*<[\s\S]*?>\s*(?:class|struct)\s+(?:[A-Za-z_][A-Za-z0-9_]*\s+)*%s\b/s',
+            preg_quote($className, '/'),
+        );
+
+        return preg_match($pattern, $contents) === 1;
     }
 }

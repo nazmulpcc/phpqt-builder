@@ -125,4 +125,115 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertSame('ok', $payload['status']);
         self::assertFileExists($outputDir . '/classes/qt_qtree.cpp');
     }
+
+    public function testGenerateBuildModeSkipsAbstractClasses(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qabstractthing.h',
+            'class' => 'QAbstractThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QAbstractThing',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('skipped', $payload['status']);
+        self::assertSame('abstract_class', $payload['reason_code']);
+        self::assertFileDoesNotExist($outputDir . '/classes/qt_qabstractthing.cpp');
+    }
+
+    public function testGenerateBuildModeSkipsProtectedMethods(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qprotectedthing.h',
+            'class' => 'QProtectedThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QProtectedThing',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertContains('tweak', array_column($payload['skipped_methods'], 'name'));
+        self::assertContains('non_public_method', array_column($payload['skipped_methods'], 'reason_code'));
+
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qprotectedthing.cpp');
+        self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QProtectedThing, tweak)', $cpp);
+    }
+
+    public function testGenerateBuildModeCastsEnumParametersBackToNativeTypes(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qenumholder.h',
+            'class' => 'QEnumHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QEnumHolder',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qenumholder.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qenumholder.cpp');
+
+        self::assertStringContainsString('public function setMode(int $mode): void {}', $stub);
+        self::assertStringContainsString('intern->native_ptr->setMode((QEnumHolder::Mode)mode);', $cpp);
+    }
+
+    public function testGenerateBuildModeSkipsTemplateClasses(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qtemplatething.h',
+            'class' => 'QTemplateThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QTemplateThing',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('skipped', $payload['status']);
+        self::assertSame('template_class', $payload['reason_code']);
+        self::assertFileDoesNotExist($outputDir . '/classes/qt_qtemplatething.cpp');
+    }
 }

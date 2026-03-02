@@ -653,6 +653,10 @@ class TypeBridge
     {
         $normalized = $this->normalizeCppType($cppType);
 
+        if ($normalized !== '' && (str_contains($normalized, '::') || str_starts_with($normalized, 'QFlags<'))) {
+            return $normalized;
+        }
+
         return match ($normalized) {
             'short', 'unsigned short', 'qint8', 'qint16', 'quint8', 'quint16' => $normalized,
             'float' => 'float',

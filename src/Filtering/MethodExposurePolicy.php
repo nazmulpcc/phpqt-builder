@@ -126,7 +126,7 @@ class MethodExposurePolicy
         }
 
         return [
-            'selected' => $ranked[0]['variant'],
+            'selected' => $this->normalizeSpecialTypes($className, $ranked[0]['variant']),
             'skipped' => $skipped,
         ];
     }
@@ -138,8 +138,13 @@ class MethodExposurePolicy
      */
     private function unsupportedReason(string $className, array $variant, array $allowedClasses): ?array
     {
-        if (($variant['access'] ?? 'public') === 'private') {
-            return ['code' => 'private_method', 'message' => 'Private methods are not exposed.'];
+        $access = (string) ($variant['access'] ?? 'unknown');
+        if ($access !== 'public') {
+            return ['code' => 'non_public_method', 'message' => sprintf('Methods with %s access are not exposed.', $access)];
+        }
+
+        if (($variant['is_pure_virtual'] ?? false) === true) {
+            return ['code' => 'pure_virtual_method', 'message' => 'Pure virtual methods are not exposed.'];
         }
 
         $returnType = (string) $variant['return_type'];
@@ -186,6 +191,14 @@ class MethodExposurePolicy
             return false;
         }
 
+        if (str_contains($trimmed, '<') && !$this->isSupportedTemplateType($trimmed)) {
+            return false;
+        }
+
+        if ($this->isEnumOrFlagType($trimmed, $className)) {
+            return true;
+        }
+
         $phpType = $this->typeMapper->map($trimmed);
         if (in_array($phpType, ['int', 'float', 'bool', 'string', 'void'], true)) {
             return true;
@@ -204,6 +217,68 @@ class MethodExposurePolicy
         }
 
         return in_array($phpType, $allowedClasses, true);
+    }
+
+    private function isSupportedTemplateType(string $cppType): bool
+    {
+        return str_starts_with(trim($cppType), 'QFlags<');
+    }
+
+    private function isEnumOrFlagType(string $cppType, string $className): bool
+    {
+        $trimmed = trim($cppType);
+
+        if (str_starts_with($trimmed, 'QFlags<')) {
+            return true;
+        }
+
+        if (str_contains($trimmed, '::')) {
+            return true;
+        }
+
+        if (preg_match('/^[A-Z][A-Za-z0-9_]*$/', $trimmed) !== 1) {
+            return false;
+        }
+
+        if (str_starts_with($trimmed, 'Q')) {
+            return false;
+        }
+
+        return $trimmed !== $className;
+    }
+
+    /**
+     * @param array<string, mixed> $variant
+     * @return array<string, mixed>
+     */
+    private function normalizeSpecialTypes(string $className, array $variant): array
+    {
+        $variant['return_type'] = $this->normalizeEnumType($className, (string) $variant['return_type']);
+        $variant['parameters'] = array_map(
+            function (array $parameter) use ($className): array {
+                $parameter['type'] = $this->normalizeEnumType($className, (string) ($parameter['type'] ?? ''));
+
+                return $parameter;
+            },
+            $variant['parameters'],
+        );
+
+        return $variant;
+    }
+
+    private function normalizeEnumType(string $className, string $cppType): string
+    {
+        $trimmed = trim($cppType);
+
+        if (!$this->isEnumOrFlagType($trimmed, $className)) {
+            return $trimmed;
+        }
+
+        if (str_starts_with($trimmed, 'QFlags<') || str_contains($trimmed, '::')) {
+            return $trimmed;
+        }
+
+        return $className . '::' . $trimmed;
     }
 
     /**
