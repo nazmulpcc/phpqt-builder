@@ -359,6 +359,10 @@ class MethodExposurePolicy
             return true;
         }
 
+        if ($this->isDisambiguationTagType($trimmed)) {
+            return false;
+        }
+
         if (preg_match('/\(\s*\*/', $trimmed) === 1 || str_contains($trimmed, 'std::function')) {
             return false;
         }
@@ -399,6 +403,10 @@ class MethodExposurePolicy
     private function isEnumOrFlagType(string $cppType, string $className, array $flagAliases = [], array $enumNames = []): bool
     {
         $trimmed = trim($cppType);
+
+        if ($this->isDisambiguationTagType($trimmed) || str_starts_with($trimmed, 'std::')) {
+            return false;
+        }
 
         if (str_starts_with($trimmed, 'QFlags<')) {
             return true;
@@ -455,6 +463,10 @@ class MethodExposurePolicy
     {
         $trimmed = trim($cppType);
 
+        if ($this->isDisambiguationTagType($trimmed)) {
+            return $trimmed;
+        }
+
         if (isset($flagAliases[$trimmed])) {
             return sprintf('QFlags<%s::%s>', $className, $flagAliases[$trimmed]);
         }
@@ -464,6 +476,15 @@ class MethodExposurePolicy
             $nested = substr($trimmed, strlen($qualifiedPrefix));
             if ($nested !== '' && isset($flagAliases[$nested])) {
                 return sprintf('QFlags<%s::%s>', $className, $flagAliases[$nested]);
+            }
+        }
+
+        if (str_contains($trimmed, '::')) {
+            $lastSeparator = (int) strrpos($trimmed, '::');
+            $prefix = substr($trimmed, 0, $lastSeparator);
+            $nested = substr($trimmed, $lastSeparator + 2);
+            if ($prefix !== '' && $nested !== '' && isset($flagAliases[$nested])) {
+                return sprintf('QFlags<%s::%s>', $prefix, $flagAliases[$nested]);
             }
         }
 
@@ -480,6 +501,10 @@ class MethodExposurePolicy
 
     private function looksLikeQualifiedEnumName(string $name): bool
     {
+        if (str_ends_with($name, '_t')) {
+            return false;
+        }
+
         foreach (['Result', 'Private', 'Data', 'Pointer', 'Iterator', 'Ref', 'Helper'] as $suffix) {
             if (str_ends_with($name, $suffix)) {
                 return false;
@@ -487,6 +512,11 @@ class MethodExposurePolicy
         }
 
         return true;
+    }
+
+    private function isDisambiguationTagType(string $cppType): bool
+    {
+        return trim($cppType) === 'Qt::Disambiguated_t';
     }
 
     /**

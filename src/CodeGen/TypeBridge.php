@@ -96,6 +96,9 @@ class TypeBridge
         'std::filesystem::path',
         'std::string',
         'std::string_view',
+        'std::wstring',
+        'std::u16string',
+        'std::u32string',
         'QString',
         'QByteArray',
         'QLatin1String',
@@ -417,6 +420,10 @@ class TypeBridge
      */
     public function nativeScalarToPhpExpr(string $phpType, string $cppType, string $expr): string
     {
+        if ($phpType === 'int' && $this->isChronoDurationType($cppType)) {
+            return sprintf('(zend_long)(%s.count())', $expr);
+        }
+
         return match ($phpType) {
             'int' => sprintf('(zend_long)(%s)', $expr),
             'float' => sprintf('(double)(%s)', $expr),
@@ -538,6 +545,27 @@ class TypeBridge
 
         if ($base === 'std::string' || $base === 'std::string_view') {
             return sprintf('RETURN_STRINGL(%s.data(), %s.size())', $varName, $varName);
+        }
+
+        if ($base === 'std::wstring') {
+            return sprintf(
+                "QByteArray _utf8 = QString::fromStdWString(%s).toUtf8();\n    RETURN_STRINGL(_utf8.constData(), _utf8.size())",
+                $varName,
+            );
+        }
+
+        if ($base === 'std::u16string') {
+            return sprintf(
+                "QByteArray _utf8 = QString::fromStdU16String(%s).toUtf8();\n    RETURN_STRINGL(_utf8.constData(), _utf8.size())",
+                $varName,
+            );
+        }
+
+        if ($base === 'std::u32string') {
+            return sprintf(
+                "QByteArray _utf8 = QString::fromStdU32String(%s).toUtf8();\n    RETURN_STRINGL(_utf8.constData(), _utf8.size())",
+                $varName,
+            );
         }
 
         if ($base === 'std::filesystem::path') {
@@ -706,6 +734,10 @@ class TypeBridge
     {
         $normalized = $this->normalizeCppType($cppType);
 
+        if ($this->isChronoDurationType($normalized)) {
+            return $normalized;
+        }
+
         if ($normalized !== '' && (str_contains($normalized, '::') || str_starts_with($normalized, 'QFlags<'))) {
             return $normalized;
         }
@@ -750,8 +782,16 @@ class TypeBridge
     {
         $castType = $this->cppCastType($cppType);
 
+        if ($this->isChronoDurationType($castType)) {
+            return sprintf('%s((%s::rep)((int)(%s)))', $castType, $castType, $expr);
+        }
+
         if (str_starts_with($castType, 'QFlags<')) {
-            return sprintf('%s::fromInt((%s::Int)(%s))', $castType, $castType, $expr);
+            return sprintf('%s::fromInt((%s::Int)((int)(%s)))', $castType, $castType, $expr);
+        }
+
+        if (str_contains($castType, '::')) {
+            return sprintf('(%s)((int)(%s))', $castType, $expr);
         }
 
         return sprintf('(%s)%s', $castType, $expr);
@@ -776,6 +816,18 @@ class TypeBridge
             return sprintf('std::string_view(ZSTR_VAL(%s), (size_t)ZSTR_LEN(%s))', $varName, $varName);
         }
 
+        if ($base === 'std::wstring') {
+            return sprintf('QString::fromUtf8(ZSTR_VAL(%s), (int)ZSTR_LEN(%s)).toStdWString()', $varName, $varName);
+        }
+
+        if ($base === 'std::u16string') {
+            return sprintf('QString::fromUtf8(ZSTR_VAL(%s), (int)ZSTR_LEN(%s)).toStdU16String()', $varName, $varName);
+        }
+
+        if ($base === 'std::u32string') {
+            return sprintf('QString::fromUtf8(ZSTR_VAL(%s), (int)ZSTR_LEN(%s)).toStdU32String()', $varName, $varName);
+        }
+
         if ($base === 'std::filesystem::path') {
             return sprintf('std::filesystem::path(std::string(ZSTR_VAL(%s), ZSTR_LEN(%s)))', $varName, $varName);
         }
@@ -795,5 +847,33 @@ class TypeBridge
     private function isPointerType(string $cppType): bool
     {
         return str_contains($cppType, '*');
+    }
+
+    private function isChronoDurationType(string $cppType): bool
+    {
+        $normalized = $this->normalizeCppType($cppType);
+
+        if (str_starts_with($normalized, 'std::chrono::duration<')) {
+            return true;
+        }
+
+        foreach ([
+            'std::chrono::nanoseconds',
+            'std::chrono::microseconds',
+            'std::chrono::milliseconds',
+            'std::chrono::seconds',
+            'std::chrono::minutes',
+            'std::chrono::hours',
+            'std::chrono::days',
+            'std::chrono::weeks',
+            'std::chrono::months',
+            'std::chrono::years',
+        ] as $durationType) {
+            if ($normalized === $durationType) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

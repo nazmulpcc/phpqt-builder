@@ -58,6 +58,9 @@ class CppToPhpTypeMapper
         'std::filesystem::path',
         'std::string',
         'std::string_view',
+        'std::wstring',
+        'std::u16string',
+        'std::u32string',
         'QString',
         'QByteArray',
         'QLatin1String',
@@ -118,6 +121,18 @@ class CppToPhpTypeMapper
         // initializer_list -> array
         if (str_starts_with($normalized, 'std::initializer_list')) {
             return 'array';
+        }
+
+        if ($this->isChronoDurationType($normalized)) {
+            return 'int';
+        }
+
+        if ($normalized === 'Qt::Disambiguated_t') {
+            return 'mixed';
+        }
+
+        if (str_starts_with($normalized, 'std::')) {
+            return 'mixed';
         }
 
         // Qualified nested types may be enums or nested classes.
@@ -181,6 +196,10 @@ class CppToPhpTypeMapper
 
     private function looksLikeQualifiedEnumName(string $name): bool
     {
+        if (str_ends_with($name, '_t')) {
+            return false;
+        }
+
         foreach (['Result', 'Private', 'Data', 'Pointer', 'Iterator', 'Ref', 'Helper'] as $suffix) {
             if (str_ends_with($name, $suffix)) {
                 return false;
@@ -188,5 +207,31 @@ class CppToPhpTypeMapper
         }
 
         return true;
+    }
+
+    private function isChronoDurationType(string $type): bool
+    {
+        if (str_starts_with($type, 'std::chrono::duration<')) {
+            return true;
+        }
+
+        foreach ([
+            'std::chrono::nanoseconds',
+            'std::chrono::microseconds',
+            'std::chrono::milliseconds',
+            'std::chrono::seconds',
+            'std::chrono::minutes',
+            'std::chrono::hours',
+            'std::chrono::days',
+            'std::chrono::weeks',
+            'std::chrono::months',
+            'std::chrono::years',
+        ] as $durationType) {
+            if ($type === $durationType) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

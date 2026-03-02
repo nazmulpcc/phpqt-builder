@@ -239,7 +239,7 @@ final class GenerateCommandBuildModeTest extends TestCase
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qenumholder.cpp');
 
         self::assertStringContainsString('public function setMode(int $mode): void {}', $stub);
-        self::assertStringContainsString('intern->native_ptr->setMode((QEnumHolder::Mode)mode);', $cpp);
+        self::assertStringContainsString('intern->native_ptr->setMode((QEnumHolder::Mode)((int)(mode)));', $cpp);
         self::assertStringContainsString('RETURN_LONG((zend_long)(intern->native_ptr->mode()));', $cpp);
     }
 
@@ -383,7 +383,7 @@ final class GenerateCommandBuildModeTest extends TestCase
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qflagholder.cpp');
 
         self::assertStringContainsString('public function setModes(int $modes): void {}', $stub);
-        self::assertStringContainsString('QFlags<QFlagHolder::Mode>::fromInt((QFlags<QFlagHolder::Mode>::Int)(modes))', $cpp);
+        self::assertStringContainsString('QFlags<QFlagHolder::Mode>::fromInt((QFlags<QFlagHolder::Mode>::Int)((int)(modes)))', $cpp);
         self::assertStringContainsString('RETURN_LONG((zend_long)(intern->native_ptr->modes()));', $cpp);
     }
 
@@ -468,7 +468,7 @@ final class GenerateCommandBuildModeTest extends TestCase
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qresultholder.cpp');
 
         self::assertStringContainsString('public function setMode(int $mode): void {}', $stub);
-        self::assertStringContainsString('intern->native_ptr->setMode((QResultHolder::Mode)mode);', $cpp);
+        self::assertStringContainsString('intern->native_ptr->setMode((QResultHolder::Mode)((int)(mode)));', $cpp);
         self::assertStringNotContainsString('fromBase64Encoding', $cpp);
         self::assertStringNotContainsString('RETURN_LONG((zend_long)(QResultHolder::decode()', $cpp);
     }
@@ -569,7 +569,7 @@ final class GenerateCommandBuildModeTest extends TestCase
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qpartsholder.cpp');
 
         self::assertStringContainsString('public function setFormat(int $format): void {}', $stub);
-        self::assertStringContainsString('intern->native_ptr->setFormat((QPartsHolder::NameFormat)format);', $cpp);
+        self::assertStringContainsString('intern->native_ptr->setFormat((QPartsHolder::NameFormat)((int)(format)));', $cpp);
         self::assertStringNotContainsString('public function partsFromDate', $stub);
         self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QPartsHolder, partsFromDate)', $cpp);
     }
@@ -655,5 +655,104 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QPrivateLifecycleThing, __construct)', $cpp);
         self::assertStringNotContainsString('delete intern->native_ptr;', $cpp);
         self::assertStringContainsString('RETURN_LONG((zend_long)(QPrivateLifecycleThing::version()));', $cpp);
+    }
+
+    public function testGenerateBuildModeConvertsChronoDurationsToAndFromIntegers(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qchronoholder.h',
+            'class' => 'QChronoHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QChronoHolder',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qchronoholder.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qchronoholder.cpp');
+
+        self::assertStringContainsString('public function setInterval(int $value): void {}', $stub);
+        self::assertStringContainsString('intern->native_ptr->setInterval(std::chrono::milliseconds((std::chrono::milliseconds::rep)((int)(value))));', $cpp);
+        self::assertStringContainsString('RETURN_LONG((zend_long)(intern->native_ptr->interval().count()));', $cpp);
+    }
+
+    public function testGenerateBuildModeBridgesWideStringsThroughQString(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qwidestringholder.h',
+            'class' => 'QWideStringHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QWideStringHolder',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qwidestringholder.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qwidestringholder.cpp');
+
+        self::assertStringContainsString('public static function fromStdWString(string $s): QWideStringHolder {}', $stub);
+        self::assertStringContainsString('QString::fromUtf8(ZSTR_VAL(s), (int)ZSTR_LEN(s)).toStdWString()', $cpp);
+        self::assertStringContainsString('QString::fromStdWString(_result).toUtf8()', $cpp);
+        self::assertStringContainsString('QString::fromUtf8(ZSTR_VAL(s), (int)ZSTR_LEN(s)).toStdU16String()', $cpp);
+        self::assertStringContainsString('QString::fromStdU16String(_result).toUtf8()', $cpp);
+        self::assertStringContainsString('QString::fromUtf8(ZSTR_VAL(s), (int)ZSTR_LEN(s)).toStdU32String()', $cpp);
+        self::assertStringContainsString('QString::fromStdU32String(_result).toUtf8()', $cpp);
+    }
+
+    public function testGenerateBuildModeSkipsQtDisambiguationTagParameters(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qdisambiguationholder.h',
+            'class' => 'QDisambiguationHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QDisambiguationHolder',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertContains('count', array_column($payload['skipped_methods'], 'name'));
+        self::assertContains('unsupported_parameter_type', array_column($payload['skipped_methods'], 'reason_code'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qdisambiguationholder.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qdisambiguationholder.cpp');
+
+        self::assertStringContainsString('public function value(): int {}', $stub);
+        self::assertStringNotContainsString('public function count', $stub);
+        self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QDisambiguationHolder, count)', $cpp);
     }
 }

@@ -10,7 +10,9 @@
 
 #include "{!! $ctx->filePrefix !!}.h"
 #include "{!! $ctx->filePrefix !!}_arginfo.h"
+#include <chrono>
 #include <filesystem>
+#include <string>
 #include <QString>
 #include <QByteArray>
 @if($ctx->parentCeVarName)
