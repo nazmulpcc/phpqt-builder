@@ -4,11 +4,14 @@ declare(strict_types=1);
 
 namespace QtBuilder\Commands;
 
+use QtBuilder\Build\BootstrapResult;
 use QtBuilder\Build\ClassGenerationService;
+use QtBuilder\Build\ExtensionBootstrapper;
 use QtBuilder\Build\ExtensionBuildContext;
 use QtBuilder\Build\ExtensionScaffolder;
 use QtBuilder\Build\GenerateTask;
 use QtBuilder\Build\GenerateWorkerPool;
+use QtBuilder\Build\ProcessExtensionBootstrapper;
 use QtBuilder\Contracts\SystemInformation;
 use QtBuilder\Filtering\ClassExposurePolicy;
 use QtBuilder\Qt\QtInstallation;
@@ -24,8 +27,14 @@ use Symfony\Component\Console\Output\OutputInterface;
 #[AsCommand('build', 'Generate a PHP extension source tree from Qt modules.')]
 class BuildCommand extends Command
 {
-    public function __construct(private readonly SystemInformation $systemInformation)
-    {
+    private readonly ExtensionBootstrapper $bootstrapper;
+
+    public function __construct(
+        private readonly SystemInformation $systemInformation,
+        ?ExtensionBootstrapper $bootstrapper = null,
+    ) {
+        $this->bootstrapper = $bootstrapper ?? new ProcessExtensionBootstrapper($systemInformation);
+
         parent::__construct();
     }
 
@@ -135,6 +144,21 @@ class BuildCommand extends Command
         $context = $context->withGeneratedClasses($generatedClasses);
         $scaffoldFiles = $scaffolder->finalize($context);
 
+        $bootstrapResult = null;
+        $bootstrapError = null;
+
+        if ($generatedClasses !== [] && $errors === []) {
+            $output->writeln('<info>Bootstrapping extension build tree...</info>');
+
+            try {
+                $bootstrapResult = $this->bootstrapper->bootstrap($context);
+                $this->renderBootstrapResult($output, $bootstrapResult);
+            } catch (\RuntimeException $e) {
+                $bootstrapError = $e->getMessage();
+                $output->writeln(sprintf('<error>%s</error>', $bootstrapError));
+            }
+        }
+
         $summary = [
             'modules' => $modules,
             'candidate_classes' => $candidateCount,
@@ -142,6 +166,8 @@ class BuildCommand extends Command
             'skipped_classes' => count($skippedClasses),
             'failed_classes' => count($errors),
             'jobs' => $jobs,
+            'bootstrap' => $bootstrapResult?->toArray(),
+            'bootstrap_error' => $bootstrapError,
         ];
 
         file_put_contents($metadataDir . '/classmap.json', json_encode($classmap, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]');
@@ -154,7 +180,7 @@ class BuildCommand extends Command
         }
         $output->writeln(sprintf('<info>Generated %d class wrapper(s); %d class(es) skipped; %d error(s).</info>', count($generatedClasses), count($skippedClasses), count($errors)));
 
-        if ($generatedClasses === [] || $errors !== []) {
+        if ($generatedClasses === [] || $errors !== [] || $bootstrapError !== null) {
             return self::FAILURE;
         }
 
@@ -203,6 +229,19 @@ class BuildCommand extends Command
             if (is_file($path)) {
                 $output->writeln(sprintf('  <comment>cache:</comment> %s', $path));
             }
+        }
+    }
+
+    private function renderBootstrapResult(OutputInterface $output, BootstrapResult $bootstrapResult): void
+    {
+        foreach ($bootstrapResult->steps as $step) {
+            $output->writeln(sprintf(
+                '  <comment>%s:</comment> %s',
+                $step->name,
+                implode(' ', $step->command),
+            ));
+            $output->writeln(sprintf('    <comment>stdout:</comment> %s', $step->stdoutLogPath));
+            $output->writeln(sprintf('    <comment>stderr:</comment> %s', $step->stderrLogPath));
         }
     }
 

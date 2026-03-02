@@ -8,9 +8,10 @@ PHP_ARG_ENABLE([{!! $ctx->extensionName !!}],
 
 AS_VAR_IF([PHP_{!! strtoupper($ctx->extensionName) !!}], [no],, [
   PHP_REQUIRE_CXX()
+@php($sharedLibAdd = strtoupper($ctx->extensionName) . '_SHARED_LIBADD')
 @foreach($ctx->installation->includeRoots as $includeRoot)
 @if(str_starts_with($includeRoot, '-F'))
-  PHP_ADD_FRAMEWORKPATH([{!! substr($includeRoot, 2) !!}])
+  CPPFLAGS="$CPPFLAGS {!! $includeRoot !!}"
 @elseif(str_starts_with($includeRoot, '-'))
   PHP_EVAL_INCLINE([{!! $includeRoot !!}])
 @else
@@ -19,7 +20,7 @@ AS_VAR_IF([PHP_{!! strtoupper($ctx->extensionName) !!}], [no],, [
 @endforeach
 @if($ctx->installation->libraryRoots !== [])
 @if($ctx->installation->isDarwin())
-  PHP_EVAL_LIBLINE([-F{!! $ctx->installation->libraryRoots[0] !!} -framework {!! $ctx->moduleLibraryName() !!}], [{!! strtoupper($ctx->extensionName) !!}_SHARED_LIBADD])
+  {!! $sharedLibAdd !!}="{!! '$' . $sharedLibAdd !!} -F{!! $ctx->installation->libraryRoots[0] !!} -framework {!! $ctx->moduleLibraryName() !!}"
 @else
   PHP_EVAL_LIBLINE([-L{!! $ctx->installation->libraryRoots[0] !!} -l{!! $ctx->moduleLibraryName() !!}], [{!! strtoupper($ctx->extensionName) !!}_SHARED_LIBADD])
 @endif

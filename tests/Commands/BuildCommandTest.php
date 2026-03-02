@@ -6,6 +6,7 @@ namespace QtBuilder\Tests\Commands;
 
 use PHPUnit\Framework\TestCase;
 use QtBuilder\Commands\BuildCommand;
+use QtBuilder\Tests\Support\FakeExtensionBootstrapper;
 use QtBuilder\Tests\Support\FakeSystemInformation;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Tester\CommandTester;
@@ -18,8 +19,9 @@ final class BuildCommandTest extends TestCase
         $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-' . bin2hex(random_bytes(4));
         $outputDir = $buildRoot . '/ext';
         $metadataDir = $buildRoot . '/generated';
+        $bootstrapper = new FakeExtensionBootstrapper();
 
-        $command = new BuildCommand(FakeSystemInformation::passing());
+        $command = new BuildCommand(FakeSystemInformation::passing(), $bootstrapper);
         $tester = new CommandTester($command);
         $exitCode = $tester->execute([
             '--qt-path' => $fixtureRoot,
@@ -36,14 +38,23 @@ final class BuildCommandTest extends TestCase
         self::assertFileExists($outputDir . '/classes/qt_qtree.cpp');
         self::assertFileExists($outputDir . '/classes/qt_qnode.cpp');
         self::assertFileExists($outputDir . '/classes/qt_qabstractitemmodel.cpp');
+        self::assertFileExists($outputDir . '/build/gen_stub.php');
+        self::assertFileExists($outputDir . '/configure');
+        self::assertFileExists($outputDir . '/Makefile');
+        self::assertFileExists($outputDir . '/classes/qt_qpoint_arginfo.h');
         self::assertFileExists($metadataDir . '/build_summary.json');
         self::assertFileExists($metadataDir . '/allowed_classes.json');
         self::assertFileExists($metadataDir . '/discovery_cache.json');
         self::assertFileExists($metadataDir . '/accepted_candidates.json');
+        self::assertFileExists($metadataDir . '/phpize.stdout.log');
+        self::assertFileExists($metadataDir . '/gen_stub.stdout.log');
+        self::assertFileExists($metadataDir . '/configure.stdout.log');
+        self::assertCount(1, $bootstrapper->contexts);
 
         $summary = json_decode((string) file_get_contents($metadataDir . '/build_summary.json'), true, 512, JSON_THROW_ON_ERROR);
         self::assertSame(5, $summary['generated_classes']);
         self::assertSame(1, $summary['skipped_classes']);
+        self::assertSame(['phpize', 'gen_stub', 'configure'], array_column($summary['bootstrap'], 'name'));
 
         $classmap = json_decode((string) file_get_contents($metadataDir . '/classmap.json'), true, 512, JSON_THROW_ON_ERROR);
         self::assertSame(['QAbstractItemModel', 'QModelIndex', 'QNode', 'QPoint', 'QTree'], array_column($classmap, 'class'));
@@ -61,8 +72,9 @@ final class BuildCommandTest extends TestCase
         $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-cache-' . bin2hex(random_bytes(4));
         $outputDir = $buildRoot . '/ext';
         $metadataDir = $buildRoot . '/generated';
+        $bootstrapper = new FakeExtensionBootstrapper();
 
-        $command = new BuildCommand(FakeSystemInformation::passing());
+        $command = new BuildCommand(FakeSystemInformation::passing(), $bootstrapper);
         $tester = new CommandTester($command);
         self::assertSame(Command::SUCCESS, $tester->execute([
             '--qt-path' => $fixtureRoot,
@@ -84,7 +96,7 @@ final class BuildCommandTest extends TestCase
         file_put_contents($metadataDir . '/accepted_candidates.json', json_encode($cache['accepted_candidates'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
         file_put_contents($metadataDir . '/allowed_classes.json', json_encode($cache['allowed_classes'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 
-        $tester = new CommandTester(new BuildCommand(FakeSystemInformation::passing()));
+        $tester = new CommandTester(new BuildCommand(FakeSystemInformation::passing(), $bootstrapper));
         $exitCode = $tester->execute([
             '--qt-path' => $fixtureRoot,
             '--modules' => 'QtCore',
@@ -94,6 +106,7 @@ final class BuildCommandTest extends TestCase
 
         self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
         self::assertStringContainsString('Using cached build metadata:', $tester->getDisplay());
+        self::assertStringContainsString('Bootstrapping extension build tree...', $tester->getDisplay());
         self::assertStringContainsString('discovery_cache.json', $tester->getDisplay());
         self::assertStringContainsString('accepted_candidates.json', $tester->getDisplay());
         self::assertStringContainsString('allowed_classes.json', $tester->getDisplay());
@@ -104,5 +117,31 @@ final class BuildCommandTest extends TestCase
 
         $classmap = json_decode((string) file_get_contents($metadataDir . '/classmap.json'), true, 512, JSON_THROW_ON_ERROR);
         self::assertSame(['QPoint'], array_column($classmap, 'class'));
+    }
+
+    public function testBuildFailsWhenBootstrapStepFails(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/qt';
+        $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-fail-' . bin2hex(random_bytes(4));
+        $outputDir = $buildRoot . '/ext';
+        $metadataDir = $buildRoot . '/generated';
+
+        $bootstrapper = new FakeExtensionBootstrapper();
+        $bootstrapper->failureMessage = 'configure failed';
+
+        $command = new BuildCommand(FakeSystemInformation::passing(), $bootstrapper);
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            '--qt-path' => $fixtureRoot,
+            '--modules' => 'QtCore',
+            '--output' => $outputDir,
+            '--jobs' => '2',
+        ]);
+
+        self::assertSame(Command::FAILURE, $exitCode, $tester->getDisplay());
+        self::assertStringContainsString('configure failed', $tester->getDisplay());
+
+        $summary = json_decode((string) file_get_contents($metadataDir . '/build_summary.json'), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('configure failed', $summary['bootstrap_error']);
     }
 }

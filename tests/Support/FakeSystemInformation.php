@@ -42,6 +42,7 @@ final class FakeSystemInformation implements SystemInformation
         $instance->setExecutable('qtpaths6', '/usr/bin/qtpaths6');
         $instance->setExecutable('c++', '/usr/bin/c++');
         $instance->setExecutable('phpize', '/usr/bin/phpize');
+        $instance->setExecutable('php-config', '/usr/bin/php-config');
         $instance->setExecutable('make', '/usr/bin/make');
         $instance->setExecutable('cmake', '/usr/bin/cmake');
         $instance->setQtDetectionResult(

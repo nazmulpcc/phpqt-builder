@@ -13,7 +13,7 @@ use QtBuilder\Qt\QtInstallation;
 
 final class ExtensionScaffolderTest extends TestCase
 {
-    public function testConfigM4UsesPhpAddFrameworkPathForFrameworkFlags(): void
+    public function testConfigM4InjectsDarwinFrameworkFlagsIntoCompilerAndLinkerVariables(): void
     {
         $outputDir = sys_get_temp_dir() . '/qtbuilder-scaffolder-' . bin2hex(random_bytes(4)) . '/ext';
         $installation = new QtInstallation(
@@ -33,8 +33,8 @@ final class ExtensionScaffolderTest extends TestCase
         $config = (string) file_get_contents($outputDir . '/config.m4');
 
         self::assertStringContainsString('PHP_ADD_INCLUDE([/opt/qt/include])', $config);
-        self::assertStringContainsString('PHP_ADD_FRAMEWORKPATH([/opt/qt/lib])', $config);
-        self::assertStringNotContainsString('PHP_EVAL_INCLINE([-F/opt/qt/lib])', $config);
+        self::assertStringContainsString('CPPFLAGS="$CPPFLAGS -F/opt/qt/lib"', $config);
+        self::assertStringContainsString('QT_SHARED_LIBADD="$QT_SHARED_LIBADD -F/opt/qt/lib -framework QtCore"', $config);
         self::assertStringContainsString('classes/qt_qpoint.cpp', $config);
     }
 
