@@ -11,7 +11,7 @@ class ProcessExtensionBootstrapper implements ExtensionBootstrapper
 {
     public function __construct(private readonly SystemInformation $systemInformation) {}
 
-    public function bootstrap(ExtensionBuildContext $context): BootstrapResult
+    public function bootstrap(ExtensionBuildContext $context, int $jobs): BootstrapResult
     {
         $metadataDir = $context->metadataDir();
         @mkdir($metadataDir, 0755, true);
@@ -43,6 +43,7 @@ class ProcessExtensionBootstrapper implements ExtensionBootstrapper
         }
 
         $steps[] = $this->runStep('configure', $configureCommand, $context->outputDir, $metadataDir);
+        $steps[] = $this->runStep('make', ['make', '-j' . max(1, $jobs)], $context->outputDir, $metadataDir);
 
         return new BootstrapResult($steps);
     }

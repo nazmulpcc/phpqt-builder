@@ -49,12 +49,13 @@ final class BuildCommandTest extends TestCase
         self::assertFileExists($metadataDir . '/phpize.stdout.log');
         self::assertFileExists($metadataDir . '/gen_stub.stdout.log');
         self::assertFileExists($metadataDir . '/configure.stdout.log');
+        self::assertFileExists($metadataDir . '/make.stdout.log');
         self::assertCount(1, $bootstrapper->contexts);
 
         $summary = json_decode((string) file_get_contents($metadataDir . '/build_summary.json'), true, 512, JSON_THROW_ON_ERROR);
         self::assertSame(5, $summary['generated_classes']);
         self::assertSame(1, $summary['skipped_classes']);
-        self::assertSame(['phpize', 'gen_stub', 'configure'], array_column($summary['bootstrap'], 'name'));
+        self::assertSame(['phpize', 'gen_stub', 'configure', 'make'], array_column($summary['bootstrap'], 'name'));
 
         $classmap = json_decode((string) file_get_contents($metadataDir . '/classmap.json'), true, 512, JSON_THROW_ON_ERROR);
         self::assertSame(['QAbstractItemModel', 'QModelIndex', 'QNode', 'QPoint', 'QTree'], array_column($classmap, 'class'));

@@ -18,7 +18,7 @@ final class FakeExtensionBootstrapper implements ExtensionBootstrapper
 
     public ?string $failureMessage = null;
 
-    public function bootstrap(ExtensionBuildContext $context): BootstrapResult
+    public function bootstrap(ExtensionBuildContext $context, int $jobs): BootstrapResult
     {
         $this->contexts[] = $context;
 
@@ -41,7 +41,7 @@ final class FakeExtensionBootstrapper implements ExtensionBootstrapper
         @mkdir($metadataDir, 0755, true);
 
         $steps = [];
-        foreach (['phpize', 'gen_stub', 'configure'] as $stepName) {
+        foreach (['phpize', 'gen_stub', 'configure', 'make'] as $stepName) {
             $stdoutLogPath = $metadataDir . '/' . $stepName . '.stdout.log';
             $stderrLogPath = $metadataDir . '/' . $stepName . '.stderr.log';
             file_put_contents($stdoutLogPath, $stepName . " ok\n");
@@ -50,6 +50,7 @@ final class FakeExtensionBootstrapper implements ExtensionBootstrapper
             $command = match ($stepName) {
                 'phpize' => ['/usr/bin/phpize'],
                 'gen_stub' => [PHP_BINARY, 'build/gen_stub.php', '.'],
+                'make' => ['make', '-j' . max(1, $jobs)],
                 default => ['./configure', '--enable-' . $context->extensionName, '--with-php-config=/usr/bin/php-config'],
             };
 

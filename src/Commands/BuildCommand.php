@@ -125,7 +125,7 @@ class BuildCommand extends Command
             $output->writeln('<info>Bootstrapping extension build tree...</info>');
 
             try {
-                $bootstrapResult = $this->bootstrapper->bootstrap($context);
+                $bootstrapResult = $this->bootstrapper->bootstrap($context, $jobs);
                 $this->renderBootstrapResult($output, $bootstrapResult);
             } catch (\RuntimeException $e) {
                 $bootstrapError = $e->getMessage();
