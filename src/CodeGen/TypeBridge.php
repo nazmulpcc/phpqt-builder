@@ -366,6 +366,20 @@ class TypeBridge
      */
     public function returnStrategy(string $phpType): string
     {
+        return $this->returnStrategyForCpp($phpType, $phpType);
+    }
+
+    /**
+     * Determine the return strategy using both the PHP-facing type and the
+     * original C++ return type.
+     *
+     * This matters for object returns because the mapped PHP type alone loses
+     * whether C++ returned `T`, `T &`, or `T *`.
+     *
+     * @return string One of: 'scalar', 'string', 'void', 'value_object', 'qobject_pointer', 'mixed', 'array'
+     */
+    public function returnStrategyForCpp(string $phpType, string $cppType): string
+    {
         if ($phpType === 'void') {
             return 'void';
         }
@@ -386,8 +400,10 @@ class TypeBridge
             return 'scalar';
         }
 
-        // Object type — determine if value or pointer
-        if ($this->isValueType($phpType)) {
+        // Object type — use the original C++ signature to distinguish value
+        // returns from pointer returns. Unknown Qt value classes would
+        // otherwise be misclassified as pointer-wrapped objects.
+        if (!$this->isPointerType($cppType)) {
             return 'value_object';
         }
 

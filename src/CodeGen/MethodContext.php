@@ -94,7 +94,8 @@ class MethodContext
 
         // Return handling
         $primaryReturn = $this->primaryReturnType($method->returnType);
-        $this->returnStrategy = $typeBridge->returnStrategy($primaryReturn);
+        $primaryCppReturn = $method->overloads[0]->returnType ?? $primaryReturn;
+        $this->returnStrategy = $typeBridge->returnStrategyForCpp($primaryReturn, $primaryCppReturn);
         $this->returnMacro = $typeBridge->returnMacro($primaryReturn);
         $this->returnsObject = $typeBridge->isObjectType($primaryReturn);
 

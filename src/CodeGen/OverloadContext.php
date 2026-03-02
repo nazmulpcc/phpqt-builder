@@ -61,7 +61,7 @@ class OverloadContext
 
         // Map the C++ return type through the type mapper to get strategy
         $phpReturnType = $this->cppReturnToPhp($overload->returnType, $typeBridge);
-        $this->returnStrategy = $typeBridge->returnStrategy($phpReturnType);
+        $this->returnStrategy = $typeBridge->returnStrategyForCpp($phpReturnType, $overload->returnType);
 
         $params = [];
         foreach ($overload->parameters as $param) {

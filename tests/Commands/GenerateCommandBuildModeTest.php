@@ -474,6 +474,41 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringContainsString('RETURN_STRINGL(_result.data(), _result.size())', $cpp);
     }
 
+    public function testGenerateBuildModeTreatsObjectReturnsWithoutPointersAsValueObjects(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qvaluereturnholder.h',
+            'class' => 'QValueReturnHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QValueReturnHolder',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qvaluereturnholder.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qvaluereturnholder.cpp');
+
+        self::assertStringContainsString('public static function create(): QValueReturnHolder {}', $stub);
+        self::assertStringContainsString('public function normalized(): QValueReturnHolder {}', $stub);
+        self::assertStringContainsString('QValueReturnHolder _result = QValueReturnHolder::create();', $cpp);
+        self::assertStringContainsString('QValueReturnHolder _result = intern->native_ptr->normalized();', $cpp);
+        self::assertStringContainsString('_ret_intern->native_ptr = new QValueReturnHolder(_result);', $cpp);
+        self::assertStringNotContainsString('QValueReturnHolder *_result = QValueReturnHolder::create();', $cpp);
+        self::assertStringNotContainsString('QValueReturnHolder *_result = intern->native_ptr->normalized();', $cpp);
+    }
+
     public function testGenerateBuildModeSkipsNestedStructReturnsButKeepsBareEnums(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
