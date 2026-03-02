@@ -42,10 +42,10 @@ static zend_object *{!! $ctx->filePrefix !!}_create_object(zend_class_entry *ce)
     intern->native_ptr = NULL;
 @if($ctx->hasPreventDestroy)
     intern->prevent_destroy = false;
+    intern->extra_storage = NULL;
 @endif
 @if($ctx->needsArgvStorage)
-    new (&intern->argv_storage) std::vector<QByteArray>();
-    new (&intern->argv_pointers) std::vector<char *>();
+    intern->extra_storage = new {!! $ctx->argvStorageStructName !!}();
 @endif
 
     zend_object_std_init(&intern->std, ce);
@@ -77,8 +77,10 @@ static void {!! $ctx->filePrefix !!}_free_object(zend_object *object)
 @endif
     intern->native_ptr = NULL;
 @if($ctx->needsArgvStorage)
-    intern->argv_pointers.~vector();
-    intern->argv_storage.~vector();
+    if (intern->extra_storage != NULL) {
+        delete static_cast<{!! $ctx->argvStorageStructName !!} *>(intern->extra_storage);
+        intern->extra_storage = NULL;
+    }
 @endif
 
     zend_object_std_dtor(&intern->std);

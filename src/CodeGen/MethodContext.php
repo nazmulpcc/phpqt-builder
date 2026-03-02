@@ -163,7 +163,7 @@ class MethodContext
     public function callPlan(
         ClassContext $classCtx,
         ?OverloadContext $overload = null,
-        bool $persistentArgv = false,
+        ?string $persistentStorageVar = null,
     ): array {
         $overload ??= $this->overloads[0] ?? null;
         if ($overload === null) {
@@ -199,7 +199,7 @@ class MethodContext
                 nativeVarName: sprintf('_qt_arg_%d', $i),
                 sourceIsZval: $sourceIsZval,
                 nullable: $nullable,
-                persistentStorageVar: $persistentArgv ? 'intern' : null,
+                persistentStorageVar: $persistentStorageVar,
                 pairedCountVarName: $pairedCountVarName,
             );
 

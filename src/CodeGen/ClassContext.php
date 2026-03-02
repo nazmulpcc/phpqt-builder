@@ -77,6 +77,9 @@ class ClassContext
     /** Whether the generated object wrapper needs persistent argv backing storage */
     public readonly bool $needsArgvStorage;
 
+    /** Helper struct name for argv-backed application wrappers */
+    public readonly ?string $argvStorageStructName;
+
     /** Qt include directive (e.g. "<QWidget>") */
     public readonly string $qtInclude;
 
@@ -175,6 +178,9 @@ class ClassContext
         }
         $this->methods = $methods;
         $this->needsArgvStorage = $this->computeNeedsArgvStorage($methods);
+        $this->argvStorageStructName = $this->needsArgvStorage
+            ? 'qt_argv_storage'
+            : null;
 
         // Build property contexts
         $properties = [];

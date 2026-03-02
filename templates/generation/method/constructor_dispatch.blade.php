@@ -15,12 +15,18 @@
     $first = true;
 @endphp
     zend_long _argc = ZEND_NUM_ARGS();
+@if($ctx->needsArgvStorage)
+    if (intern->extra_storage == NULL) {
+        intern->extra_storage = new {!! $ctx->argvStorageStructName !!}();
+    }
+    auto *_qt_argv_storage = static_cast<{!! $ctx->argvStorageStructName !!} *>(intern->extra_storage);
+@endif
 
 @foreach($groups as $paramCount => $overloadsInGroup)
     {!! $first ? 'if' : '} else if' !!} (_argc == {!! $paramCount !!}) {
 @if(count($overloadsInGroup) === 1)
 @php $ol = $overloadsInGroup[0]['overload']; @endphp
-@php $callPlan = $method->callPlan($ctx, $ol, true); @endphp
+@php $callPlan = $method->callPlan($ctx, $ol, $ctx->needsArgvStorage ? '_qt_argv_storage' : null); @endphp
 @foreach($callPlan['setup_lines'] as $line)
         {!! $line !!}
 @endforeach
@@ -39,7 +45,7 @@
 @else
         {!! $innerFirst ? 'if' : '} else if' !!} (Z_TYPE_P({!! $mergedParam->cVarName !!}) == IS_OBJECT && instanceof_function(Z_OBJCE_P({!! $mergedParam->cVarName !!}), {!! $ctx->typeBridge->ceVarName($firstParam->phpType) !!})) {
 @endif
-@php $callPlan = $method->callPlan($ctx, $ol, true); @endphp
+@php $callPlan = $method->callPlan($ctx, $ol, $ctx->needsArgvStorage ? '_qt_argv_storage' : null); @endphp
 @foreach($callPlan['setup_lines'] as $line)
             {!! $line !!}
 @endforeach

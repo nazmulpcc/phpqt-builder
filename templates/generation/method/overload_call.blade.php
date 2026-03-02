@@ -10,7 +10,7 @@
 $callPrefix = $method->isStatic
     ? "{$ctx->nativeCppType}::"
     : "intern->native_ptr->";
-$callPlan = $method->callPlan($ctx, $overload, $method->isConstructor);
+$callPlan = $method->callPlan($ctx, $overload);
 @endphp
 @foreach($callPlan['setup_lines'] as $line)
 {!! $indent !!}{!! $line !!}

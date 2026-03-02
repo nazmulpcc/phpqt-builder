@@ -597,13 +597,18 @@ final class GenerateCommandBuildModeTest extends TestCase
         $stub = (string) file_get_contents($outputDir . '/classes/qt_qargvholder.stub.php');
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qargvholder.cpp');
 
+        self::assertStringContainsString('typedef struct _qt_argv_storage {', $header);
         self::assertStringContainsString('std::vector<QByteArray> argv_storage;', $header);
         self::assertStringContainsString('std::vector<char *> argv_pointers;', $header);
+        self::assertStringContainsString('void *extra_storage;', $header);
         self::assertStringContainsString('public function __construct(int $argc = 0, array $argv = [], int $flags = 0) {}', $stub);
-        self::assertStringContainsString('new (&intern->argv_storage) std::vector<QByteArray>();', $cpp);
+        self::assertStringContainsString('intern->extra_storage = new qt_argv_storage();', $cpp);
+        self::assertStringContainsString('if (intern->extra_storage == NULL) {', $cpp);
+        self::assertStringContainsString('intern->extra_storage = new qt_argv_storage();', $cpp);
+        self::assertStringContainsString('auto *_qt_argv_storage = static_cast<qt_argv_storage *>(intern->extra_storage);', $cpp);
         self::assertStringContainsString('char ** _qt_arg_1 = NULL;', $cpp);
-        self::assertStringContainsString('intern->argv_storage.emplace_back("php", 3);', $cpp);
-        self::assertStringContainsString('_qt_arg_0 = (int)intern->argv_storage.size();', $cpp);
+        self::assertStringContainsString('_qt_argv_storage->argv_storage.emplace_back("php", 3);', $cpp);
+        self::assertStringContainsString('_qt_arg_0 = (int)_qt_argv_storage->argv_storage.size();', $cpp);
     }
 
     public function testGenerateBuildModeSkipsNestedResultTypesButKeepsNestedEnums(): void

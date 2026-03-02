@@ -41,6 +41,33 @@ final class ExtensionScaffolderTest extends TestCase
         self::assertStringContainsString('classes/qt_qpoint.cpp', $config);
     }
 
+    public function testPrepareDoesNotWriteCoreFilesBeforeFinalize(): void
+    {
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-scaffolder-' . bin2hex(random_bytes(4)) . '/ext';
+        $installation = new QtInstallation(
+            rootPath: '/opt/qt',
+            osFamily: 'Darwin',
+            includeRoots: ['/opt/qt/include'],
+            libraryRoots: ['/opt/qt/lib'],
+            moduleHeaderRoots: ['QtCore' => '/opt/qt/include/QtCore'],
+            tools: [],
+        );
+        $context = new ExtensionBuildContext('qt', '0.1.0', $outputDir, $installation, ['QtCore'], ['QPoint']);
+
+        $scaffolder = new ExtensionScaffolder();
+        $scaffolder->prepare($context);
+
+        self::assertFileDoesNotExist($outputDir . '/config.m4');
+        self::assertFileDoesNotExist($outputDir . '/php_qt.h');
+        self::assertFileDoesNotExist($outputDir . '/qt.cpp');
+
+        $scaffolder->finalize($context);
+
+        self::assertFileExists($outputDir . '/config.m4');
+        self::assertFileExists($outputDir . '/php_qt.h');
+        self::assertFileExists($outputDir . '/qt.cpp');
+    }
+
     public function testConfigM4LinksAllRequestedDarwinFrameworkModules(): void
     {
         $outputDir = sys_get_temp_dir() . '/qtbuilder-scaffolder-' . bin2hex(random_bytes(4)) . '/ext';

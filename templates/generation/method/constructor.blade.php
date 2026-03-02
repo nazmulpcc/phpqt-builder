@@ -40,7 +40,13 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
 @elseif($method->isOverloaded)
 @include('generation.method.constructor_dispatch', ['ctx' => $ctx, 'method' => $method])
 @else
-@php $callPlan = $method->callPlan($ctx, $method->overloads[0] ?? null, true); @endphp
+@if($ctx->needsArgvStorage)
+    if (intern->extra_storage == NULL) {
+        intern->extra_storage = new {!! $ctx->argvStorageStructName !!}();
+    }
+    auto *_qt_argv_storage = static_cast<{!! $ctx->argvStorageStructName !!} *>(intern->extra_storage);
+@endif
+@php $callPlan = $method->callPlan($ctx, $method->overloads[0] ?? null, $ctx->needsArgvStorage ? '_qt_argv_storage' : null); @endphp
 @foreach($callPlan['setup_lines'] as $line)
     {!! $line !!}
 @endforeach

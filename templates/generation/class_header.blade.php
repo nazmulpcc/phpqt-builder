@@ -31,14 +31,21 @@
 /* Object struct                                                       */
 /* ------------------------------------------------------------------ */
 
+@if($ctx->needsArgvStorage)
+#ifndef QT_ARGV_STORAGE_DEFINED
+#define QT_ARGV_STORAGE_DEFINED
+typedef struct _{!! $ctx->argvStorageStructName !!} {
+    std::vector<QByteArray> argv_storage;
+    std::vector<char *> argv_pointers;
+} {!! $ctx->argvStorageStructName !!};
+#endif
+
+@endif
 typedef struct _{!! $ctx->objectStructName !!} {
     {!! $ctx->nativeCppType !!} *native_ptr;
 @if($ctx->hasPreventDestroy)
     bool prevent_destroy;
-@endif
-@if($ctx->needsArgvStorage)
-    std::vector<QByteArray> argv_storage;
-    std::vector<char *> argv_pointers;
+    void *extra_storage;
 @endif
     zend_object std; /* MUST be last */
 } {!! $ctx->objectStructName !!};
