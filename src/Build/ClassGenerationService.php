@@ -48,7 +48,11 @@ class ClassGenerationService
         if ($classData === null) {
             return ClassGenerationResult::skipped($className, $headerPath, 'class_not_found', 'Class definition was not found in the parsed header.');
         }
-        $classData['is_copy_constructible'] = $this->detectCopyConstructible($headerPath, $className);
+        $lifecycle = $this->analyzeLifecycleCapabilities($headerPath, $className, (bool) ($classData['is_struct'] ?? false));
+        $classData['is_copy_constructible'] = $lifecycle['is_copy_constructible'];
+        $classData['has_public_constructor'] = $lifecycle['has_public_constructor'];
+        $classData['has_public_default_constructor'] = $lifecycle['has_public_default_constructor'];
+        $classData['has_public_destructor'] = $lifecycle['has_public_destructor'];
         $classData['flag_aliases'] = $this->discoverFlagAliases($headerPath);
         $classData['enum_names'] = $this->discoverEnumNames($headerPath);
 
@@ -88,28 +92,367 @@ class ClassGenerationService
         return ClassGenerationResult::ok($className, $headerPath, $phpClass, $filtered['skipped_methods']);
     }
 
-    private function detectCopyConstructible(string $headerPath, string $className): bool
+    /**
+     * @return array{
+     *   is_copy_constructible: bool,
+     *   has_public_constructor: bool,
+     *   has_public_default_constructor: bool,
+     *   has_public_destructor: bool
+     * }
+     */
+    private function analyzeLifecycleCapabilities(string $headerPath, string $className, bool $isStruct): array
     {
-        $contents = @file_get_contents($headerPath);
-        if (!is_string($contents) || $contents === '') {
-            return true;
+        $resolved = $this->resolveClassDefinitionSource($headerPath, $className);
+        if ($resolved === null) {
+            return [
+                'is_copy_constructible' => true,
+                'has_public_constructor' => true,
+                'has_public_default_constructor' => true,
+                'has_public_destructor' => true,
+            ];
         }
 
-        $classPattern = preg_quote($className, '/');
+        $sourceContents = $resolved['contents'];
 
-        $patterns = [
-            '/Q_DISABLE_COPY(?:_MOVE)?\(\s*' . $classPattern . '\s*\)/',
-            '/' . $classPattern . '\s*\(\s*const\s+' . $classPattern . '\s*&\s*\)\s*=\s*delete\s*;/',
-            '/' . $classPattern . '\s*\(\s*' . $classPattern . '\s*&&\s*\)\s*=\s*delete\s*;/',
-        ];
+        $hasExplicitConstructor = false;
+        $hasPublicConstructor = false;
+        $hasPublicDefaultConstructor = false;
+        $hasExplicitDestructor = false;
+        $hasPublicDestructor = true;
+        $isCopyConstructible = !$this->containsCopyDisablingMacro($sourceContents, $className);
 
-        foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $contents) === 1) {
-                return false;
+        foreach ($this->lifecycleAccessBlocks($sourceContents) as $segmentInfo) {
+            $access = $segmentInfo['access'];
+            $segment = $segmentInfo['segment'];
+
+            foreach ($this->constructorSignatures($segment, $className) as $constructorSignature) {
+                $hasExplicitConstructor = true;
+
+                if ($this->isCopyConstructorSignature($constructorSignature, $className)) {
+                    if ($access !== 'public') {
+                        $isCopyConstructible = false;
+                    }
+                    continue;
+                }
+
+                if ($this->isMoveConstructorSignature($constructorSignature, $className)) {
+                    continue;
+                }
+
+                if ($access === 'public') {
+                    $hasPublicConstructor = true;
+                    if ($this->isDefaultConstructorSignature($constructorSignature)) {
+                        $hasPublicDefaultConstructor = true;
+                    }
+                }
+            }
+
+            if ($this->containsDestructorSignature($segment, $className)) {
+                $hasExplicitDestructor = true;
+                if ($access !== 'public') {
+                    $hasPublicDestructor = false;
+                }
             }
         }
 
-        return true;
+        if (!$hasExplicitConstructor) {
+            $defaultAccess = $resolved['body'] !== null && $resolved['body']['kind'] === 'struct'
+                ? 'public'
+                : ($isStruct ? 'public' : 'private');
+            $hasPublicConstructor = $defaultAccess === 'public';
+            $hasPublicDefaultConstructor = $defaultAccess === 'public';
+        }
+
+        if (!$hasExplicitDestructor) {
+            $hasPublicDestructor = true;
+        }
+
+        return [
+            'is_copy_constructible' => $isCopyConstructible,
+            'has_public_constructor' => $hasPublicConstructor,
+            'has_public_default_constructor' => $hasPublicDefaultConstructor,
+            'has_public_destructor' => $hasPublicDestructor,
+        ];
+    }
+
+    /**
+     * @return array{path: string, contents: string, body: array{kind: string, body: string}|null}|null
+     */
+    private function resolveClassDefinitionSource(string $headerPath, string $className): ?array
+    {
+        $queue = [$headerPath];
+        $visited = [];
+        $fallback = null;
+
+        while ($queue !== []) {
+            $path = array_shift($queue);
+            if (!is_string($path) || $path === '' || isset($visited[$path])) {
+                continue;
+            }
+            $visited[$path] = true;
+
+            $contents = @file_get_contents($path);
+            if (!is_string($contents) || $contents === '') {
+                continue;
+            }
+
+            $body = $this->extractClassBody($contents, $className);
+            if ($body !== null) {
+                return [
+                    'path' => $path,
+                    'contents' => $contents,
+                    'body' => $body,
+                ];
+            }
+
+            if (preg_match('/\b' . preg_quote($className, '/') . '\b/', $contents) === 1 && $fallback === null) {
+                $fallback = [
+                    'path' => $path,
+                    'contents' => $contents,
+                    'body' => null,
+                ];
+            }
+
+            foreach ($this->resolveIncludedHeaders($path, $contents) as $includePath) {
+                if (!isset($visited[$includePath])) {
+                    $queue[] = $includePath;
+                }
+            }
+        }
+
+        return $fallback;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function resolveIncludedHeaders(string $headerPath, string $contents): array
+    {
+        $matchCount = preg_match_all('/^\s*#\s*include\s*[<"]([^">]+)[">]/m', $contents, $matches);
+        if (!is_int($matchCount) || $matchCount === 0) {
+            return [];
+        }
+
+        $candidates = [];
+        foreach ($matches[1] as $include) {
+            if (!is_string($include) || $include === '') {
+                continue;
+            }
+
+            foreach ($this->candidateIncludePaths($headerPath, $include) as $candidate) {
+                $real = realpath($candidate);
+                if ($real !== false && is_file($real)) {
+                    $candidates[] = $real;
+                }
+            }
+        }
+
+        return array_values(array_unique($candidates));
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function candidateIncludePaths(string $headerPath, string $include): array
+    {
+        $paths = [];
+        $headerDir = dirname($headerPath);
+        $basename = basename($include);
+
+        $paths[] = $headerDir . '/' . $include;
+        $paths[] = $headerDir . '/' . $basename;
+
+        if (preg_match('~^(.*?/QtCore\\.framework/Headers)(?:/.*)?$~', $headerPath, $matches) === 1) {
+            $frameworkRoot = $matches[1];
+            $paths[] = $frameworkRoot . '/' . $include;
+            $paths[] = $frameworkRoot . '/' . $basename;
+
+            if (str_starts_with($include, 'QtCore/')) {
+                $paths[] = $frameworkRoot . '/' . substr($include, strlen('QtCore/'));
+            }
+        }
+
+        return array_values(array_unique($paths));
+    }
+
+    /**
+     * @return array{kind: string, body: string}|null
+     */
+    private function extractClassBody(string $contents, string $className): ?array
+    {
+        $pattern = sprintf(
+            '/(?:^|\n)\s*(class|struct)\s+(?:[A-Za-z_][A-Za-z0-9_]*\s+)*%s\b(?:\s*:[^{]+)?\s*\{/s',
+            preg_quote($className, '/'),
+        );
+
+        if (preg_match($pattern, $contents, $matches, PREG_OFFSET_CAPTURE) !== 1) {
+            return null;
+        }
+
+        $kind = is_string($matches[1][0] ?? null) ? $matches[1][0] : 'class';
+        $matchText = is_string($matches[0][0] ?? null) ? $matches[0][0] : null;
+        $matchOffset = is_int($matches[0][1] ?? null) ? $matches[0][1] : null;
+        if ($matchText === null || $matchOffset === null) {
+            return null;
+        }
+
+        $braceOffset = strpos($matchText, '{');
+        if ($braceOffset === false) {
+            return null;
+        }
+
+        $bodyStart = $matchOffset + $braceOffset + 1;
+        $depth = 1;
+        $length = strlen($contents);
+
+        for ($index = $bodyStart; $index < $length; $index++) {
+            $char = $contents[$index];
+
+            if ($char === '{') {
+                $depth++;
+                continue;
+            }
+
+            if ($char === '}') {
+                $depth--;
+                if ($depth === 0) {
+                    return [
+                        'kind' => $kind,
+                        'body' => substr($contents, $bodyStart, $index - $bodyStart),
+                    ];
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @return list<array{access: string, segment: string}>
+     */
+    private function topLevelClassSegments(string $body, string $defaultAccess): array
+    {
+        $segments = [];
+        $access = $defaultAccess;
+        $buffer = '';
+        $braceDepth = 0;
+
+        foreach (preg_split("/(\r?\n)/", $body) ?: [] as $line) {
+            if ($braceDepth === 0 && preg_match('/^\s*(public|protected|private)\s*:\s*$/', $line, $matches) === 1) {
+                $trimmed = trim($buffer);
+                if ($trimmed !== '') {
+                    $segments[] = ['access' => $access, 'segment' => $trimmed];
+                    $buffer = '';
+                }
+
+                $access = $matches[1];
+                continue;
+            }
+
+            $buffer .= $line . "\n";
+            $braceDepth += substr_count($line, '{');
+            $braceDepth -= substr_count($line, '}');
+
+            if ($braceDepth === 0) {
+                $trimmed = trim($buffer);
+                if ($trimmed !== '' && (str_contains($trimmed, ';') || str_ends_with($trimmed, '}'))) {
+                    $segments[] = ['access' => $access, 'segment' => $trimmed];
+                    $buffer = '';
+                }
+            }
+        }
+
+        $trimmed = trim($buffer);
+        if ($trimmed !== '') {
+            $segments[] = ['access' => $access, 'segment' => $trimmed];
+        }
+
+        return $segments;
+    }
+
+    private function containsCopyDisablingMacro(string $segment, string $className): bool
+    {
+        return preg_match(
+            '/Q(?:_EVENT)?_DISABLE_COPY(?:_MOVE)?\(\s*' . preg_quote($className, '/') . '\s*\)/',
+            $segment,
+        ) === 1;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function constructorSignatures(string $segment, string $className): array
+    {
+        $matchCount = preg_match_all(
+            '/(?<!~)\b' . preg_quote($className, '/') . '\s*\((.*?)\)\s*(?:noexcept\b[^;{]*)?(?:=\s*(?:default|delete)\s*)?(?:;|\{)/s',
+            $segment,
+            $matches,
+        );
+        if (!is_int($matchCount) || $matchCount === 0) {
+            return [];
+        }
+
+        return array_values(array_filter(array_map(
+            static fn(mixed $value): string => is_string($value) ? trim($value) : '',
+            $matches[0],
+        ), static fn(string $value): bool => $value !== ''));
+    }
+
+    private function containsDestructorSignature(string $segment, string $className): bool
+    {
+        return preg_match('/~\s*' . preg_quote($className, '/') . '\s*\(/', $segment) === 1;
+    }
+
+    private function isCopyConstructorSignature(string $signature, string $className): bool
+    {
+        return preg_match(
+            '/\b' . preg_quote($className, '/') . '\s*\(\s*const\s+' . preg_quote($className, '/') . '\s*&(?:\s+[A-Za-z_][A-Za-z0-9_]*)?\s*\)/',
+            $signature,
+        ) === 1;
+    }
+
+    private function isMoveConstructorSignature(string $signature, string $className): bool
+    {
+        return preg_match(
+            '/\b' . preg_quote($className, '/') . '\s*\(\s*' . preg_quote($className, '/') . '\s*&&(?:\s+[A-Za-z_][A-Za-z0-9_]*)?\s*\)/',
+            $signature,
+        ) === 1;
+    }
+
+    private function isDefaultConstructorSignature(string $signature): bool
+    {
+        return preg_match('/\(\s*\)/', $signature) === 1;
+    }
+
+    /**
+     * @return list<array{access: string, segment: string}>
+     */
+    private function lifecycleAccessBlocks(string $contents): array
+    {
+        $matchCount = preg_match_all(
+            '/\b(public|protected|private)\s*:\s*(.*?)(?=\b(?:public|protected|private)\s*:|\z)/s',
+            $contents,
+            $matches,
+            PREG_SET_ORDER,
+        );
+        if (!is_int($matchCount) || $matchCount === 0) {
+            return [];
+        }
+
+        $blocks = [];
+        foreach ($matches as $match) {
+            $access = is_string($match[1] ?? null) ? trim($match[1]) : '';
+            $segment = is_string($match[2] ?? null) ? trim($match[2]) : '';
+            if ($access === '' || $segment === '') {
+                continue;
+            }
+            $blocks[] = [
+                'access' => $access,
+                'segment' => $segment,
+            ];
+        }
+
+        return $blocks;
     }
 
     private function isTemplateClassDeclaration(string $headerPath, string $className): bool

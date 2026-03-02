@@ -93,6 +93,7 @@ class TypeBridge
      * @var list<string>
      */
     private const array QT_STRING_TYPES = [
+        'std::filesystem::path',
         'std::string',
         'std::string_view',
         'QString',
@@ -539,6 +540,13 @@ class TypeBridge
             return sprintf('RETURN_STRINGL(%s.data(), %s.size())', $varName, $varName);
         }
 
+        if ($base === 'std::filesystem::path') {
+            return sprintf(
+                "std::string _path = %s.string();\n    RETURN_STRINGL(_path.data(), _path.size())",
+                $varName,
+            );
+        }
+
         if ($base === 'char') {
             if ($this->isPointerType($cppType)) {
                 return sprintf('RETURN_STRING(%s)', $varName);
@@ -766,6 +774,10 @@ class TypeBridge
 
         if ($base === 'std::string_view') {
             return sprintf('std::string_view(ZSTR_VAL(%s), (size_t)ZSTR_LEN(%s))', $varName, $varName);
+        }
+
+        if ($base === 'std::filesystem::path') {
+            return sprintf('std::filesystem::path(std::string(ZSTR_VAL(%s), ZSTR_LEN(%s)))', $varName, $varName);
         }
 
         if ($base === 'char') {

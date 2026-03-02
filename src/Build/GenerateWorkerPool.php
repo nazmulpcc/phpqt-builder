@@ -92,6 +92,7 @@ class GenerateWorkerPool
             '--module=' . $task->module,
             '--extension-name=' . $task->extensionName,
             '--build-mode',
+            '--worker-mode=' . $task->workerMode,
         ];
 
         if ($task->qtPath !== null && $task->qtPath !== '') {

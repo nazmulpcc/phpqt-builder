@@ -29,6 +29,8 @@ class ExtensionScaffolder
         @mkdir($context->outputDir . '/classes', 0755, true);
         @mkdir($context->metadataDir(), 0755, true);
 
+        $this->clearTransientClassBuildArtifacts($context->outputDir . '/classes');
+
         $this->writeCoreFiles($context);
     }
 
@@ -68,5 +70,28 @@ class ExtensionScaffolder
         $content = preg_replace('/[ \t]+$/m', '', $content) ?? $content;
 
         return rtrim($content) . "\n";
+    }
+
+    private function clearTransientClassBuildArtifacts(string $classesDir): void
+    {
+        foreach (glob($classesDir . '/*.lo') ?: [] as $path) {
+            @unlink($path);
+        }
+
+        foreach (glob($classesDir . '/*.loT') ?: [] as $path) {
+            @unlink($path);
+        }
+
+        foreach ([$classesDir . '/.deps', $classesDir . '/.libs'] as $dir) {
+            if (!is_dir($dir)) {
+                continue;
+            }
+
+            foreach (glob($dir . '/*') ?: [] as $path) {
+                if (is_file($path)) {
+                    @unlink($path);
+                }
+            }
+        }
     }
 }

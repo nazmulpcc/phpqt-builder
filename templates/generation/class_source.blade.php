@@ -10,6 +10,7 @@
 
 #include "{!! $ctx->filePrefix !!}.h"
 #include "{!! $ctx->filePrefix !!}_arginfo.h"
+#include <filesystem>
 #include <QString>
 #include <QByteArray>
 @if($ctx->parentCeVarName)
@@ -55,13 +56,17 @@ static void {!! $ctx->filePrefix !!}_free_object(zend_object *object)
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
 
 @if($ctx->hasPreventDestroy)
+@if($ctx->hasPublicDestructor)
     if (intern->native_ptr && !intern->prevent_destroy) {
         delete intern->native_ptr;
     }
+@endif
 @else
+@if($ctx->hasPublicDestructor)
     if (intern->native_ptr) {
         delete intern->native_ptr;
     }
+@endif
 @endif
     intern->native_ptr = NULL;
 

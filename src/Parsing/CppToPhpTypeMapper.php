@@ -55,6 +55,7 @@ class CppToPhpTypeMapper
      * @var list<string>
      */
     private const array STRING_TYPES = [
+        'std::filesystem::path',
         'std::string',
         'std::string_view',
         'QString',

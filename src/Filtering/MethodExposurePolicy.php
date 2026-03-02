@@ -58,9 +58,23 @@ class MethodExposurePolicy
         }
 
         $isCopyConstructible = (bool) ($classData['is_copy_constructible'] ?? true);
+        $hasPublicConstructor = (bool) ($classData['has_public_constructor'] ?? true);
+        $hasPublicDefaultConstructor = (bool) ($classData['has_public_default_constructor'] ?? true);
+        $hasPublicDestructor = (bool) ($classData['has_public_destructor'] ?? true);
 
         foreach ($grouped as $methodName => $variants) {
-            $result = $this->selectVariant($classData['name'], $methodName, $variants, $allowedClasses, $flagAliases, $enumNames, $isCopyConstructible);
+            $result = $this->selectVariant(
+                $classData['name'],
+                $methodName,
+                $variants,
+                $allowedClasses,
+                $flagAliases,
+                $enumNames,
+                $isCopyConstructible,
+                $hasPublicConstructor,
+                $hasPublicDefaultConstructor,
+                $hasPublicDestructor,
+            );
             if ($result['selected'] !== null) {
                 $selectedMethods[] = $result['selected'];
             }
@@ -82,7 +96,18 @@ class MethodExposurePolicy
      * @param list<string> $enumNames
      * @return array{selected: ?array<string, mixed>, skipped: list<array<string, string>>}
      */
-    private function selectVariant(string $className, string $methodName, array $variants, array $allowedClasses, array $flagAliases, array $enumNames, bool $isCopyConstructible): array
+    private function selectVariant(
+        string $className,
+        string $methodName,
+        array $variants,
+        array $allowedClasses,
+        array $flagAliases,
+        array $enumNames,
+        bool $isCopyConstructible,
+        bool $hasPublicConstructor,
+        bool $hasPublicDefaultConstructor,
+        bool $hasPublicDestructor,
+    ): array
     {
         if (str_starts_with($methodName, '~') || str_starts_with($methodName, 'operator') || in_array($methodName, self::NAME_SKIP, true)) {
             return [
@@ -106,7 +131,17 @@ class MethodExposurePolicy
             }
             $seenSignatures[$signature] = true;
 
-            $unsupportedReason = $this->unsupportedReason($className, $variant, $allowedClasses, $flagAliases, $enumNames, $isCopyConstructible);
+            $unsupportedReason = $this->unsupportedReason(
+                $className,
+                $variant,
+                $allowedClasses,
+                $flagAliases,
+                $enumNames,
+                $isCopyConstructible,
+                $hasPublicConstructor,
+                $hasPublicDefaultConstructor,
+                $hasPublicDestructor,
+            );
             if ($unsupportedReason !== null) {
                 $skipped[] = [
                     'name' => $methodName,
@@ -151,11 +186,39 @@ class MethodExposurePolicy
      * @param list<string> $enumNames
      * @return array{code: string, message: string}|null
      */
-    private function unsupportedReason(string $className, array $variant, array $allowedClasses, array $flagAliases = [], array $enumNames = [], bool $isCopyConstructible = true): ?array
+    private function unsupportedReason(
+        string $className,
+        array $variant,
+        array $allowedClasses,
+        array $flagAliases = [],
+        array $enumNames = [],
+        bool $isCopyConstructible = true,
+        bool $hasPublicConstructor = true,
+        bool $hasPublicDefaultConstructor = true,
+        bool $hasPublicDestructor = true,
+    ): ?array
     {
         $access = (string) ($variant['access'] ?? 'unknown');
         if ($access !== 'public') {
             return ['code' => 'non_public_method', 'message' => sprintf('Methods with %s access are not exposed.', $access)];
+        }
+
+        if ($this->isConstructor($className, $variant)) {
+            if ($this->isCopyConstructor($className, $variant)) {
+                return ['code' => 'copy_constructor_filtered', 'message' => 'Copy constructors are not exposed as PHP constructors.'];
+            }
+
+            if (!$hasPublicDestructor) {
+                return ['code' => 'non_public_destructor', 'message' => 'Classes with non-public destructors cannot be directly instantiated.'];
+            }
+
+            if (!$hasPublicConstructor) {
+                return ['code' => 'non_public_constructor', 'message' => 'Class does not provide a public constructor for direct instantiation.'];
+            }
+
+            if ($this->isDefaultConstructor($variant) && !$hasPublicDefaultConstructor) {
+                return ['code' => 'non_public_constructor', 'message' => 'Default constructor is not publicly accessible.'];
+            }
         }
 
         if (!$isCopyConstructible && $this->isCopyConstructor($className, $variant)) {
@@ -196,7 +259,7 @@ class MethodExposurePolicy
      */
     private function isCopyConstructor(string $className, array $variant): bool
     {
-        if (($variant['name'] ?? null) !== $className) {
+        if (!$this->isConstructor($className, $variant)) {
             return false;
         }
 
@@ -211,6 +274,24 @@ class MethodExposurePolicy
         }
 
         return $this->normalizeSelfType($type) === $className;
+    }
+
+    /**
+     * @param array<string, mixed> $variant
+     */
+    private function isConstructor(string $className, array $variant): bool
+    {
+        return ($variant['name'] ?? null) === $className;
+    }
+
+    /**
+     * @param array<string, mixed> $variant
+     */
+    private function isDefaultConstructor(array $variant): bool
+    {
+        $parameters = is_array($variant['parameters'] ?? null) ? $variant['parameters'] : [];
+
+        return count($parameters) === 0;
     }
 
     private function normalizeSelfType(string $cppType): string

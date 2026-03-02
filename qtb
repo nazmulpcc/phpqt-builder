@@ -4,6 +4,7 @@
 use QtBuilder\Commands\DefineCommand;
 use QtBuilder\Commands\DoctorCommand;
 use QtBuilder\Commands\BuildCommand;
+use QtBuilder\Commands\BuildDiscoverCommand;
 use QtBuilder\Commands\GenerateCommand;
 use QtBuilder\Commands\InspectCommand;
 use QtBuilder\UnixSystemInformation;
@@ -19,5 +20,6 @@ $app->addCommand(new InspectCommand());
 $app->addCommand(new DefineCommand());
 $app->addCommand(new GenerateCommand($systemInformation));
 $app->addCommand(new BuildCommand($systemInformation));
+$app->addCommand(new BuildDiscoverCommand($systemInformation));
 
 $app->run();

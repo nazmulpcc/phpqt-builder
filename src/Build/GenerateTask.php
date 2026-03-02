@@ -19,5 +19,6 @@ readonly class GenerateTask
         public ?string $qtPath,
         public ?string $allowedClassesFile = null,
         public array $allowedClasses = [],
+        public string $workerMode = 'generate',
     ) {}
 }

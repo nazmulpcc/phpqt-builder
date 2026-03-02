@@ -44,6 +44,36 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertContains('rx', $skipNames);
     }
 
+    public function testGenerateProbeModeReturnsJsonWithoutWritingFiles(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-probe-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qpoint.h',
+            'class' => 'QPoint',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--worker-mode' => 'probe',
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QPoint',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertSame('QPoint', $payload['class']);
+        self::assertArrayNotHasKey('generated_files', $payload);
+        self::assertFileDoesNotExist($outputDir . '/classes/qt_qpoint.cpp');
+        self::assertFileDoesNotExist($outputDir . '/classes/qt_qpoint.h');
+        self::assertFileDoesNotExist($outputDir . '/classes/qt_qpoint.stub.php');
+    }
+
     public function testGenerateBuildModeUsesNullableUnionForOptionalValueObjectParameters(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/qt';
@@ -558,15 +588,72 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertSame('ok', $result->status);
         self::assertNotNull($result->phpClass);
         self::assertFalse($result->phpClass->isCopyConstructible);
-
-        $skippedMethodNames = array_column($result->skippedMethods, 'name');
-        $skippedReasonCodes = array_column($result->skippedMethods, 'reason_code');
-
-        self::assertContains('QNoCopyThing', $skippedMethodNames);
-        self::assertContains('noncopyable_copy_constructor', $skippedReasonCodes);
         self::assertCount(1, array_values(array_filter(
             $result->phpClass->methods,
             static fn(\QtBuilder\Definition\PhpMethod $method): bool => $method->name === 'value',
         )));
+    }
+
+    public function testGenerateBuildModeSkipsProtectedDefaultConstructorAndKeepsPublicConstructor(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qprotecteddefaultthing.h',
+            'class' => 'QProtectedDefaultThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QProtectedDefaultThing',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertContains('QProtectedDefaultThing', array_column($payload['skipped_methods'], 'name'));
+        self::assertContains('non_public_constructor', array_column($payload['skipped_methods'], 'reason_code'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qprotecteddefaultthing.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qprotecteddefaultthing.cpp');
+
+        self::assertStringContainsString('public function __construct(int $value)', $stub);
+        self::assertStringContainsString('new QProtectedDefaultThing((int)value)', $cpp);
+        self::assertStringNotContainsString('new QProtectedDefaultThing()', $cpp);
+    }
+
+    public function testGenerateBuildModeSkipsDirectConstructionAndDeleteForPrivateLifecycleClasses(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qprivatelifecyclething.h',
+            'class' => 'QPrivateLifecycleThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QPrivateLifecycleThing',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertContains('QPrivateLifecycleThing', array_column($payload['skipped_methods'], 'name'));
+
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qprivatelifecyclething.cpp');
+        self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QPrivateLifecycleThing, __construct)', $cpp);
+        self::assertStringNotContainsString('delete intern->native_ptr;', $cpp);
+        self::assertStringContainsString('RETURN_LONG((zend_long)(QPrivateLifecycleThing::version()));', $cpp);
     }
 }

@@ -50,6 +50,7 @@ final class ExtensionScaffolderTest extends TestCase
             parent: 'QObject',
             isAbstract: true,
             isCopyConstructible: true,
+            hasPublicDestructor: true,
             properties: [],
             methods: [],
         );
@@ -71,6 +72,7 @@ final class ExtensionScaffolderTest extends TestCase
             parent: null,
             isAbstract: false,
             isCopyConstructible: true,
+            hasPublicDestructor: true,
             properties: [],
             methods: [
                 new PhpMethod(
@@ -110,6 +112,7 @@ final class ExtensionScaffolderTest extends TestCase
             parent: null,
             isAbstract: false,
             isCopyConstructible: false,
+            hasPublicDestructor: true,
             properties: [],
             methods: [],
         );

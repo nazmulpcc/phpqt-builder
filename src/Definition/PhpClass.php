@@ -23,6 +23,7 @@ readonly class PhpClass
         public ?string $parent,
         public bool $isAbstract,
         public bool $isCopyConstructible,
+        public bool $hasPublicDestructor,
         public array $properties,
         public array $methods,
     ) {}
@@ -58,7 +59,7 @@ readonly class PhpClass
     }
 
     /**
-     * @return array{name: string, parent: ?string, is_abstract: bool, is_copy_constructible: bool, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, summary: array{total_methods: int, public_methods: int, protected_methods: int, overloaded_methods: int, total_properties: int}}
+     * @return array{name: string, parent: ?string, is_abstract: bool, is_copy_constructible: bool, has_public_destructor: bool, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, summary: array{total_methods: int, public_methods: int, protected_methods: int, overloaded_methods: int, total_properties: int}}
      */
     public function toArray(): array
     {
@@ -67,6 +68,7 @@ readonly class PhpClass
             'parent' => $this->parent,
             'is_abstract' => $this->isAbstract,
             'is_copy_constructible' => $this->isCopyConstructible,
+            'has_public_destructor' => $this->hasPublicDestructor,
             'properties' => array_map(
                 static fn(PhpProperty $p): array => $p->toArray(),
                 $this->properties,

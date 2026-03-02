@@ -45,6 +45,7 @@ class GenerateCommand extends Command
             ->addOption('extension-name', null, InputOption::VALUE_REQUIRED, 'Extension name for build mode', 'qt')
             ->addOption('allowed-classes', null, InputOption::VALUE_REQUIRED, 'Comma-separated allow-list of generated classes')
             ->addOption('allowed-classes-file', null, InputOption::VALUE_REQUIRED, 'Path to a JSON file containing the allow-list of generated classes')
+            ->addOption('worker-mode', null, InputOption::VALUE_REQUIRED, 'Internal worker mode for build pipelines', 'generate')
             ->addOption('build-mode', null, InputOption::VALUE_NONE, 'Emit machine-readable JSON and apply conservative filtering');
     }
 
@@ -136,16 +137,28 @@ class GenerateCommand extends Command
             );
         }
 
+        $workerMode = (string) $input->getOption('worker-mode');
+        if (!in_array($workerMode, ['generate', 'probe'], true)) {
+            return $this->renderFailure(
+                $output,
+                true,
+                $className,
+                $headerPath,
+                'invalid_worker_mode',
+                sprintf('Unsupported worker mode "%s".', $workerMode),
+            );
+        }
+
         $service = new ClassGenerationService();
         $result = $service->generate($headerPath, $className, $includePaths, $allowedClasses);
 
-        if ($result->status === 'ok' && $result->phpClass !== null) {
+        if ($workerMode === 'generate' && $result->status === 'ok' && $result->phpClass !== null) {
             $generator = new ExtensionGenerator();
             $files = $generator->generate($result->phpClass, $namespace, $outputDir);
             $result = $result->withGeneratedFiles($files);
         }
 
-        $output->writeln($this->encodeJson($result->toArray()));
+        $output->writeln($this->encodeJson($this->buildWorkerPayload($result, $workerMode)));
 
         return self::SUCCESS;
     }
@@ -231,6 +244,24 @@ class GenerateCommand extends Command
         $encoded = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
 
         return $encoded !== false ? $encoded : '{}';
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function buildWorkerPayload(\QtBuilder\Build\ClassGenerationResult $result, string $workerMode): array
+    {
+        if ($workerMode === 'probe') {
+            return [
+                'status' => $result->status,
+                'class' => $result->className,
+                'header' => $result->headerPath,
+                'reason_code' => $result->reasonCode,
+                'reason_message' => $result->reasonMessage,
+            ];
+        }
+
+        return $result->toArray();
     }
 
     private function renderFailure(
