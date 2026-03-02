@@ -7,8 +7,11 @@
  */
 $overload = $method->overloads[0] ?? null;
 $returnClass = $method->returnType;
-$wrapFunc = $ctx->typeBridge->wrapNativeFuncName($returnClass);
 $returnCe = $ctx->typeBridge->ceVarName($returnClass);
+$returnFromObj = $ctx->typeBridge->fromObjFuncName($returnClass);
+$returnStruct = $ctx->typeBridge->objectStructName($returnClass);
+$wrapFunc = $ctx->typeBridge->wrapNativeFuncName($returnClass);
+$isValueType = $ctx->typeBridge->isValueType($returnClass);
 $callPrefix = $method->isStatic
     ? "{$ctx->nativeCppType}::"
     : "intern->native_ptr->";
@@ -26,4 +29,13 @@ $callPrefix = $method->isStatic
 @endphp
 @endif
     {!! $returnClass !!} *_result = {!! $callExpr !!};
+@if($isValueType)
+    if (_result == NULL) {
+        RETURN_NULL();
+    }
+    object_init_ex(return_value, {!! $returnCe !!});
+    {!! $returnStruct !!} *_ret_intern = {!! $returnFromObj !!}(Z_OBJ_P(return_value));
+    _ret_intern->native_ptr = new {!! $returnClass !!}(*_result);
+@else
     {!! $wrapFunc !!}(return_value, _result, {!! $returnCe !!}, true);
+@endif

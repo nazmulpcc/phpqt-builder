@@ -234,6 +234,10 @@ class MethodExposurePolicy
             return ['code' => 'unsupported_reference_return', 'message' => 'Non-const reference returns are skipped.'];
         }
 
+        if ($this->isUnsupportedValueBufferReturn($returnType)) {
+            return ['code' => 'unsupported_buffer_return', 'message' => sprintf('Return type %s exposes a raw internal buffer.', $returnType)];
+        }
+
         if (!$this->isSupportedType($returnType, $className, $allowedClasses, true, $flagAliases, $enumNames)) {
             return ['code' => 'unsupported_return_type', 'message' => sprintf('Return type %s is not supported.', $returnType)];
         }
@@ -505,7 +509,7 @@ class MethodExposurePolicy
             return false;
         }
 
-        foreach (['Result', 'Private', 'Data', 'Pointer', 'Iterator', 'Ref', 'Helper'] as $suffix) {
+        foreach (['Result', 'Private', 'Data', 'Pointer', 'Iterator', 'Ref', 'Helper', 'Connection'] as $suffix) {
             if (str_ends_with($name, $suffix)) {
                 return false;
             }
@@ -517,6 +521,16 @@ class MethodExposurePolicy
     private function isDisambiguationTagType(string $cppType): bool
     {
         return trim($cppType) === 'Qt::Disambiguated_t';
+    }
+
+    private function isUnsupportedValueBufferReturn(string $cppType): bool
+    {
+        $trimmed = trim($cppType);
+        if (!str_contains($trimmed, '*')) {
+            return false;
+        }
+
+        return $this->normalizeSelfType($trimmed) === 'QChar';
     }
 
     /**

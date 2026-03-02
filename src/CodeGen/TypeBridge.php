@@ -568,6 +568,13 @@ class TypeBridge
             );
         }
 
+        if ($base === 'QAnyStringView') {
+            return sprintf(
+                "QByteArray _utf8 = %s.toString().toUtf8();\n    RETURN_STRINGL(_utf8.constData(), _utf8.size())",
+                $varName,
+            );
+        }
+
         if ($base === 'std::filesystem::path') {
             return sprintf(
                 "std::string _path = %s.string();\n    RETURN_STRINGL(_path.data(), _path.size())",

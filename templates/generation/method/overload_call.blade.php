@@ -57,15 +57,27 @@ $callPrefix = $method->isStatic
 @elseif($overload->returnStrategy === 'qobject_pointer')
 @php
     $returnClass = trim(str_replace(['const ', '&', '*'], '', $overload->cppReturnType));
-    $wrapFunc = $ctx->typeBridge->wrapNativeFuncName($returnClass);
     $returnCe = $ctx->typeBridge->ceVarName($returnClass);
+    $returnFromObj = $ctx->typeBridge->fromObjFuncName($returnClass);
+    $returnStruct = $ctx->typeBridge->objectStructName($returnClass);
+    $wrapFunc = $ctx->typeBridge->wrapNativeFuncName($returnClass);
+    $isValueType = $ctx->typeBridge->isValueType($returnClass);
 @endphp
 {!! $indent !!}{!! $returnClass !!} *_result = {!! $callPrefix !!}{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
     $mergedParam = $method->params[$i] ?? null;
     $varName = $mergedParam ? $mergedParam->cVarName : $op->name;
     $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName, false, $mergedParam?->isOptional ?? false);
 @endphp{!! $expr !!}@if(!$loop->last), @endif @endforeach);
+@if($isValueType)
+{!! $indent !!}if (_result == NULL) {
+{!! $indent !!}    RETURN_NULL();
+{!! $indent !!}}
+{!! $indent !!}object_init_ex(return_value, {!! $returnCe !!});
+{!! $indent !!}{!! $returnStruct !!} *_ret_intern = {!! $returnFromObj !!}(Z_OBJ_P(return_value));
+{!! $indent !!}_ret_intern->native_ptr = new {!! $returnClass !!}(*_result);
+@else
 {!! $indent !!}{!! $wrapFunc !!}(return_value, _result, {!! $returnCe !!}, true);
+@endif
 @else
 {!! $indent !!}/* TODO: unsupported overload return strategy '{!! $overload->returnStrategy !!}' */
 @endif

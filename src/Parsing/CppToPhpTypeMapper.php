@@ -200,7 +200,7 @@ class CppToPhpTypeMapper
             return false;
         }
 
-        foreach (['Result', 'Private', 'Data', 'Pointer', 'Iterator', 'Ref', 'Helper'] as $suffix) {
+        foreach (['Result', 'Private', 'Data', 'Pointer', 'Iterator', 'Ref', 'Helper', 'Connection'] as $suffix) {
             if (str_ends_with($name, $suffix)) {
                 return false;
             }
