@@ -6,6 +6,7 @@ namespace QtBuilder\CodeGen;
 
 use QtBuilder\Definition\MethodOverload;
 use QtBuilder\Definition\OverloadParameter;
+use QtBuilder\Parsing\CppToPhpTypeMapper;
 
 /**
  * Template context for a single C++ overload variant.
@@ -15,6 +16,8 @@ use QtBuilder\Definition\OverloadParameter;
  */
 class OverloadContext
 {
+    private CppToPhpTypeMapper $typeMapper;
+
     /** C++ return type (raw) */
     public readonly string $cppReturnType;
 
@@ -47,6 +50,7 @@ class OverloadContext
         ClassContext $classCtx,
         TypeBridge $typeBridge,
     ) {
+        $this->typeMapper = new CppToPhpTypeMapper();
         $this->cppReturnType = $overload->returnType;
         $this->paramCount = $overload->parameterCount();
         $this->requiredParamCount = $overload->requiredParameterCount();
@@ -71,37 +75,6 @@ class OverloadContext
      */
     private function cppReturnToPhp(string $cppType, TypeBridge $typeBridge): string
     {
-        // Reuse the CppToPhpTypeMapper logic via a simple inline approach.
-        // We need to normalize and check against known patterns.
-        $normalized = trim($cppType);
-
-        // Strip const and references
-        if (str_starts_with($normalized, 'const ')) {
-            $normalized = substr($normalized, 6);
-        }
-        $normalized = rtrim(rtrim($normalized, '&'));
-        if (str_ends_with($normalized, ' *') && !str_contains($normalized, '<')) {
-            $normalized = rtrim(rtrim($normalized, '*'));
-        }
-        $normalized = trim($normalized);
-
-        // Check the type bridge for known types
-        if ($typeBridge->isScalarType($normalized) || $normalized === 'void') {
-            return $normalized;
-        }
-
-        if (\in_array($normalized, ['QString', 'QByteArray', 'QLatin1String'], true)) {
-            return 'string';
-        }
-
-        if ($typeBridge->isValueType($normalized)) {
-            return $normalized;
-        }
-
-        if ($normalized !== '' && ctype_upper($normalized[0])) {
-            return $normalized;
-        }
-
-        return 'mixed';
+        return $this->typeMapper->map($cppType);
     }
 }

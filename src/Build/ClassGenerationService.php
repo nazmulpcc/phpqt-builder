@@ -48,6 +48,8 @@ class ClassGenerationService
         if ($classData === null) {
             return ClassGenerationResult::skipped($className, $headerPath, 'class_not_found', 'Class definition was not found in the parsed header.');
         }
+        $classData['flag_aliases'] = $this->discoverFlagAliases($headerPath);
+        $classData['enum_names'] = $this->discoverEnumNames($headerPath);
 
         if (($classData['is_abstract'] ?? false) === true) {
             return ClassGenerationResult::skipped(
@@ -55,6 +57,16 @@ class ClassGenerationService
                 $headerPath,
                 'abstract_class',
                 'Abstract classes are skipped in the current build mode.',
+            );
+        }
+
+        $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
+        if ($parentClass !== null && !in_array($parentClass, $allowedClasses, true)) {
+            return ClassGenerationResult::skipped(
+                $className,
+                $headerPath,
+                'unsupported_parent_class',
+                sprintf('Parent class %s is not available for generation.', $parentClass),
             );
         }
 
@@ -88,5 +100,60 @@ class ClassGenerationService
         );
 
         return preg_match($pattern, $contents) === 1;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function discoverFlagAliases(string $headerPath): array
+    {
+        $contents = @file_get_contents($headerPath);
+        if (!is_string($contents) || $contents === '') {
+            return [];
+        }
+
+        $matchCount = preg_match_all(
+            '/Q_DECLARE_FLAGS\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)/',
+            $contents,
+            $matches,
+            PREG_SET_ORDER,
+        );
+        if (!is_int($matchCount) || $matchCount === 0) {
+            return [];
+        }
+
+        $aliases = [];
+        foreach ($matches as $match) {
+            $aliases[$match[1]] = $match[2];
+        }
+
+        return $aliases;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function discoverEnumNames(string $headerPath): array
+    {
+        $contents = @file_get_contents($headerPath);
+        if (!is_string($contents) || $contents === '') {
+            return [];
+        }
+
+        $matchCount = preg_match_all(
+            '/enum(?:\s+class)?\s+([A-Za-z_][A-Za-z0-9_]*)\b/',
+            $contents,
+            $matches,
+        );
+        if (!is_int($matchCount) || $matchCount === 0) {
+            return [];
+        }
+
+        $names = array_values(array_unique(array_filter(
+            array_map(static fn(mixed $value): string => is_string($value) ? trim($value) : '', $matches[1] ?? []),
+            static fn(string $value): bool => $value !== '',
+        )));
+
+        return $names;
     }
 }

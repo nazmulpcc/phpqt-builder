@@ -93,6 +93,8 @@ class TypeBridge
      * @var list<string>
      */
     private const array QT_STRING_TYPES = [
+        'std::string',
+        'std::string_view',
         'QString',
         'QByteArray',
         'QLatin1String',
@@ -112,6 +114,7 @@ class TypeBridge
      * @var list<string>
      */
     private const array KNOWN_VALUE_TYPES = [
+        'QBitArray',
         'QPoint', 'QPointF',
         'QSize', 'QSizeF',
         'QRect', 'QRectF',
@@ -391,6 +394,20 @@ class TypeBridge
         return 'qobject_pointer';
     }
 
+    /**
+     * Cast a native C++ scalar expression into the PHP-facing scalar type
+     * expected by RETURN_LONG / RETURN_DOUBLE / RETURN_BOOL.
+     */
+    public function nativeScalarToPhpExpr(string $phpType, string $cppType, string $expr): string
+    {
+        return match ($phpType) {
+            'int' => sprintf('(zend_long)(%s)', $expr),
+            'float' => sprintf('(double)(%s)', $expr),
+            'bool' => sprintf('(bool)(%s)', $expr),
+            default => $expr,
+        };
+    }
+
     // ------------------------------------------------------------------
     // C++ <-> PHP conversion expressions
     // ------------------------------------------------------------------
@@ -420,7 +437,7 @@ class TypeBridge
         }
 
         return match ($phpType) {
-            'int' => sprintf('(%s)%s', $this->cppCastType($cppType), $varName),
+            'int' => $this->phpIntToNativeExpr($cppType, $varName),
             'float' => sprintf('(%s)%s', $this->cppCastType($cppType), $varName),
             'bool' => $varName,
             'string' => $this->phpStringToNativeExpr($cppType, $varName),
@@ -445,7 +462,7 @@ class TypeBridge
     public function zvalToNativeExpr(string $phpType, string $cppType, string $varName, bool $nullable = false): string
     {
         return match ($phpType) {
-            'int' => sprintf('(%s)Z_LVAL_P(%s)', $this->cppCastType($cppType), $varName),
+            'int' => $this->phpIntToNativeExpr($cppType, sprintf('Z_LVAL_P(%s)', $varName)),
             'float' => sprintf('(%s)Z_DVAL_P(%s)', $this->cppCastType($cppType), $varName),
             'bool' => sprintf('Z_TYPE_P(%s) == IS_TRUE', $varName),
             'string' => $this->phpStringToNativeExpr($cppType, sprintf('Z_STR_P(%s)', $varName)),
@@ -500,6 +517,18 @@ class TypeBridge
 
         if ($base === 'QByteArray') {
             return sprintf('RETURN_STRINGL(%s.constData(), %s.size())', $varName, $varName);
+        }
+
+        if ($base === 'std::string' || $base === 'std::string_view') {
+            return sprintf('RETURN_STRINGL(%s.data(), %s.size())', $varName, $varName);
+        }
+
+        if ($base === 'char') {
+            if ($this->isPointerType($cppType)) {
+                return sprintf('RETURN_STRING(%s)', $varName);
+            }
+
+            return sprintf('RETURN_STRINGL(&%s, 1)', $varName);
         }
 
         // Default: assume QString-like, convert via UTF-8
@@ -674,14 +703,15 @@ class TypeBridge
     {
         $type = trim($type);
 
-        if (str_starts_with($type, 'const ')) {
-            $type = substr($type, 6);
-        }
+        $type = preg_replace('/\bconst\b/', '', $type) ?? $type;
+        $type = trim(preg_replace('/\s+/', ' ', $type) ?? $type);
 
         $type = rtrim($type, '& ');
 
-        if (str_ends_with($type, ' *') && !str_contains($type, '<')) {
-            $type = rtrim(rtrim($type, '*'));
+        if (!str_contains($type, '<')) {
+            while (str_ends_with($type, '*')) {
+                $type = rtrim(substr($type, 0, -1));
+            }
         }
 
         return trim($type);
@@ -690,6 +720,17 @@ class TypeBridge
     private function typeIncludes(string $phpType, string $needle): bool
     {
         return in_array($needle, explode('|', $phpType), true);
+    }
+
+    private function phpIntToNativeExpr(string $cppType, string $expr): string
+    {
+        $castType = $this->cppCastType($cppType);
+
+        if (str_starts_with($castType, 'QFlags<')) {
+            return sprintf('%s::fromInt((%s::Int)(%s))', $castType, $castType, $expr);
+        }
+
+        return sprintf('(%s)%s', $castType, $expr);
     }
 
     /**
@@ -703,11 +744,28 @@ class TypeBridge
             return sprintf('QByteArray(ZSTR_VAL(%s), ZSTR_LEN(%s))', $varName, $varName);
         }
 
+        if ($base === 'std::string') {
+            return sprintf('std::string(ZSTR_VAL(%s), ZSTR_LEN(%s))', $varName, $varName);
+        }
+
+        if ($base === 'std::string_view') {
+            return sprintf('std::string_view(ZSTR_VAL(%s), (size_t)ZSTR_LEN(%s))', $varName, $varName);
+        }
+
         if ($base === 'char') {
-            return sprintf('ZSTR_VAL(%s)', $varName);
+            if ($this->isPointerType($cppType)) {
+                return sprintf('ZSTR_VAL(%s)', $varName);
+            }
+
+            return sprintf('(ZSTR_LEN(%s) > 0 ? ZSTR_VAL(%s)[0] : \'\\0\')', $varName, $varName);
         }
 
         // Default: QString
         return sprintf('QString::fromUtf8(ZSTR_VAL(%s), (int)ZSTR_LEN(%s))', $varName, $varName);
+    }
+
+    private function isPointerType(string $cppType): bool
+    {
+        return str_contains($cppType, '*');
     }
 }

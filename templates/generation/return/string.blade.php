@@ -23,8 +23,5 @@ $callPrefix = $method->isStatic
     $callExpr = "{$callPrefix}{$method->cppName}(" . implode(', ', $args) . ')';
 @endphp
 @endif
-@php
-    $normalized = trim(str_replace(['const ', '&'], '', $cppReturnType));
-@endphp
-    {!! $normalized !!} _result = {!! $callExpr !!};
+    auto _result = {!! $callExpr !!};
     {!! $ctx->typeBridge->nativeStringToPhpReturn($cppReturnType, '_result') !!};

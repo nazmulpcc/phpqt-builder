@@ -43,13 +43,22 @@ class MethodExposurePolicy
         $selectedMethods = [];
         $skippedMethods = [];
         $grouped = [];
+        /** @var array<string, string> $flagAliases */
+        $flagAliases = is_array($classData['flag_aliases'] ?? null) ? $classData['flag_aliases'] : [];
+        /** @var list<string> $enumNames */
+        $enumNames = is_array($classData['enum_names'] ?? null)
+            ? array_values(array_filter(array_map(
+                static fn(mixed $value): string => is_string($value) ? trim($value) : '',
+                $classData['enum_names'],
+            ), static fn(string $value): bool => $value !== ''))
+            : [];
 
         foreach ($classData['methods'] as $method) {
             $grouped[$method['name']][] = $method;
         }
 
         foreach ($grouped as $methodName => $variants) {
-            $result = $this->selectVariant($classData['name'], $methodName, $variants, $allowedClasses);
+            $result = $this->selectVariant($classData['name'], $methodName, $variants, $allowedClasses, $flagAliases, $enumNames);
             if ($result['selected'] !== null) {
                 $selectedMethods[] = $result['selected'];
             }
@@ -67,9 +76,11 @@ class MethodExposurePolicy
     /**
      * @param list<array<string, mixed>> $variants
      * @param list<string> $allowedClasses
+     * @param array<string, string> $flagAliases
+     * @param list<string> $enumNames
      * @return array{selected: ?array<string, mixed>, skipped: list<array<string, string>>}
      */
-    private function selectVariant(string $className, string $methodName, array $variants, array $allowedClasses): array
+    private function selectVariant(string $className, string $methodName, array $variants, array $allowedClasses, array $flagAliases, array $enumNames): array
     {
         if (str_starts_with($methodName, '~') || str_starts_with($methodName, 'operator') || in_array($methodName, self::NAME_SKIP, true)) {
             return [
@@ -93,7 +104,7 @@ class MethodExposurePolicy
             }
             $seenSignatures[$signature] = true;
 
-            $unsupportedReason = $this->unsupportedReason($className, $variant, $allowedClasses);
+            $unsupportedReason = $this->unsupportedReason($className, $variant, $allowedClasses, $flagAliases, $enumNames);
             if ($unsupportedReason !== null) {
                 $skipped[] = [
                     'name' => $methodName,
@@ -126,7 +137,7 @@ class MethodExposurePolicy
         }
 
         return [
-            'selected' => $this->normalizeSpecialTypes($className, $ranked[0]['variant']),
+            'selected' => $this->normalizeSpecialTypes($className, $ranked[0]['variant'], $flagAliases, $enumNames),
             'skipped' => $skipped,
         ];
     }
@@ -134,9 +145,11 @@ class MethodExposurePolicy
     /**
      * @param array<string, mixed> $variant
      * @param list<string> $allowedClasses
+     * @param array<string, string> $flagAliases
+     * @param list<string> $enumNames
      * @return array{code: string, message: string}|null
      */
-    private function unsupportedReason(string $className, array $variant, array $allowedClasses): ?array
+    private function unsupportedReason(string $className, array $variant, array $allowedClasses, array $flagAliases = [], array $enumNames = []): ?array
     {
         $access = (string) ($variant['access'] ?? 'unknown');
         if ($access !== 'public') {
@@ -152,13 +165,19 @@ class MethodExposurePolicy
             return ['code' => 'unsupported_reference_return', 'message' => 'Non-const reference returns are skipped.'];
         }
 
-        if (!$this->isSupportedType($returnType, $className, $allowedClasses, true)) {
+        if (!$this->isSupportedType($returnType, $className, $allowedClasses, true, $flagAliases, $enumNames)) {
             return ['code' => 'unsupported_return_type', 'message' => sprintf('Return type %s is not supported.', $returnType)];
         }
 
         foreach ($variant['parameters'] as $parameter) {
             $type = (string) $parameter['type'];
-            if (!$this->isSupportedType($type, $className, $allowedClasses, false)) {
+            if ($this->isUnsupportedReferenceParameter($type)) {
+                return ['code' => 'unsupported_reference_parameter', 'message' => sprintf('Parameter type %s is a non-const reference.', $type)];
+            }
+            if ($this->isUnsupportedOutParameter($type, $className, $flagAliases, $enumNames)) {
+                return ['code' => 'unsupported_output_parameter', 'message' => sprintf('Parameter type %s looks like an output parameter.', $type)];
+            }
+            if (!$this->isSupportedType($type, $className, $allowedClasses, false, $flagAliases, $enumNames)) {
                 return ['code' => 'unsupported_parameter_type', 'message' => sprintf('Parameter type %s is not supported.', $type)];
             }
         }
@@ -173,10 +192,38 @@ class MethodExposurePolicy
         return str_contains($trimmed, '&') && !str_starts_with($trimmed, 'const ');
     }
 
+    private function isUnsupportedReferenceParameter(string $cppType): bool
+    {
+        $trimmed = trim($cppType);
+
+        return str_contains($trimmed, '&') && !str_starts_with($trimmed, 'const ');
+    }
+
+    private function isUnsupportedOutParameter(string $cppType, string $className, array $flagAliases = [], array $enumNames = []): bool
+    {
+        $trimmed = trim($cppType);
+        if (!str_contains($trimmed, '*') || str_starts_with($trimmed, 'const ')) {
+            return false;
+        }
+
+        if ($this->isEnumOrFlagType($trimmed, $className, $flagAliases, $enumNames)) {
+            return true;
+        }
+
+        $phpType = $this->typeMapper->map($trimmed);
+        if (in_array($phpType, ['int', 'float', 'bool', 'string', 'array', 'mixed'], true)) {
+            return true;
+        }
+
+        return false;
+    }
+
     /**
      * @param list<string> $allowedClasses
+     * @param array<string, string> $flagAliases
+     * @param list<string> $enumNames
      */
-    private function isSupportedType(string $cppType, string $className, array $allowedClasses, bool $isReturn): bool
+    private function isSupportedType(string $cppType, string $className, array $allowedClasses, bool $isReturn, array $flagAliases = [], array $enumNames = []): bool
     {
         $trimmed = trim($cppType);
         if ($trimmed === '') {
@@ -195,7 +242,7 @@ class MethodExposurePolicy
             return false;
         }
 
-        if ($this->isEnumOrFlagType($trimmed, $className)) {
+        if ($this->isEnumOrFlagType($trimmed, $className, $flagAliases, $enumNames)) {
             return true;
         }
 
@@ -224,7 +271,7 @@ class MethodExposurePolicy
         return str_starts_with(trim($cppType), 'QFlags<');
     }
 
-    private function isEnumOrFlagType(string $cppType, string $className): bool
+    private function isEnumOrFlagType(string $cppType, string $className, array $flagAliases = [], array $enumNames = []): bool
     {
         $trimmed = trim($cppType);
 
@@ -233,30 +280,39 @@ class MethodExposurePolicy
         }
 
         if (str_contains($trimmed, '::')) {
-            return true;
+            $suffix = substr($trimmed, (int) strrpos($trimmed, '::') + 2);
+            if ($suffix === '') {
+                return false;
+            }
+
+            return isset($flagAliases[$suffix])
+                || in_array($suffix, $enumNames, true)
+                || $this->looksLikeQualifiedEnumName($suffix);
         }
 
         if (preg_match('/^[A-Z][A-Za-z0-9_]*$/', $trimmed) !== 1) {
             return false;
         }
 
-        if (str_starts_with($trimmed, 'Q')) {
-            return false;
+        if (isset($flagAliases[$trimmed]) || in_array($trimmed, $enumNames, true)) {
+            return true;
         }
 
-        return $trimmed !== $className;
+        return false;
     }
 
     /**
      * @param array<string, mixed> $variant
+     * @param array<string, string> $flagAliases
+     * @param list<string> $enumNames
      * @return array<string, mixed>
      */
-    private function normalizeSpecialTypes(string $className, array $variant): array
+    private function normalizeSpecialTypes(string $className, array $variant, array $flagAliases, array $enumNames = []): array
     {
-        $variant['return_type'] = $this->normalizeEnumType($className, (string) $variant['return_type']);
+        $variant['return_type'] = $this->normalizeEnumType($className, (string) $variant['return_type'], $flagAliases, $enumNames);
         $variant['parameters'] = array_map(
-            function (array $parameter) use ($className): array {
-                $parameter['type'] = $this->normalizeEnumType($className, (string) ($parameter['type'] ?? ''));
+            function (array $parameter) use ($className, $flagAliases, $enumNames): array {
+                $parameter['type'] = $this->normalizeEnumType($className, (string) ($parameter['type'] ?? ''), $flagAliases, $enumNames);
 
                 return $parameter;
             },
@@ -266,11 +322,27 @@ class MethodExposurePolicy
         return $variant;
     }
 
-    private function normalizeEnumType(string $className, string $cppType): string
+    /**
+     * @param array<string, string> $flagAliases
+     * @param list<string> $enumNames
+     */
+    private function normalizeEnumType(string $className, string $cppType, array $flagAliases = [], array $enumNames = []): string
     {
         $trimmed = trim($cppType);
 
-        if (!$this->isEnumOrFlagType($trimmed, $className)) {
+        if (isset($flagAliases[$trimmed])) {
+            return sprintf('QFlags<%s::%s>', $className, $flagAliases[$trimmed]);
+        }
+
+        $qualifiedPrefix = $className . '::';
+        if (str_starts_with($trimmed, $qualifiedPrefix)) {
+            $nested = substr($trimmed, strlen($qualifiedPrefix));
+            if ($nested !== '' && isset($flagAliases[$nested])) {
+                return sprintf('QFlags<%s::%s>', $className, $flagAliases[$nested]);
+            }
+        }
+
+        if (!$this->isEnumOrFlagType($trimmed, $className, $flagAliases, $enumNames)) {
             return $trimmed;
         }
 
@@ -279,6 +351,17 @@ class MethodExposurePolicy
         }
 
         return $className . '::' . $trimmed;
+    }
+
+    private function looksLikeQualifiedEnumName(string $name): bool
+    {
+        foreach (['Result', 'Private', 'Data', 'Pointer', 'Iterator', 'Ref', 'Helper'] as $suffix) {
+            if (str_ends_with($name, $suffix)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

@@ -55,6 +55,8 @@ class CppToPhpTypeMapper
      * @var list<string>
      */
     private const array STRING_TYPES = [
+        'std::string',
+        'std::string_view',
         'QString',
         'QByteArray',
         'QLatin1String',
@@ -117,10 +119,16 @@ class CppToPhpTypeMapper
             return 'array';
         }
 
-        // Enum-like types (Qt::FocusPolicy, QSizePolicy::Policy, etc.)
-        // These will eventually become PHP enums; for now map to int.
+        // Qualified nested types may be enums or nested classes.
+        // Enum lowering is handled earlier when enough header context exists.
         if (str_contains($normalized, '::') && !str_ends_with($normalized, '*')) {
-            return 'int';
+            $tail = substr($normalized, (int) strrpos($normalized, '::') + 2);
+
+            if ($tail !== false && $tail !== '' && $this->looksLikeQualifiedEnumName($tail)) {
+                return 'int';
+            }
+
+            return $tail !== false && $tail !== '' ? $tail : 'mixed';
         }
 
         // If it still looks like a known Qt/class type, return the bare name.
@@ -150,10 +158,9 @@ class CppToPhpTypeMapper
             return $type;
         }
 
-        // Strip leading 'const '
-        if (str_starts_with($type, 'const ')) {
-            $type = substr($type, 6);
-        }
+        // Strip all standalone const qualifiers.
+        $type = preg_replace('/\bconst\b/', '', $type) ?? $type;
+        $type = trim(preg_replace('/\s+/', ' ', $type) ?? $type);
 
         // Strip trailing reference
         if (str_ends_with($type, ' &') || str_ends_with($type, '&')) {
@@ -161,11 +168,24 @@ class CppToPhpTypeMapper
         }
 
         // Strip trailing pointer(s) but keep template args intact
-        // "QWidget *" -> "QWidget", but "QList<QAction *>" stays
-        if (str_ends_with($type, ' *') && !str_contains($type, '<')) {
-            $type = rtrim(rtrim($type, '*'));
+        // "QWidget *" / "QWidget*" -> "QWidget", but "QList<QAction *>" stays
+        if (!str_contains($type, '<')) {
+            while (str_ends_with($type, '*')) {
+                $type = rtrim(substr($type, 0, -1));
+            }
         }
 
         return trim($type);
+    }
+
+    private function looksLikeQualifiedEnumName(string $name): bool
+    {
+        foreach (['Result', 'Private', 'Data', 'Pointer', 'Iterator', 'Ref', 'Helper'] as $suffix) {
+            if (str_ends_with($name, $suffix)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

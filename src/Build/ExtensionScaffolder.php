@@ -14,7 +14,7 @@ class ExtensionScaffolder
     {
         $projectRoot = dirname(__DIR__, 2);
         $templatePath ??= $projectRoot . '/templates';
-        $compiledPath ??= $projectRoot . '/storage/blade';
+        $compiledPath ??= $projectRoot . '/storage/blade/' . (string) getmypid();
 
         if (!is_dir($compiledPath)) {
             mkdir($compiledPath, 0755, true);

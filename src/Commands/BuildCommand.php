@@ -83,64 +83,38 @@ class BuildCommand extends Command
             $this->writeDiscoveryCache($metadataDir, $modules, $installation->rootPath, $acceptedCandidates, $skippedClasses, $allowedClasses, $candidateCount);
         }
 
-        $allowedClassesFile = $this->writeAllowedClassesManifest($metadataDir, $allowedClasses);
-
-        $tasks = [];
-        foreach ($acceptedCandidates as $candidate) {
-            $tasks[] = new GenerateTask(
-                headerPath: $candidate->parseHeader,
-                className: $candidate->className,
-                module: $candidate->module,
-                namespace: $this->namespaceForModule($candidate->module),
-                outputDir: $outputDir,
-                extensionName: $extensionName,
-                qtPath: $installation->rootPath,
-                allowedClassesFile: $allowedClassesFile,
-            );
-        }
-
-        $output->writeln(sprintf('<info>Scanning complete.</info> %d candidates queued, %d filtered before generation.', count($tasks), count($skippedClasses)));
+        $output->writeln(sprintf('<info>Scanning complete.</info> %d candidates queued, %d filtered before generation.', count($acceptedCandidates), count($skippedClasses)));
         $output->writeln(sprintf('<info>Running %d parallel generate worker(s)...</info>', $jobs));
+        $generation = $this->stabilizeGeneratedCandidates(
+            $acceptedCandidates,
+            $skippedClasses,
+            $allowedClasses,
+            $outputDir,
+            $extensionName,
+            $installation->rootPath,
+            $metadataDir,
+            $jobs,
+            $output,
+        );
 
-        $workerPool = new GenerateWorkerPool(dirname(__DIR__, 2));
-        $results = $workerPool->run($tasks, $jobs);
+        $acceptedCandidates = $generation['accepted_candidates'];
+        $generatedClasses = $generation['generated_classes'];
+        $skippedClasses = $generation['skipped_classes'];
+        $skippedMethods = $generation['skipped_methods'];
+        $errors = $generation['errors'];
+        $classmap = $generation['classmap'];
 
-        $generatedClasses = [];
-        $skippedMethods = [];
-        $errors = [];
-        $classmap = [];
+        $this->writeDiscoveryCache(
+            $metadataDir,
+            $modules,
+            $installation->rootPath,
+            $acceptedCandidates,
+            $skippedClasses,
+            $generatedClasses,
+            $candidateCount,
+        );
+        $this->writeAllowedClassesManifest($metadataDir, $generatedClasses);
 
-        foreach ($results as $result) {
-            if ($result->isOk()) {
-                $generatedClasses[] = $result->className;
-                $classmap[] = [
-                    'class' => $result->className,
-                    'header' => $result->headerPath,
-                    'files' => $result->generatedFiles,
-                ];
-            } elseif ($result->isSkipped()) {
-                $skippedClasses[] = [
-                    'class' => $result->className,
-                    'header' => $result->headerPath,
-                    'reason_code' => $result->reasonCode,
-                    'reason_message' => $result->reasonMessage,
-                ];
-            } else {
-                $errors[] = [
-                    'class' => $result->className,
-                    'header' => $result->headerPath,
-                    'reason_code' => $result->reasonCode,
-                    'reason_message' => $result->reasonMessage,
-                    'stderr' => $result->stderr,
-                ];
-            }
-
-            foreach ($result->skippedMethods as $skippedMethod) {
-                $skippedMethods[] = ['class' => $result->className] + $skippedMethod;
-            }
-        }
-
-        sort($generatedClasses);
         $context = $context->withGeneratedClasses($generatedClasses);
         $scaffoldFiles = $scaffolder->finalize($context);
 
@@ -166,6 +140,7 @@ class BuildCommand extends Command
             'skipped_classes' => count($skippedClasses),
             'failed_classes' => count($errors),
             'jobs' => $jobs,
+            'generation_passes' => $generation['passes'],
             'bootstrap' => $bootstrapResult?->toArray(),
             'bootstrap_error' => $bootstrapError,
         ];
@@ -243,6 +218,178 @@ class BuildCommand extends Command
             $output->writeln(sprintf('    <comment>stdout:</comment> %s', $step->stdoutLogPath));
             $output->writeln(sprintf('    <comment>stderr:</comment> %s', $step->stderrLogPath));
         }
+    }
+
+    /**
+     * @param list<HeaderCandidate> $acceptedCandidates
+     * @param list<array<string, string|null>> $initialSkippedClasses
+     * @param list<string> $initialAllowedClasses
+     * @return array{
+     *   accepted_candidates: list<HeaderCandidate>,
+     *   generated_classes: list<string>,
+     *   skipped_classes: list<array<string, string|null>>,
+     *   skipped_methods: list<array<string, string>>,
+     *   errors: list<array<string, string|null>>,
+     *   classmap: list<array{class: string, header: string, files: list<string>}>,
+     *   passes: int
+     * }
+     */
+    private function stabilizeGeneratedCandidates(
+        array $acceptedCandidates,
+        array $initialSkippedClasses,
+        array $initialAllowedClasses,
+        string $outputDir,
+        string $extensionName,
+        string $qtRootPath,
+        string $metadataDir,
+        int $jobs,
+        OutputInterface $output,
+    ): array {
+        $workerPool = new GenerateWorkerPool(dirname(__DIR__, 2));
+        $currentCandidates = array_values($acceptedCandidates);
+        $currentAllowedClasses = array_values(array_unique($initialAllowedClasses));
+        sort($currentAllowedClasses);
+
+        /** @var array<string, array<string, string|null>> $skippedByClass */
+        $skippedByClass = [];
+        foreach ($initialSkippedClasses as $skippedClass) {
+            $className = is_string($skippedClass['class'] ?? null) ? $skippedClass['class'] : null;
+            if ($className === null || $className === '') {
+                continue;
+            }
+
+            $skippedByClass[$className] = $skippedClass;
+        }
+
+        /** @var array<string, list<array<string, string>>> $skippedMethodsByClass */
+        $skippedMethodsByClass = [];
+        /** @var array<string, array<string, string|null>> $errorsByClass */
+        $errorsByClass = [];
+        /** @var list<array{class: string, header: string, files: list<string>}> $classmap */
+        $classmap = [];
+        /** @var list<string> $generatedClasses */
+        $generatedClasses = [];
+        $passes = 0;
+
+        do {
+            $passes++;
+            $allowedClassesFile = $this->writeAllowedClassesManifest($metadataDir, $currentAllowedClasses);
+
+            if ($passes > 1) {
+                $output->writeln(sprintf(
+                    '<comment>Regenerating against actual generated dependency set (pass %d, %d class(es)).</comment>',
+                    $passes,
+                    count($currentCandidates),
+                ));
+            }
+
+            $results = $workerPool->run(
+                $this->buildGenerateTasks(
+                    $currentCandidates,
+                    $outputDir,
+                    $extensionName,
+                    $qtRootPath,
+                    $allowedClassesFile,
+                ),
+                $jobs,
+            );
+
+            $generatedClasses = [];
+            $classmap = [];
+
+            foreach ($results as $result) {
+                unset($errorsByClass[$result->className]);
+
+                if ($result->isOk()) {
+                    $generatedClasses[] = $result->className;
+                    $classmap[] = [
+                        'class' => $result->className,
+                        'header' => $result->headerPath,
+                        'files' => $result->generatedFiles,
+                    ];
+                    unset($skippedByClass[$result->className]);
+                } elseif ($result->isSkipped()) {
+                    $skippedByClass[$result->className] = [
+                        'class' => $result->className,
+                        'header' => $result->headerPath,
+                        'reason_code' => $result->reasonCode,
+                        'reason_message' => $result->reasonMessage,
+                    ];
+                } else {
+                    $errorsByClass[$result->className] = [
+                        'class' => $result->className,
+                        'header' => $result->headerPath,
+                        'reason_code' => $result->reasonCode,
+                        'reason_message' => $result->reasonMessage,
+                        'stderr' => $result->stderr,
+                    ];
+                }
+
+                $skippedMethodsByClass[$result->className] = [];
+                foreach ($result->skippedMethods as $skippedMethod) {
+                    $skippedMethodsByClass[$result->className][] = ['class' => $result->className] + $skippedMethod;
+                }
+            }
+
+            sort($generatedClasses);
+            $stable = $generatedClasses === $currentAllowedClasses;
+
+            $nextCandidates = [];
+            foreach ($currentCandidates as $candidate) {
+                if (in_array($candidate->className, $generatedClasses, true)) {
+                    $nextCandidates[] = $candidate;
+                }
+            }
+
+            $currentCandidates = $nextCandidates;
+            $currentAllowedClasses = $generatedClasses;
+        } while (!$stable && $errorsByClass === [] && $currentCandidates !== []);
+
+        $skippedMethods = [];
+        foreach ($skippedMethodsByClass as $items) {
+            foreach ($items as $item) {
+                $skippedMethods[] = $item;
+            }
+        }
+
+        return [
+            'accepted_candidates' => $currentCandidates,
+            'generated_classes' => $generatedClasses,
+            'skipped_classes' => array_values($skippedByClass),
+            'skipped_methods' => $skippedMethods,
+            'errors' => array_values($errorsByClass),
+            'classmap' => $classmap,
+            'passes' => $passes,
+        ];
+    }
+
+    /**
+     * @param list<HeaderCandidate> $candidates
+     * @return list<GenerateTask>
+     */
+    private function buildGenerateTasks(
+        array $candidates,
+        string $outputDir,
+        string $extensionName,
+        string $qtRootPath,
+        string $allowedClassesFile,
+    ): array {
+        $tasks = [];
+
+        foreach ($candidates as $candidate) {
+            $tasks[] = new GenerateTask(
+                headerPath: $candidate->parseHeader,
+                className: $candidate->className,
+                module: $candidate->module,
+                namespace: $this->namespaceForModule($candidate->module),
+                outputDir: $outputDir,
+                extensionName: $extensionName,
+                qtPath: $qtRootPath,
+                allowedClassesFile: $allowedClassesFile,
+            );
+        }
+
+        return $tasks;
     }
 
     /**

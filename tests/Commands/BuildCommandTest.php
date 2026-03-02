@@ -144,4 +144,74 @@ final class BuildCommandTest extends TestCase
         $summary = json_decode((string) file_get_contents($metadataDir . '/build_summary.json'), true, 512, JSON_THROW_ON_ERROR);
         self::assertSame('configure failed', $summary['bootstrap_error']);
     }
+
+    public function testBuildRewritesCachedAllowListToActualGeneratedClasses(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-stable-' . bin2hex(random_bytes(4));
+        $outputDir = $buildRoot . '/ext';
+        $metadataDir = $buildRoot . '/generated';
+        mkdir($metadataDir, 0755, true);
+
+        $cache = [
+            'modules' => ['QtCore'],
+            'qt_path' => $fixtureRoot,
+            'candidate_count' => 2,
+            'accepted_candidates' => [
+                [
+                    'module' => 'QtCore',
+                    'class' => 'QCStringHolder',
+                    'public_header' => $fixtureRoot . '/include/QtCore/QCStringHolder',
+                    'parse_header' => $fixtureRoot . '/include/QtCore/qcstringholder.h',
+                ],
+                [
+                    'module' => 'QtCore',
+                    'class' => 'QChildThing',
+                    'public_header' => $fixtureRoot . '/include/QtCore/QChildThing',
+                    'parse_header' => $fixtureRoot . '/include/QtCore/qchildthing.h',
+                ],
+            ],
+            'skipped_classes' => [],
+            'allowed_classes' => ['QCStringHolder', 'QChildThing'],
+        ];
+
+        file_put_contents($metadataDir . '/discovery_cache.json', json_encode($cache, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        file_put_contents($metadataDir . '/accepted_candidates.json', json_encode($cache['accepted_candidates'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        file_put_contents($metadataDir . '/allowed_classes.json', json_encode($cache['allowed_classes'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+        $bootstrapper = new FakeExtensionBootstrapper();
+        $command = new BuildCommand(FakeSystemInformation::passing(), $bootstrapper);
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            '--qt-path' => $fixtureRoot,
+            '--modules' => 'QtCore',
+            '--output' => $outputDir,
+            '--jobs' => '2',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+        self::assertStringContainsString('Using cached build metadata:', $tester->getDisplay());
+        self::assertStringContainsString('Regenerating against actual generated dependency set', $tester->getDisplay());
+
+        $allowedClasses = json_decode((string) file_get_contents($metadataDir . '/allowed_classes.json'), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(['QCStringHolder'], $allowedClasses);
+
+        $acceptedCandidates = json_decode((string) file_get_contents($metadataDir . '/accepted_candidates.json'), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(['QCStringHolder'], array_column($acceptedCandidates, 'class'));
+
+        $classmap = json_decode((string) file_get_contents($metadataDir . '/classmap.json'), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(['QCStringHolder'], array_column($classmap, 'class'));
+
+        $skippedClasses = json_decode((string) file_get_contents($metadataDir . '/skipped_classes.json'), true, 512, JSON_THROW_ON_ERROR);
+        $skippedByClass = [];
+        foreach ($skippedClasses as $skippedClass) {
+            $skippedByClass[$skippedClass['class']] = $skippedClass['reason_code'];
+        }
+        self::assertSame('unsupported_parent_class', $skippedByClass['QChildThing'] ?? null);
+
+        $summary = json_decode((string) file_get_contents($metadataDir . '/build_summary.json'), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(2, $summary['generation_passes']);
+        self::assertSame(1, $summary['generated_classes']);
+        self::assertSame(1, $summary['skipped_classes']);
+    }
 }

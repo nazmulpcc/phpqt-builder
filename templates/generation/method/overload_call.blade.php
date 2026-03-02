@@ -20,17 +20,20 @@ $callPrefix = $method->isStatic
 @elseif($overload->returnStrategy === 'scalar')
 @php
     $macro = $ctx->typeBridge->returnMacro($method->returnType) ?? 'RETURN_LONG';
+    ob_start();
 @endphp
-{!! $indent !!}{!! $macro !!}({!! $callPrefix !!}{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
+{!! $callPrefix !!}{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
     $mergedParam = $method->params[$i] ?? null;
     $varName = $mergedParam ? $mergedParam->cVarName : $op->name;
     $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName, false, $mergedParam?->isOptional ?? false);
 @endphp{!! $expr !!}@if(!$loop->last), @endif @endforeach));
-@elseif($overload->returnStrategy === 'string')
 @php
-    $normalized = trim(str_replace(['const ', '&'], '', $overload->cppReturnType));
+    $callExpr = trim(ob_get_clean() ?: '');
+    $returnExpr = $ctx->typeBridge->nativeScalarToPhpExpr($method->returnType, $overload->cppReturnType, rtrim($callExpr, ';'));
 @endphp
-{!! $indent !!}{!! $normalized !!} _result = {!! $callPrefix !!}{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
+{!! $indent !!}{!! $macro !!}({!! $returnExpr !!});
+@elseif($overload->returnStrategy === 'string')
+{!! $indent !!}auto _result = {!! $callPrefix !!}{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
     $mergedParam = $method->params[$i] ?? null;
     $varName = $mergedParam ? $mergedParam->cVarName : $op->name;
     $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName, false, $mergedParam?->isOptional ?? false);
