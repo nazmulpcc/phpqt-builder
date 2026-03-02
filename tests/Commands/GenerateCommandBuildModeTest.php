@@ -657,6 +657,41 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QPartsHolder, partsFromDate)', $cpp);
     }
 
+    public function testGenerateBuildModeSkipsQualifiedNestedStructReturnsButKeepsQualifiedEnums(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qqualifiedtypeholder.h',
+            'class' => 'QQualifiedTypeHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QQualifiedTypeHolder',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertContains('elementAt', array_column($payload['skipped_methods'], 'name'));
+        self::assertContains('unsupported_return_type', array_column($payload['skipped_methods'], 'reason_code'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qqualifiedtypeholder.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qqualifiedtypeholder.cpp');
+
+        self::assertStringContainsString('public function kind(): int {}', $stub);
+        self::assertStringContainsString('public function setKind(int $kind): void {}', $stub);
+        self::assertStringContainsString('RETURN_LONG((zend_long)(intern->native_ptr->kind()));', $cpp);
+        self::assertStringContainsString('intern->native_ptr->setKind((QQualifiedTypeHolder::Kind)((int)(kind)));', $cpp);
+        self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QQualifiedTypeHolder, elementAt)', $cpp);
+    }
+
     public function testClassGenerationDetectsQDisableCopyAndSkipsCopyConstructorExposure(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';

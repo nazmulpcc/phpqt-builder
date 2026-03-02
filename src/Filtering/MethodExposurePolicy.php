@@ -449,8 +449,7 @@ class MethodExposurePolicy
             }
 
             return isset($flagAliases[$suffix])
-                || in_array($suffix, $enumNames, true)
-                || $this->looksLikeQualifiedEnumName($suffix);
+                || in_array($suffix, $enumNames, true);
         }
 
         if (preg_match('/^[A-Z][A-Za-z0-9_]*$/', $trimmed) !== 1) {
