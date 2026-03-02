@@ -85,7 +85,7 @@ class ClassDefinitionBuilder
     // ------------------------------------------------------------------
 
     /**
-     * @param list<array{name: string, return_type: string, access: string, parameters: list<array{name: string, type: string, has_default: bool}>, is_static: bool, is_const: bool, is_virtual: bool, is_pure_virtual: bool, is_override: bool}> $methods
+     * @param list<array{name: string, return_type: string, access: string, parameters: list<array{name: string, type: string, has_default: bool}>, is_static: bool, is_const: bool, is_virtual: bool, is_pure_virtual: bool, is_override: bool, is_signal?: bool, is_slot?: bool}> $methods
      * @return list<PhpMethod>
      */
     private function buildMethods(array $methods, string $className): array
