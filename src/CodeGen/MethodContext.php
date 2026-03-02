@@ -17,6 +17,9 @@ use QtBuilder\Definition\PhpParameter;
  */
 class MethodContext
 {
+    private readonly TypeBridge $typeBridge;
+    private readonly string $className;
+
     /** PHP method name */
     public readonly string $name;
 
@@ -79,6 +82,8 @@ class MethodContext
         ClassContext $classCtx,
         TypeBridge $typeBridge,
     ) {
+        $this->typeBridge = $typeBridge;
+        $this->className = $classCtx->phpClassName;
         $this->name = $method->name;
         $this->cppName = $method->name;
         $this->access = $method->access;
@@ -149,6 +154,34 @@ class MethodContext
         $this->overloads = $overloads;
     }
 
+    public function overloadMatchCondition(OverloadContext $overload, string $argcVar = '_argc'): string
+    {
+        $conditions = [
+            sprintf('(%1$s >= %2$d && %1$s <= %3$d)', $argcVar, $overload->requiredParamCount, $overload->paramCount),
+        ];
+
+        foreach ($overload->params as $index => $param) {
+            $conditions[] = sprintf(
+                '(%s < %d || (%s))',
+                $argcVar,
+                $index + 1,
+                $this->overloadParamMatchCondition($index, $param),
+            );
+        }
+
+        return implode(' && ', $conditions);
+    }
+
+    public function noMatchingOverloadMessage(): string
+    {
+        return sprintf('No matching overload for %s::%s().', $this->className, $this->name);
+    }
+
+    public function ambiguousOverloadMessage(): string
+    {
+        return sprintf('Ambiguous overload resolution for %s::%s().', $this->className, $this->name);
+    }
+
     /**
      * Whether this method takes no parameters (including no optional ones).
      */
@@ -179,7 +212,7 @@ class MethodContext
             $mergedParam = $this->params[$i] ?? null;
             $sourceVarName = $mergedParam?->cVarName ?? $param->name;
             $sourceIsZval = $mergedParam?->isParsedAsZval ?? false;
-            $nullable = $mergedParam?->isOptional ?? false;
+            $nullable = $param->hasDefault;
             $pairedCountVarName = null;
 
             if (
@@ -215,6 +248,20 @@ class MethodContext
             'setup_lines' => $setupLines,
             'args' => $args,
         ];
+    }
+
+    private function overloadParamMatchCondition(int $position, OverloadParamContext $param): string
+    {
+        $mergedParam = $this->params[$position] ?? null;
+        if ($mergedParam === null) {
+            return 'false';
+        }
+
+        if ($mergedParam->isParsedAsZval) {
+            return $this->typeBridge->zvalTypeMatchExpr($mergedParam->cVarName, $param->phpType);
+        }
+
+        return $mergedParam->phpType === $param->phpType ? 'true' : 'false';
     }
 
     /**

@@ -63,7 +63,7 @@ class MethodExposurePolicy
         $hasPublicDestructor = (bool) ($classData['has_public_destructor'] ?? true);
 
         foreach ($grouped as $methodName => $variants) {
-            $result = $this->selectVariant(
+            $result = $this->selectVariants(
                 $classData['name'],
                 $methodName,
                 $variants,
@@ -75,8 +75,8 @@ class MethodExposurePolicy
                 $hasPublicDefaultConstructor,
                 $hasPublicDestructor,
             );
-            if ($result['selected'] !== null) {
-                $selectedMethods[] = $result['selected'];
+            foreach ($result['selected'] as $selectedVariant) {
+                $selectedMethods[] = $selectedVariant;
             }
             foreach ($result['skipped'] as $skipped) {
                 $skippedMethods[] = $skipped;
@@ -94,9 +94,9 @@ class MethodExposurePolicy
      * @param list<string> $allowedClasses
      * @param array<string, string> $flagAliases
      * @param list<string> $enumNames
-     * @return array{selected: ?array<string, mixed>, skipped: list<array<string, string>>}
+     * @return array{selected: list<array<string, mixed>>, skipped: list<array<string, string>>}
      */
-    private function selectVariant(
+    private function selectVariants(
         string $className,
         string $methodName,
         array $variants,
@@ -111,7 +111,7 @@ class MethodExposurePolicy
     {
         if (str_starts_with($methodName, '~') || str_starts_with($methodName, 'operator') || in_array($methodName, self::NAME_SKIP, true)) {
             return [
-                'selected' => null,
+                'selected' => [],
                 'skipped' => [[
                     'name' => $methodName,
                     'reason_code' => 'method_name_filtered',
@@ -121,7 +121,8 @@ class MethodExposurePolicy
         }
 
         $seenSignatures = [];
-        $ranked = [];
+        /** @var array<string, array{variant: array<string, mixed>, score: list<int>}> $selectedByDispatch */
+        $selectedByDispatch = [];
         $skipped = [];
 
         foreach ($variants as $variant) {
@@ -151,30 +152,50 @@ class MethodExposurePolicy
                 continue;
             }
 
-            $ranked[] = [
-                'variant' => $variant,
-                'score' => $this->score($variant),
-            ];
-        }
+            $normalizedVariant = $this->normalizeSpecialTypes($className, $variant, $flagAliases, $enumNames);
+            $dispatchSignature = $this->dispatchSignature($normalizedVariant);
+            $score = $this->score($normalizedVariant);
+            $existing = $selectedByDispatch[$dispatchSignature] ?? null;
 
-        if ($ranked === []) {
-            return ['selected' => null, 'skipped' => $skipped];
-        }
+            if ($existing === null) {
+                $selectedByDispatch[$dispatchSignature] = [
+                    'variant' => $normalizedVariant,
+                    'score' => $score,
+                ];
+                continue;
+            }
 
-        usort($ranked, fn(array $a, array $b): int => $this->compareScores($a['score'], $b['score']));
+            if ($this->compareScores($score, $existing['score']) < 0) {
+                $skipped[] = [
+                    'name' => $methodName,
+                    'reason_code' => 'indistinguishable_overload',
+                    'reason_message' => 'Overload collapses to the same PHP runtime signature as a preferred variant.',
+                ];
+                $selectedByDispatch[$dispatchSignature] = [
+                    'variant' => $normalizedVariant,
+                    'score' => $score,
+                ];
+                continue;
+            }
 
-        if (count($ranked) > 1 && $this->compareScores($ranked[0]['score'], $ranked[1]['score']) === 0) {
             $skipped[] = [
                 'name' => $methodName,
-                'reason_code' => 'ambiguous_overload',
-                'reason_message' => sprintf('Method %s has multiple equally-ranked overloads.', $methodName),
+                'reason_code' => 'indistinguishable_overload',
+                'reason_message' => 'Overload collapses to the same PHP runtime signature as a preferred variant.',
             ];
+        }
 
-            return ['selected' => null, 'skipped' => $skipped];
+        $selected = array_values(array_map(
+            static fn(array $entry): array => $entry['variant'],
+            $selectedByDispatch,
+        ));
+
+        if ($selected === []) {
+            return ['selected' => [], 'skipped' => $skipped];
         }
 
         return [
-            'selected' => $this->normalizeSpecialTypes($className, $ranked[0]['variant'], $flagAliases, $enumNames),
+            'selected' => $selected,
             'skipped' => $skipped,
         ];
     }
@@ -199,11 +220,20 @@ class MethodExposurePolicy
     ): ?array
     {
         $access = (string) ($variant['access'] ?? 'unknown');
+        $isConstructor = $this->isConstructor($className, $variant);
         if ($access !== 'public') {
+            if ($isConstructor) {
+                return ['code' => 'non_public_constructor', 'message' => sprintf('Constructors with %s access are not exposed.', $access)];
+            }
+
             return ['code' => 'non_public_method', 'message' => sprintf('Methods with %s access are not exposed.', $access)];
         }
 
-        if ($this->isConstructor($className, $variant)) {
+        if ($isConstructor) {
+            if (($variant['is_deleted'] ?? false) === true) {
+                return ['code' => 'deleted_constructor', 'message' => 'Deleted constructors are not exposed.'];
+            }
+
             if ($this->isCopyConstructor($className, $variant)) {
                 return ['code' => 'copy_constructor_filtered', 'message' => 'Copy constructors are not exposed as PHP constructors.'];
             }
@@ -644,6 +674,24 @@ class MethodExposurePolicy
         foreach ($variant['parameters'] as $parameter) {
             $parts[] = $parameter['type'];
             $parts[] = $parameter['has_default'] ? '1' : '0';
+        }
+
+        return implode('|', $parts);
+    }
+
+    /**
+     * @param array<string, mixed> $variant
+     */
+    private function dispatchSignature(array $variant): string
+    {
+        $parts = [
+            $variant['name'],
+            (($variant['is_static'] ?? false) === true) ? 'static' : 'instance',
+        ];
+
+        foreach ($variant['parameters'] as $parameter) {
+            $parts[] = $this->typeMapper->map((string) ($parameter['type'] ?? ''));
+            $parts[] = (($parameter['has_default'] ?? false) === true) ? '1' : '0';
         }
 
         return implode('|', $parts);

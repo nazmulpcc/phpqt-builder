@@ -1191,4 +1191,140 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringContainsString('zend_throw_error(NULL, "QUninstantiableThing native instance is not initialized");', $cpp);
         self::assertStringContainsString('RETURN_THROWS();', $cpp);
     }
+
+    public function testGenerateBuildModeKeepsSupportedConstructorOverloadsWhenOneSiblingIsUnsupported(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qsizelike.h',
+            'class' => 'QSizeLike',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QSizeLike',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertContains('unsupported_parameter_type', array_column($payload['skipped_methods'], 'reason_code'));
+        self::assertContains('QSizeLike', array_column($payload['skipped_methods'], 'name'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qsizelike.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qsizelike.cpp');
+
+        self::assertStringContainsString('public function __construct(int $width = 0, int $height = 0) {}', $stub);
+        self::assertStringContainsString('int _qt_overload_index = -1;', $cpp);
+        self::assertStringContainsString('intern->native_ptr = new QSizeLike();', $cpp);
+        self::assertStringContainsString('intern->native_ptr = new QSizeLike((int)width, (int)height);', $cpp);
+        self::assertStringNotContainsString('QComplexHost::Iterator', $stub);
+    }
+
+    public function testGenerateBuildModeRetainsMethodOverloadsAndMatchesAcrossAllParameters(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qoverloadhost.h',
+            'class' => 'QOverloadHost',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QOverloadHost,QSizeLike',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qoverloadhost.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qoverloadhost.cpp');
+
+        self::assertStringContainsString('public function resize(QSizeLike|int $size, int $height = 0): void {}', $stub);
+        self::assertStringContainsString('public function setSlot(int $slot, QSizeLike|int $size): void {}', $stub);
+        self::assertStringContainsString('int _qt_overload_index = -1;', $cpp);
+        self::assertStringContainsString('intern->native_ptr->resize(*qt_qsizelike_from_obj(Z_OBJ_P(size))->native_ptr);', $cpp);
+        self::assertStringContainsString('intern->native_ptr->resize((int)Z_LVAL_P(size), (int)height);', $cpp);
+        self::assertStringContainsString('instanceof_function(Z_OBJCE_P(size), qt_ce_QSizeLike)', $cpp);
+        self::assertStringContainsString('Z_TYPE_P(size) == IS_LONG', $cpp);
+        self::assertStringContainsString('zend_throw_error(NULL, "No matching overload for QOverloadHost::setSlot().");', $cpp);
+    }
+
+    public function testGenerateBuildModeSkipsPrivateReferenceConstructorVariants(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qprivaterefconstructorthing.h',
+            'class' => 'QPrivateRefConstructorThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QPrivateRefConstructorThing,QSizeLike',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertContains('non_public_constructor', array_column($payload['skipped_methods'], 'reason_code'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qprivaterefconstructorthing.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qprivaterefconstructorthing.cpp');
+
+        self::assertStringContainsString('public function __construct() {}', $stub);
+        self::assertStringNotContainsString('QSizeLike $size', $stub);
+        self::assertStringContainsString('intern->native_ptr = new QPrivateRefConstructorThing();', $cpp);
+        self::assertStringNotContainsString('new QPrivateRefConstructorThing(*qt_qsizelike_from_obj', $cpp);
+    }
+
+    public function testGenerateBuildModeDoesNotEmitFallbackObjectForRequiredReferenceOverloadParameters(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qrefconstructorthing.h',
+            'class' => 'QRefConstructorThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QRefConstructorThing,QSizeLike',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qrefconstructorthing.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qrefconstructorthing.cpp');
+
+        self::assertStringContainsString('public function __construct(QSizeLike|null $size = null) {}', $stub);
+        self::assertStringContainsString('intern->native_ptr = new QRefConstructorThing();', $cpp);
+        self::assertStringContainsString('intern->native_ptr = new QRefConstructorThing(*qt_qsizelike_from_obj(Z_OBJ_P(size))->native_ptr);', $cpp);
+        self::assertStringNotContainsString('? *qt_qsizelike_from_obj(Z_OBJ_P(size))->native_ptr : QSizeLike()', $cpp);
+    }
 }

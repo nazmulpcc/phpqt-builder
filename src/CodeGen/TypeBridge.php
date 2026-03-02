@@ -178,6 +178,37 @@ class TypeBridge
         return str_contains($phpType, '|');
     }
 
+    /**
+     * Build a runtime type-check expression for a zval* against a PHP type.
+     */
+    public function zvalTypeMatchExpr(string $varName, string $phpType): string
+    {
+        if ($this->isUnionType($phpType)) {
+            $parts = array_values(array_filter(explode('|', $phpType), static fn(string $part): bool => $part !== ''));
+            $matches = array_map(
+                fn(string $part): string => '(' . $this->zvalTypeMatchExpr($varName, $part) . ')',
+                $parts,
+            );
+
+            return implode(' || ', $matches);
+        }
+
+        return match ($phpType) {
+            'int' => sprintf('Z_TYPE_P(%s) == IS_LONG', $varName),
+            'float' => sprintf('Z_TYPE_P(%s) == IS_DOUBLE', $varName),
+            'string' => sprintf('Z_TYPE_P(%s) == IS_STRING', $varName),
+            'bool' => sprintf('(Z_TYPE_P(%1$s) == IS_TRUE || Z_TYPE_P(%1$s) == IS_FALSE)', $varName),
+            'array' => sprintf('Z_TYPE_P(%s) == IS_ARRAY', $varName),
+            'null' => sprintf('Z_TYPE_P(%s) == IS_NULL', $varName),
+            'mixed' => 'true',
+            default => sprintf(
+                '(Z_TYPE_P(%1$s) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s), %2$s))',
+                $varName,
+                $this->ceVarName($phpType),
+            ),
+        };
+    }
+
     // ------------------------------------------------------------------
     // Zend type constants (for arginfo)
     // ------------------------------------------------------------------

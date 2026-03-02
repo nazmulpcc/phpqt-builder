@@ -64,6 +64,12 @@ class ClassGenerationService
         $classData['has_public_destructor'] = $lifecycle['has_public_destructor'];
         $classData['flag_aliases'] = $this->discoverFlagAliases($headerPath, $className);
         $classData['enum_names'] = $this->discoverEnumNames($headerPath, $className);
+        $classData['methods'] = $this->annotateConstructorVariants(
+            is_array($classData['methods'] ?? null) ? $classData['methods'] : [],
+            $headerPath,
+            $className,
+            (bool) ($classData['is_struct'] ?? false),
+        );
 
         if (($classData['is_abstract'] ?? false) === true) {
             return ClassGenerationResult::skipped(
@@ -376,6 +382,50 @@ class ClassGenerationService
     }
 
     /**
+     * @param list<array<string, mixed>> $methods
+     * @return list<array<string, mixed>>
+     */
+    private function annotateConstructorVariants(array $methods, string $headerPath, string $className, bool $isStruct): array
+    {
+        $resolved = $this->resolveClassDefinitionSource($headerPath, $className);
+        if ($resolved === null) {
+            return $methods;
+        }
+
+        $classBody = is_array($resolved['body'] ?? null) && is_string($resolved['body']['body'] ?? null)
+            ? $resolved['body']['body']
+            : null;
+        $defaultAccess = $resolved['body'] !== null && $resolved['body']['kind'] === 'struct'
+            ? 'public'
+            : ($isStruct ? 'public' : 'private');
+        $segments = $classBody !== null
+            ? $this->topLevelClassSegments($classBody, $defaultAccess)
+            : $this->lifecycleAccessBlocks($resolved['contents']);
+        $metadata = $this->constructorVariantMetadata($segments, $className);
+        if ($metadata === []) {
+            return $methods;
+        }
+
+        foreach ($methods as &$method) {
+            if (($method['name'] ?? null) !== $className) {
+                continue;
+            }
+
+            $key = $this->methodVariantKey($method);
+            $variantMetadata = $metadata[$key] ?? null;
+            if ($variantMetadata === null) {
+                continue;
+            }
+
+            $method['access'] = $variantMetadata['access'];
+            $method['is_deleted'] = $variantMetadata['is_deleted'];
+        }
+        unset($method);
+
+        return $methods;
+    }
+
+    /**
      * @return array{path: string, contents: string, body: array{kind: string, body: string}|null}|null
      */
     private function resolveClassDefinitionSource(string $headerPath, string $className): ?array
@@ -600,6 +650,247 @@ class ClassGenerationService
             static fn(mixed $value): string => is_string($value) ? trim($value) : '',
             $matches[0],
         ), static fn(string $value): bool => $value !== ''));
+    }
+
+    /**
+     * @param list<array{access: string, segment: string}> $segments
+     * @return array<string, array{access: string, is_deleted: bool}>
+     */
+    private function constructorVariantMetadata(array $segments, string $className): array
+    {
+        $metadata = [];
+
+        foreach ($segments as $segmentInfo) {
+            $access = $segmentInfo['access'];
+            $segment = $segmentInfo['segment'];
+
+            foreach ($this->constructorDeclarations($segment, $className) as $declaration) {
+                $key = $this->parameterSignatureKey($declaration['parameters']);
+                if ($key === null || isset($metadata[$key])) {
+                    continue;
+                }
+
+                $metadata[$key] = [
+                    'access' => $access,
+                    'is_deleted' => $declaration['is_deleted'],
+                ];
+            }
+        }
+
+        return $metadata;
+    }
+
+    /**
+     * @return list<array{parameters: list<string>, is_deleted: bool}>
+     */
+    private function constructorDeclarations(string $segment, string $className): array
+    {
+        $matchCount = preg_match_all(
+            '/(?<!~)\b' . preg_quote($className, '/') . '\s*\((.*?)\)\s*([^;{]*)\s*(?:;|\{)/s',
+            $segment,
+            $matches,
+            PREG_SET_ORDER,
+        );
+        if (!is_int($matchCount) || $matchCount === 0) {
+            return [];
+        }
+
+        $declarations = [];
+        foreach ($matches as $match) {
+            $parameterList = is_string($match[1] ?? null) ? $match[1] : '';
+            $suffix = is_string($match[2] ?? null) ? $match[2] : '';
+
+            $declarations[] = [
+                'parameters' => $this->normalizeParameterDeclarations($parameterList),
+                'is_deleted' => str_contains($suffix, '= delete') || str_contains($suffix, 'Q_DECL_EQ_DELETE'),
+            ];
+        }
+
+        return $declarations;
+    }
+
+    /**
+     * @param array<string, mixed> $method
+     */
+    private function methodVariantKey(array $method): ?string
+    {
+        $parameters = is_array($method['parameters'] ?? null) ? $method['parameters'] : [];
+        $types = [];
+
+        foreach ($parameters as $parameter) {
+            $type = is_string($parameter['type'] ?? null) ? $parameter['type'] : '';
+            if ($type === '') {
+                return null;
+            }
+
+            $types[] = $this->normalizeSignatureType($type);
+        }
+
+        return $this->parameterSignatureKey($types);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function normalizeParameterDeclarations(string $parameterList): array
+    {
+        $parameterList = trim($parameterList);
+        if ($parameterList === '') {
+            return [];
+        }
+
+        $parameters = [];
+        foreach ($this->splitTopLevelParameterList($parameterList) as $parameter) {
+            $parameter = $this->stripTopLevelDefaultValue($parameter);
+            $parameter = $this->stripParameterName($parameter);
+            if ($parameter === '') {
+                continue;
+            }
+
+            $parameters[] = $this->normalizeSignatureType($parameter);
+        }
+
+        return $parameters;
+    }
+
+    /**
+     * @param list<string> $types
+     */
+    private function parameterSignatureKey(array $types): ?string
+    {
+        return implode('|', $types);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function splitTopLevelParameterList(string $parameterList): array
+    {
+        $parts = [];
+        $buffer = '';
+        $angleDepth = 0;
+        $parenDepth = 0;
+        $braceDepth = 0;
+        $bracketDepth = 0;
+        $length = strlen($parameterList);
+
+        for ($index = 0; $index < $length; $index++) {
+            $char = $parameterList[$index];
+
+            switch ($char) {
+                case '<':
+                    $angleDepth++;
+                    break;
+                case '>':
+                    $angleDepth = max(0, $angleDepth - 1);
+                    break;
+                case '(':
+                    $parenDepth++;
+                    break;
+                case ')':
+                    $parenDepth = max(0, $parenDepth - 1);
+                    break;
+                case '{':
+                    $braceDepth++;
+                    break;
+                case '}':
+                    $braceDepth = max(0, $braceDepth - 1);
+                    break;
+                case '[':
+                    $bracketDepth++;
+                    break;
+                case ']':
+                    $bracketDepth = max(0, $bracketDepth - 1);
+                    break;
+                case ',':
+                    if ($angleDepth === 0 && $parenDepth === 0 && $braceDepth === 0 && $bracketDepth === 0) {
+                        $trimmed = trim($buffer);
+                        if ($trimmed !== '') {
+                            $parts[] = $trimmed;
+                        }
+                        $buffer = '';
+                        continue 2;
+                    }
+                    break;
+            }
+
+            $buffer .= $char;
+        }
+
+        $trimmed = trim($buffer);
+        if ($trimmed !== '') {
+            $parts[] = $trimmed;
+        }
+
+        return $parts;
+    }
+
+    private function stripTopLevelDefaultValue(string $parameter): string
+    {
+        $angleDepth = 0;
+        $parenDepth = 0;
+        $braceDepth = 0;
+        $bracketDepth = 0;
+        $length = strlen($parameter);
+
+        for ($index = 0; $index < $length; $index++) {
+            $char = $parameter[$index];
+
+            switch ($char) {
+                case '<':
+                    $angleDepth++;
+                    break;
+                case '>':
+                    $angleDepth = max(0, $angleDepth - 1);
+                    break;
+                case '(':
+                    $parenDepth++;
+                    break;
+                case ')':
+                    $parenDepth = max(0, $parenDepth - 1);
+                    break;
+                case '{':
+                    $braceDepth++;
+                    break;
+                case '}':
+                    $braceDepth = max(0, $braceDepth - 1);
+                    break;
+                case '[':
+                    $bracketDepth++;
+                    break;
+                case ']':
+                    $bracketDepth = max(0, $bracketDepth - 1);
+                    break;
+                case '=':
+                    if ($angleDepth === 0 && $parenDepth === 0 && $braceDepth === 0 && $bracketDepth === 0) {
+                        return trim(substr($parameter, 0, $index));
+                    }
+                    break;
+            }
+        }
+
+        return trim($parameter);
+    }
+
+    private function stripParameterName(string $parameter): string
+    {
+        if (preg_match('/^(.*(?:\*|&|&&))([A-Za-z_][A-Za-z0-9_]*)$/', $parameter, $matches) === 1) {
+            return trim((string) $matches[1]);
+        }
+
+        if (preg_match('/^(.*\S)\s+([A-Za-z_][A-Za-z0-9_]*)$/', $parameter, $matches) !== 1) {
+            return trim($parameter);
+        }
+
+        return trim((string) $matches[1]);
+    }
+
+    private function normalizeSignatureType(string $type): string
+    {
+        $normalized = trim(preg_replace('/\s+/', ' ', trim($type)) ?? trim($type));
+        $normalized = preg_replace('/\s*([*&])\s*/', '$1', $normalized) ?? $normalized;
+
+        return $normalized;
     }
 
     private function containsDestructorSignature(string $segment, string $className): bool
