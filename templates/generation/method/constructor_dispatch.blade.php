@@ -20,11 +20,11 @@
     {!! $first ? 'if' : '} else if' !!} (_argc == {!! $paramCount !!}) {
 @if(count($overloadsInGroup) === 1)
 @php $ol = $overloadsInGroup[0]['overload']; @endphp
-        intern->native_ptr = new {!! $ctx->nativeCppType !!}(@foreach($ol->params as $i => $op)@php
-    $mergedParam = $method->params[$i] ?? null;
-    $varName = $mergedParam ? $mergedParam->cVarName : $op->name;
-    $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName, false, $mergedParam?->isOptional ?? false);
-@endphp{!! $expr !!}@if(!$loop->last), @endif @endforeach);
+@php $callPlan = $method->callPlan($ctx, $ol, true); @endphp
+@foreach($callPlan['setup_lines'] as $line)
+        {!! $line !!}
+@endforeach
+        intern->native_ptr = new {!! $ctx->nativeCppType !!}({!! implode(', ', $callPlan['args']) !!});
 @else
 @php $innerFirst = true; @endphp
 @foreach($overloadsInGroup as $entry)
@@ -39,11 +39,11 @@
 @else
         {!! $innerFirst ? 'if' : '} else if' !!} (Z_TYPE_P({!! $mergedParam->cVarName !!}) == IS_OBJECT && instanceof_function(Z_OBJCE_P({!! $mergedParam->cVarName !!}), {!! $ctx->typeBridge->ceVarName($firstParam->phpType) !!})) {
 @endif
-            intern->native_ptr = new {!! $ctx->nativeCppType !!}(@foreach($ol->params as $i => $op)@php
-    $mergedParam2 = $method->params[$i] ?? null;
-    $varName = $mergedParam2 ? $mergedParam2->cVarName : $op->name;
-    $expr = $ctx->typeBridge->phpToNativeExpr($op->phpType, $op->cppType, $varName, false, $mergedParam2?->isOptional ?? false);
-@endphp{!! $expr !!}@if(!$loop->last), @endif @endforeach);
+@php $callPlan = $method->callPlan($ctx, $ol, true); @endphp
+@foreach($callPlan['setup_lines'] as $line)
+            {!! $line !!}
+@endforeach
+            intern->native_ptr = new {!! $ctx->nativeCppType !!}({!! implode(', ', $callPlan['args']) !!});
 @php $innerFirst = false; @endphp
 @endif
 @endforeach

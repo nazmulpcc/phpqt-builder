@@ -18,18 +18,15 @@ $isValueType = $ctx->typeBridge->isValueType($returnClass);
 $callPrefix = $method->isStatic
     ? "{$ctx->nativeCppType}::"
     : "intern->native_ptr->";
+$callPlan = $method->callPlan($ctx, $overload);
 @endphp
 @if($method->hasNoParams())
 @php $callExpr = "{$callPrefix}{$method->cppName}()"; @endphp
 @else
-@php
-    $args = [];
-    foreach ($method->params as $i => $param) {
-        $cppType = $overload && isset($overload->params[$i]) ? $overload->params[$i]->cppType : '';
-        $args[] = $ctx->typeBridge->phpToNativeExpr($param->phpType, $cppType, $param->cVarName, false, $param->isOptional);
-    }
-    $callExpr = "{$callPrefix}{$method->cppName}(" . implode(', ', $args) . ')';
-@endphp
+@foreach($callPlan['setup_lines'] as $line)
+    {!! $line !!}
+@endforeach
+@php $callExpr = "{$callPrefix}{$method->cppName}(" . implode(', ', $callPlan['args']) . ')'; @endphp
 @endif
     {!! $resultDeclType !!} _result = {!! $callExpr !!};
 @if($isValueType)

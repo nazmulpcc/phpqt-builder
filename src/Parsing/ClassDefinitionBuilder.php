@@ -173,13 +173,22 @@ class ClassDefinitionBuilder
      */
     private function buildOverload(array $variant): MethodOverload
     {
+        $parameters = $this->normalizeWritableParameterDefaults($variant['parameters']);
         $params = array_map(
-            static fn(array $p): OverloadParameter => new OverloadParameter(
-                name: $p['name'],
-                cppType: $p['type'],
-                hasDefault: $p['has_default'],
-            ),
-            $variant['parameters'],
+            function (array $p): OverloadParameter {
+                $metadata = $this->analyzeCppParameterType((string) ($p['type'] ?? ''));
+
+                return new OverloadParameter(
+                    name: (string) ($p['name'] ?? ''),
+                    cppType: (string) ($p['type'] ?? ''),
+                    hasDefault: (bool) ($p['has_default'] ?? false),
+                    isReference: $metadata['is_reference'],
+                    isConstReference: $metadata['is_const_reference'],
+                    isNonConstReference: $metadata['is_non_const_reference'],
+                    pointerDepth: $metadata['pointer_depth'],
+                );
+            },
+            $parameters,
         );
 
         return new MethodOverload(
@@ -239,7 +248,7 @@ class ClassDefinitionBuilder
         $minParams = PHP_INT_MAX;
 
         foreach ($variants as $v) {
-            $count = \count($v['parameters']);
+            $count = \count($this->normalizeWritableParameterDefaults($v['parameters']));
             $maxParams = max($maxParams, $count);
             $minParams = min($minParams, $count);
         }
@@ -258,7 +267,7 @@ class ClassDefinitionBuilder
             $someVariantsShorter = false;
 
             foreach ($variants as $v) {
-                $params = $v['parameters'];
+                $params = $this->normalizeWritableParameterDefaults($v['parameters']);
 
                 if ($i >= \count($params)) {
                     $someVariantsShorter = true;
@@ -292,6 +301,60 @@ class ClassDefinitionBuilder
         }
 
         return $parameters;
+    }
+
+    /**
+     * @param list<array{name: string, type: string, has_default: bool}> $parameters
+     * @return list<array{name: string, type: string, has_default: bool}>
+     */
+    private function normalizeWritableParameterDefaults(array $parameters): array
+    {
+        $normalized = array_values($parameters);
+        $count = \count($normalized);
+
+        for ($i = 0; $i < $count - 1; $i++) {
+            $currentType = (string) ($normalized[$i]['type'] ?? '');
+            $nextType = (string) ($normalized[$i + 1]['type'] ?? '');
+
+            if (!$this->isWritableArgcType($currentType) || !$this->isCharPointerArrayType($nextType)) {
+                continue;
+            }
+
+            $normalized[$i]['has_default'] = true;
+            $normalized[$i + 1]['has_default'] = true;
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * @return array{is_reference: bool, is_const_reference: bool, is_non_const_reference: bool, pointer_depth: int}
+     */
+    private function analyzeCppParameterType(string $cppType): array
+    {
+        $normalized = trim($cppType);
+        $isReference = str_contains($normalized, '&');
+        $isConstReference = $isReference && preg_match('/^\s*const\b/', $normalized) === 1;
+
+        return [
+            'is_reference' => $isReference,
+            'is_const_reference' => $isConstReference,
+            'is_non_const_reference' => $isReference && !$isConstReference,
+            'pointer_depth' => substr_count($normalized, '*'),
+        ];
+    }
+
+    private function isWritableArgcType(string $cppType): bool
+    {
+        return preg_match('/^\s*int\s*&\s*$/', trim($cppType)) === 1;
+    }
+
+    private function isCharPointerArrayType(string $cppType): bool
+    {
+        $normalized = preg_replace('/\bconst\b/', '', $cppType) ?? $cppType;
+        $normalized = trim(preg_replace('/\s+/', ' ', $normalized) ?? $normalized);
+
+        return preg_match('/^char\s*\*\s*\*$/', $normalized) === 1;
     }
 
     /**

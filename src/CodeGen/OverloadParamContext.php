@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace QtBuilder\CodeGen;
 
 use QtBuilder\Definition\OverloadParameter;
+use QtBuilder\Parsing\CppToPhpTypeMapper;
 
 /**
  * Template context for a single C++ overload parameter.
@@ -23,6 +24,21 @@ class OverloadParamContext
     /** PHP type this maps to */
     public readonly string $phpType;
 
+    /** Whether this parameter is a reference in C++ */
+    public readonly bool $isReference;
+
+    /** Whether this parameter is a const reference in C++ */
+    public readonly bool $isConstReference;
+
+    /** Whether this parameter is a writable reference in C++ */
+    public readonly bool $isNonConstReference;
+
+    /** Raw pointer depth from the original C++ type */
+    public readonly int $pointerDepth;
+
+    /** Whether this parameter uses the char** argv bridge */
+    public readonly bool $isCharPointerArray;
+
     public function __construct(
         OverloadParameter $param,
         TypeBridge $typeBridge,
@@ -30,36 +46,13 @@ class OverloadParamContext
         $this->name = $param->name !== '' ? $param->name : 'p' . spl_object_id($param);
         $this->cppType = $param->cppType;
         $this->hasDefault = $param->hasDefault;
+        $this->isReference = $param->isReference;
+        $this->isConstReference = $param->isConstReference;
+        $this->isNonConstReference = $param->isNonConstReference;
+        $this->pointerDepth = $param->pointerDepth;
 
-        // Quick mapping for dispatch logic
-        $this->phpType = $this->mapType($param->cppType, $typeBridge);
-    }
-
-    private function mapType(string $cppType, TypeBridge $typeBridge): string
-    {
-        $normalized = trim($cppType);
-
-        if (str_starts_with($normalized, 'const ')) {
-            $normalized = substr($normalized, 6);
-        }
-        $normalized = rtrim(rtrim($normalized, '&'));
-        if (str_ends_with($normalized, ' *') && !str_contains($normalized, '<')) {
-            $normalized = rtrim(rtrim($normalized, '*'));
-        }
-        $normalized = trim($normalized);
-
-        if ($typeBridge->isScalarType($normalized)) {
-            return $normalized;
-        }
-
-        if (\in_array($normalized, ['QString', 'QByteArray', 'QLatin1String', 'char'], true)) {
-            return 'string';
-        }
-
-        if ($normalized !== '' && ctype_upper($normalized[0])) {
-            return $normalized;
-        }
-
-        return 'mixed';
+        $mapper = new CppToPhpTypeMapper();
+        $this->phpType = $mapper->map($param->cppType);
+        $this->isCharPointerArray = $this->phpType === 'array' && $param->pointerDepth >= 2;
     }
 }

@@ -560,11 +560,50 @@ final class GenerateCommandBuildModeTest extends TestCase
 
         $refPayload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
         self::assertSame('ok', $refPayload['status']);
-        self::assertContains('swap', array_column($refPayload['skipped_methods'], 'name'));
-        self::assertContains('unsupported_reference_parameter', array_column($refPayload['skipped_methods'], 'reason_code'));
 
+        $refStub = (string) file_get_contents($refOutputDir . '/classes/qt_qrefholder.stub.php');
         $refCpp = (string) file_get_contents($refOutputDir . '/classes/qt_qrefholder.cpp');
-        self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QRefHolder, swap)', $refCpp);
+
+        self::assertStringContainsString('public function swap(string $other): void {}', $refStub);
+        self::assertStringContainsString('ZEND_METHOD(Qt_Core_QRefHolder, swap)', $refCpp);
+        self::assertStringContainsString('QByteArray _qt_arg_0 = QByteArray(ZSTR_VAL(other), ZSTR_LEN(other));', $refCpp);
+        self::assertStringNotContainsString('&$other', $refStub);
+    }
+
+    public function testGenerateBuildModeBuildsInputOnlyArgvConstructorBridge(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qargvholder.h',
+            'class' => 'QArgvHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QArgvHolder',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+
+        $header = (string) file_get_contents($outputDir . '/classes/qt_qargvholder.h');
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qargvholder.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qargvholder.cpp');
+
+        self::assertStringContainsString('std::vector<QByteArray> argv_storage;', $header);
+        self::assertStringContainsString('std::vector<char *> argv_pointers;', $header);
+        self::assertStringContainsString('public function __construct(int $argc = 0, array $argv = [], int $flags = 0) {}', $stub);
+        self::assertStringContainsString('new (&intern->argv_storage) std::vector<QByteArray>();', $cpp);
+        self::assertStringContainsString('char ** _qt_arg_1 = NULL;', $cpp);
+        self::assertStringContainsString('intern->argv_storage.emplace_back("php", 3);', $cpp);
+        self::assertStringContainsString('_qt_arg_0 = (int)intern->argv_storage.size();', $cpp);
     }
 
     public function testGenerateBuildModeSkipsNestedResultTypesButKeepsNestedEnums(): void

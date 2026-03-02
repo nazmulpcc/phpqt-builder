@@ -74,6 +74,9 @@ class ClassContext
     /** Whether the struct has a prevent_destroy field */
     public readonly bool $hasPreventDestroy;
 
+    /** Whether the generated object wrapper needs persistent argv backing storage */
+    public readonly bool $needsArgvStorage;
+
     /** Qt include directive (e.g. "<QWidget>") */
     public readonly string $qtInclude;
 
@@ -171,6 +174,7 @@ class ClassContext
             $methods[] = new MethodContext($method, $this, $typeBridge);
         }
         $this->methods = $methods;
+        $this->needsArgvStorage = $this->computeNeedsArgvStorage($methods);
 
         // Build property contexts
         $properties = [];
@@ -279,5 +283,23 @@ class ClassContext
                 $classes[$part] = true;
             }
         }
+    }
+
+    /**
+     * @param list<MethodContext> $methods
+     */
+    private function computeNeedsArgvStorage(array $methods): bool
+    {
+        foreach ($methods as $method) {
+            foreach ($method->overloads as $overload) {
+                foreach ($overload->params as $param) {
+                    if ($param->isCharPointerArray) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
     }
 }

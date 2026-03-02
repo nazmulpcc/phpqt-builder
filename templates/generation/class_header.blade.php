@@ -18,6 +18,10 @@
 #include "php.h"
 #include "zend_exceptions.h"
 #include {!! $ctx->qtInclude !!}
+@if($ctx->needsArgvStorage)
+#include <vector>
+#include <QByteArray>
+@endif
 
 #ifndef PHP_QT_API
 #define PHP_QT_API
@@ -31,6 +35,10 @@ typedef struct _{!! $ctx->objectStructName !!} {
     {!! $ctx->nativeCppType !!} *native_ptr;
 @if($ctx->hasPreventDestroy)
     bool prevent_destroy;
+@endif
+@if($ctx->needsArgvStorage)
+    std::vector<QByteArray> argv_storage;
+    std::vector<char *> argv_pointers;
 @endif
     zend_object std; /* MUST be last */
 } {!! $ctx->objectStructName !!};

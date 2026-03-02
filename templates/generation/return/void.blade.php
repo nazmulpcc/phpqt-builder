@@ -9,12 +9,13 @@ $overload = $method->overloads[0] ?? null;
 $callPrefix = $method->isStatic
     ? "{$ctx->nativeCppType}::"
     : "intern->native_ptr->";
+$callPlan = $method->callPlan($ctx, $overload);
 @endphp
 @if($method->hasNoParams())
     {!! $callPrefix !!}{!! $method->cppName !!}();
 @else
-    {!! $callPrefix !!}{!! $method->cppName !!}(@foreach($method->params as $i => $param)@php
-    $cppType = $overload && isset($overload->params[$i]) ? $overload->params[$i]->cppType : '';
-    $expr = $ctx->typeBridge->phpToNativeExpr($param->phpType, $cppType, $param->cVarName, false, $param->isOptional);
-@endphp{!! $expr !!}@if(!$loop->last), @endif @endforeach);
+@foreach($callPlan['setup_lines'] as $line)
+    {!! $line !!}
+@endforeach
+    {!! $callPrefix !!}{!! $method->cppName !!}({!! implode(', ', $callPlan['args']) !!});
 @endif

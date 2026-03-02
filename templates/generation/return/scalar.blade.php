@@ -9,6 +9,7 @@ $overload = $method->overloads[0] ?? null;
 $callPrefix = $method->isStatic
     ? "{$ctx->nativeCppType}::"
     : "intern->native_ptr->";
+$callPlan = $method->callPlan($ctx, $overload);
 $callExpr = $method->hasNoParams()
     ? "{$callPrefix}{$method->cppName}()"
     : "{$callPrefix}{$method->cppName}(";
@@ -20,13 +21,11 @@ $callExpr = $method->hasNoParams()
 @endphp
     {!! $method->returnMacro !!}({!! $returnExpr !!});
 @else
-@php ob_start(); @endphp
-{!! $callExpr !!}@foreach($method->params as $i => $param)@php
-    $cppType = $overload && isset($overload->params[$i]) ? $overload->params[$i]->cppType : '';
-    $expr = $ctx->typeBridge->phpToNativeExpr($param->phpType, $cppType, $param->cVarName, false, $param->isOptional);
-@endphp{!! $expr !!}@if(!$loop->last), @endif @endforeach)
+@foreach($callPlan['setup_lines'] as $line)
+    {!! $line !!}
+@endforeach
 @php
-    $callExpr = trim(ob_get_clean() ?: '');
+    $callExpr = "{$callPrefix}{$method->cppName}(" . implode(', ', $callPlan['args']) . ')';
     $cppReturnType = $overload?->cppReturnType ?? $method->returnType;
     $returnExpr = $ctx->typeBridge->nativeScalarToPhpExpr($method->returnType, $cppReturnType, $callExpr);
 @endphp

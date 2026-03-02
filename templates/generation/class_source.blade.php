@@ -12,6 +12,7 @@
 #include "{!! $ctx->filePrefix !!}_arginfo.h"
 #include <chrono>
 #include <filesystem>
+#include <new>
 #include <string>
 #include <QString>
 #include <QByteArray>
@@ -42,6 +43,10 @@ static zend_object *{!! $ctx->filePrefix !!}_create_object(zend_class_entry *ce)
 @if($ctx->hasPreventDestroy)
     intern->prevent_destroy = false;
 @endif
+@if($ctx->needsArgvStorage)
+    new (&intern->argv_storage) std::vector<QByteArray>();
+    new (&intern->argv_pointers) std::vector<char *>();
+@endif
 
     zend_object_std_init(&intern->std, ce);
     object_properties_init(&intern->std, ce);
@@ -71,6 +76,10 @@ static void {!! $ctx->filePrefix !!}_free_object(zend_object *object)
 @endif
 @endif
     intern->native_ptr = NULL;
+@if($ctx->needsArgvStorage)
+    intern->argv_pointers.~vector();
+    intern->argv_storage.~vector();
+@endif
 
     zend_object_std_dtor(&intern->std);
 }

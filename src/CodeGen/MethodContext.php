@@ -158,6 +158,66 @@ class MethodContext
     }
 
     /**
+     * @return array{setup_lines: list<string>, args: list<string>}
+     */
+    public function callPlan(
+        ClassContext $classCtx,
+        ?OverloadContext $overload = null,
+        bool $persistentArgv = false,
+    ): array {
+        $overload ??= $this->overloads[0] ?? null;
+        if ($overload === null) {
+            return ['setup_lines' => [], 'args' => []];
+        }
+
+        $setupLines = [];
+        $args = [];
+        /** @var array<int, string|null> $localVarNames */
+        $localVarNames = [];
+
+        foreach ($overload->params as $i => $param) {
+            $mergedParam = $this->params[$i] ?? null;
+            $sourceVarName = $mergedParam?->cVarName ?? $param->name;
+            $sourceIsZval = $mergedParam?->isParsedAsZval ?? false;
+            $nullable = $mergedParam?->isOptional ?? false;
+            $pairedCountVarName = null;
+
+            if (
+                $param->isCharPointerArray
+                && $i > 0
+                && isset($overload->params[$i - 1])
+                && $overload->params[$i - 1]->isNonConstReference
+                && $overload->params[$i - 1]->phpType === 'int'
+            ) {
+                $pairedCountVarName = $localVarNames[$i - 1] ?? null;
+            }
+
+            $setup = $classCtx->typeBridge->nativeArgumentSetup(
+                phpType: $param->phpType,
+                cppType: $param->cppType,
+                sourceVarName: $sourceVarName,
+                nativeVarName: sprintf('_qt_arg_%d', $i),
+                sourceIsZval: $sourceIsZval,
+                nullable: $nullable,
+                persistentStorageVar: $persistentArgv ? 'intern' : null,
+                pairedCountVarName: $pairedCountVarName,
+            );
+
+            foreach ($setup['lines'] as $line) {
+                $setupLines[] = $line;
+            }
+
+            $args[] = $setup['expr'];
+            $localVarNames[$i] = $setup['local_var'];
+        }
+
+        return [
+            'setup_lines' => $setupLines,
+            'args' => $args,
+        ];
+    }
+
+    /**
      * Extract the "primary" return type from a potential union type.
      * For template selection, we use the first type in the union.
      * The actual dispatch handles the full union.

@@ -40,7 +40,11 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
 @elseif($method->isOverloaded)
 @include('generation.method.constructor_dispatch', ['ctx' => $ctx, 'method' => $method])
 @else
-    intern->native_ptr = new {!! $ctx->nativeCppType !!}(@foreach($method->params as $i => $param){!! $ctx->typeBridge->phpToNativeExpr($param->phpType, $method->overloads[0]->params[$i]->cppType ?? '', $param->cVarName, false, $param->isOptional) !!}@if(!$loop->last), @endif @endforeach);
+@php $callPlan = $method->callPlan($ctx, $method->overloads[0] ?? null, true); @endphp
+@foreach($callPlan['setup_lines'] as $line)
+    {!! $line !!}
+@endforeach
+    intern->native_ptr = new {!! $ctx->nativeCppType !!}({!! implode(', ', $callPlan['args']) !!});
 @if($ctx->hasPreventDestroy)
 @foreach($method->params as $param)
 @if($param->isObject && !$param->isUnion)

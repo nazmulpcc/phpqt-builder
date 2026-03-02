@@ -47,6 +47,9 @@ class ParamContext
     /** For object types: the CE variable name (e.g. "qt_ce_QPoint") or null */
     public readonly ?string $ceVarName;
 
+    /** Whether this parameter is parsed through a zval* slot */
+    public readonly bool $isParsedAsZval;
+
     public function __construct(
         PhpParameter $param,
         ClassContext $classCtx,
@@ -72,6 +75,7 @@ class ParamContext
         if ($this->isUnion || $this->isObject) {
             $this->cVarType = 'zval *';
             $this->cDefault = 'NULL';
+            $this->isParsedAsZval = true;
             $this->ceVarName = $this->isObject && !$this->isUnion
                 ? $typeBridge->ceVarName($primaryType)
                 : null;
@@ -83,6 +87,7 @@ class ParamContext
         } else {
             $this->cVarType = $typeBridge->cVarType($primaryType);
             $this->cDefault = $typeBridge->cDefaultValue($primaryType);
+            $this->isParsedAsZval = $this->cVarType === 'zval *';
             $this->ceVarName = null;
             $this->zppMacro = $typeBridge->zppMacro($primaryType, $this->cVarName);
         }

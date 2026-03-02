@@ -503,6 +503,58 @@ class TypeBridge
     // ------------------------------------------------------------------
 
     /**
+     * Prepare the C++ setup needed to pass a PHP argument into a native call.
+     *
+     * Non-const references are treated as input-only: mutable locals are
+     * materialized for the call, and native mutations are not written back to PHP.
+     *
+     * @return array{lines: list<string>, expr: string, local_var: ?string}
+     */
+    public function nativeArgumentSetup(
+        string $phpType,
+        string $cppType,
+        string $sourceVarName,
+        string $nativeVarName,
+        bool $sourceIsZval = false,
+        bool $nullable = false,
+        ?string $persistentStorageVar = null,
+        ?string $pairedCountVarName = null,
+    ): array {
+        if ($phpType === 'array' && $this->isCharPointerArrayType($cppType)) {
+            return [
+                'lines' => [$this->charPointerArraySetupBlock(
+                    sourceVarName: $sourceVarName,
+                    nativeVarName: $nativeVarName,
+                    persistentStorageVar: $persistentStorageVar,
+                    pairedCountVarName: $pairedCountVarName,
+                )],
+                'expr' => $nativeVarName,
+                'local_var' => $nativeVarName,
+            ];
+        }
+
+        if ($this->isNonConstReferenceType($cppType) && $this->shouldMaterializeReferenceLocal($phpType, $cppType)) {
+            $initExpr = $sourceIsZval
+                ? $this->zvalToNativeExpr($phpType, $cppType, $sourceVarName, $nullable)
+                : $this->directPhpToNativeExpr($phpType, $cppType, $sourceVarName, $nullable);
+
+            return [
+                'lines' => [sprintf('%s %s = %s;', $this->localValueType($phpType, $cppType), $nativeVarName, $initExpr)],
+                'expr' => $nativeVarName,
+                'local_var' => $nativeVarName,
+            ];
+        }
+
+        return [
+            'lines' => [],
+            'expr' => $sourceIsZval
+                ? $this->zvalToNativeExpr($phpType, $cppType, $sourceVarName, $nullable)
+                : $this->directPhpToNativeExpr($phpType, $cppType, $sourceVarName, $nullable),
+            'local_var' => null,
+        ];
+    }
+
+    /**
      * Generate a C++ expression that converts a C (ZPP-parsed) variable
      * to the C++ type needed by the Qt method call.
      *
@@ -520,21 +572,11 @@ class TypeBridge
         bool $nullable = false,
     ): string
     {
-        // If the variable is a zval* but the overload expects a scalar,
-        // we need to extract the value from the zval first.
         if ($varIsZval) {
             return $this->zvalToNativeExpr($phpType, $cppType, $varName, $nullable);
         }
 
-        return match ($phpType) {
-            'int' => $this->phpIntToNativeExpr($cppType, $varName),
-            'float' => sprintf('(%s)%s', $this->cppCastType($cppType), $varName),
-            'bool' => $varName,
-            'string' => $this->phpStringToNativeExpr($cppType, $varName),
-            default => $this->isObjectType($phpType)
-                ? $this->phpObjectToNativeExpr($phpType, $cppType, $varName, $nullable)
-                : $varName,
-        };
+        return $this->directPhpToNativeExpr($phpType, $cppType, $varName, $nullable);
     }
 
     /**
@@ -556,6 +598,19 @@ class TypeBridge
             'float' => sprintf('(%s)Z_DVAL_P(%s)', $this->cppCastType($cppType), $varName),
             'bool' => sprintf('Z_TYPE_P(%s) == IS_TRUE', $varName),
             'string' => $this->phpStringToNativeExpr($cppType, sprintf('Z_STR_P(%s)', $varName)),
+            default => $this->isObjectType($phpType)
+                ? $this->phpObjectToNativeExpr($phpType, $cppType, $varName, $nullable)
+                : $varName,
+        };
+    }
+
+    private function directPhpToNativeExpr(string $phpType, string $cppType, string $varName, bool $nullable = false): string
+    {
+        return match ($phpType) {
+            'int' => $this->phpIntToNativeExpr($cppType, $varName),
+            'float' => sprintf('(%s)%s', $this->cppCastType($cppType), $varName),
+            'bool' => $varName,
+            'string' => $this->phpStringToNativeExpr($cppType, $varName),
             default => $this->isObjectType($phpType)
                 ? $this->phpObjectToNativeExpr($phpType, $cppType, $varName, $nullable)
                 : $varName,
@@ -920,6 +975,91 @@ class TypeBridge
     private function isPointerType(string $cppType): bool
     {
         return str_contains($cppType, '*');
+    }
+
+    private function isNonConstReferenceType(string $cppType): bool
+    {
+        $trimmed = trim($cppType);
+
+        return str_contains($trimmed, '&') && preg_match('/^\s*const\b/', $trimmed) !== 1;
+    }
+
+    private function isCharPointerArrayType(string $cppType): bool
+    {
+        $normalized = preg_replace('/\bconst\b/', '', $cppType) ?? $cppType;
+        $normalized = trim(preg_replace('/\s+/', ' ', $normalized) ?? $normalized);
+
+        return preg_match('/^char\s*\*\s*\*$/', $normalized) === 1;
+    }
+
+    private function shouldMaterializeReferenceLocal(string $phpType, string $cppType): bool
+    {
+        if ($phpType === 'array') {
+            return false;
+        }
+
+        if (!$this->isObjectType($phpType)) {
+            return true;
+        }
+
+        return $this->isValueType($this->normalizeCppType($cppType));
+    }
+
+    private function localValueType(string $phpType, string $cppType): string
+    {
+        return match ($phpType) {
+            'int', 'float' => $this->cppCastType($cppType),
+            'bool' => 'bool',
+            default => $this->normalizeCppType($cppType),
+        };
+    }
+
+    private function charPointerArraySetupBlock(
+        string $sourceVarName,
+        string $nativeVarName,
+        ?string $persistentStorageVar = null,
+        ?string $pairedCountVarName = null,
+    ): string {
+        $storageExpr = $persistentStorageVar !== null
+            ? $persistentStorageVar . '->argv_storage'
+            : $nativeVarName . '_storage';
+        $pointersExpr = $persistentStorageVar !== null
+            ? $persistentStorageVar . '->argv_pointers'
+            : $nativeVarName . '_pointers';
+        $lines = [];
+
+        if ($persistentStorageVar === null) {
+            $lines[] = sprintf('std::vector<QByteArray> %s;', $storageExpr);
+            $lines[] = sprintf('std::vector<char *> %s;', $pointersExpr);
+        }
+
+        $lines[] = sprintf('char ** %s = NULL;', $nativeVarName);
+        $lines[] = sprintf('%s.clear();', $storageExpr);
+        $lines[] = sprintf('%s.clear();', $pointersExpr);
+        $lines[] = sprintf('if (%s != NULL) {', $sourceVarName);
+        $lines[] = sprintf('    HashTable *%s_ht = Z_ARRVAL_P(%s);', $nativeVarName, $sourceVarName);
+        $lines[] = sprintf('    zval *%s_entry;', $nativeVarName);
+        $lines[] = sprintf('    ZEND_HASH_FOREACH_VAL(%s_ht, %s_entry) {', $nativeVarName, $nativeVarName);
+        $lines[] = sprintf('        zend_string *%s_str = zval_get_string(%s_entry);', $nativeVarName, $nativeVarName);
+        $lines[] = sprintf('        %s.emplace_back(ZSTR_VAL(%s_str), (int)ZSTR_LEN(%s_str));', $storageExpr, $nativeVarName, $nativeVarName);
+        $lines[] = sprintf('        zend_string_release(%s_str);', $nativeVarName);
+        $lines[] = '    } ZEND_HASH_FOREACH_END();';
+        $lines[] = '}';
+        $lines[] = sprintf('if (%s.empty()) {', $storageExpr);
+        $lines[] = sprintf('    %s.emplace_back("php", 3);', $storageExpr);
+        $lines[] = '}';
+        $lines[] = sprintf('%s.reserve(%s.size() + 1);', $pointersExpr, $storageExpr);
+        $lines[] = sprintf('for (QByteArray &%s_item : %s) {', $nativeVarName, $storageExpr);
+        $lines[] = sprintf('    %s.push_back(%s_item.data());', $pointersExpr, $nativeVarName);
+        $lines[] = '}';
+        $lines[] = sprintf('%s.push_back(NULL);', $pointersExpr);
+        $lines[] = sprintf('%s = %s.data();', $nativeVarName, $pointersExpr);
+
+        if ($pairedCountVarName !== null) {
+            $lines[] = sprintf('%s = (int)%s.size();', $pairedCountVarName, $storageExpr);
+        }
+
+        return implode("\n    ", $lines);
     }
 
     private function isChronoDurationType(string $cppType): bool

@@ -244,9 +244,6 @@ class MethodExposurePolicy
 
         foreach ($variant['parameters'] as $parameter) {
             $type = (string) $parameter['type'];
-            if ($this->isUnsupportedReferenceParameter($type)) {
-                return ['code' => 'unsupported_reference_parameter', 'message' => sprintf('Parameter type %s is a non-const reference.', $type)];
-            }
             if ($this->isUnsupportedOutParameter($type, $className, $flagAliases, $enumNames)) {
                 return ['code' => 'unsupported_output_parameter', 'message' => sprintf('Parameter type %s looks like an output parameter.', $type)];
             }
@@ -326,17 +323,14 @@ class MethodExposurePolicy
         return str_contains($trimmed, '&') && !str_starts_with($trimmed, 'const ');
     }
 
-    private function isUnsupportedReferenceParameter(string $cppType): bool
-    {
-        $trimmed = trim($cppType);
-
-        return str_contains($trimmed, '&') && !str_starts_with($trimmed, 'const ');
-    }
-
     private function isUnsupportedOutParameter(string $cppType, string $className, array $flagAliases = [], array $enumNames = []): bool
     {
         $trimmed = trim($cppType);
         if (!str_contains($trimmed, '*') || str_starts_with($trimmed, 'const ')) {
+            return false;
+        }
+
+        if ($this->isSupportedArrayType($trimmed)) {
             return false;
         }
 
@@ -401,7 +395,11 @@ class MethodExposurePolicy
             return true;
         }
 
-        if (in_array($phpType, ['array', 'mixed'], true)) {
+        if ($phpType === 'array') {
+            return $this->isSupportedArrayType($trimmed);
+        }
+
+        if ($phpType === 'mixed') {
             return false;
         }
 
@@ -565,6 +563,14 @@ class MethodExposurePolicy
         $phpType = $this->typeMapper->map($cppType);
 
         return in_array($phpType, ['int', 'float', 'bool'], true);
+    }
+
+    private function isSupportedArrayType(string $cppType): bool
+    {
+        $normalized = preg_replace('/\bconst\b/', '', $cppType) ?? $cppType;
+        $normalized = trim(preg_replace('/\s+/', ' ', $normalized) ?? $normalized);
+
+        return preg_match('/^char\s*\*\s*\*$/', $normalized) === 1;
     }
 
     private function isKnownQualifiedScalarType(string $cppType): bool

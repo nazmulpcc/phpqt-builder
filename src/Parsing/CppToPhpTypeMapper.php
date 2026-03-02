@@ -92,6 +92,12 @@ class CppToPhpTypeMapper
      */
     public function map(string $cppType): string
     {
+        $trimmed = trim($cppType);
+
+        if ($this->isCharPointerArrayType($trimmed)) {
+            return 'array';
+        }
+
         $normalized = $this->normalize($cppType);
 
         // Direct scalar match
@@ -159,6 +165,14 @@ class CppToPhpTypeMapper
         }
 
         return 'mixed';
+    }
+
+    private function isCharPointerArrayType(string $cppType): bool
+    {
+        $normalized = preg_replace('/\bconst\b/', '', $cppType) ?? $cppType;
+        $normalized = trim(preg_replace('/\s+/', ' ', $normalized) ?? $normalized);
+
+        return preg_match('/^char\s*\*\s*\*$/', $normalized) === 1;
     }
 
     /**
