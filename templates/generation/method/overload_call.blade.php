@@ -19,7 +19,7 @@ $callPrefix = $method->isStatic
 @endphp{!! $expr !!}@if(!$loop->last), @endif @endforeach);
 @elseif($overload->returnStrategy === 'scalar')
 @php
-    $macro = $ctx->typeBridge->returnMacro($method->returnType) ?? 'RETURN_LONG';
+    $macro = $ctx->typeBridge->returnMacro($overload->phpReturnType);
     ob_start();
 @endphp
 {!! $callPrefix !!}{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
@@ -29,9 +29,13 @@ $callPrefix = $method->isStatic
 @endphp{!! $expr !!}@if(!$loop->last), @endif @endforeach));
 @php
     $callExpr = trim(ob_get_clean() ?: '');
-    $returnExpr = $ctx->typeBridge->nativeScalarToPhpExpr($method->returnType, $overload->cppReturnType, rtrim($callExpr, ';'));
+    $returnExpr = $ctx->typeBridge->nativeScalarToPhpExpr($overload->phpReturnType, $overload->cppReturnType, rtrim($callExpr, ';'));
 @endphp
+@if($macro === null)
+{!! $indent !!}RETURN_NULL();
+@else
 {!! $indent !!}{!! $macro !!}({!! $returnExpr !!});
+@endif
 @elseif($overload->returnStrategy === 'string')
 {!! $indent !!}auto _result = {!! $callPrefix !!}{!! $method->cppName !!}(@foreach($overload->params as $i => $op)@php
     $mergedParam = $method->params[$i] ?? null;

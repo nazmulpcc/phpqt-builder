@@ -953,6 +953,39 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringNotContainsString('qt_qvariant_wrap_native', $cpp);
     }
 
+    public function testGenerateBuildModeSkipsComplexReturnsInsteadOfCastingToScalars(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qunsupportedtypes.h',
+            'class' => 'QUnsupportedTypes',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QUnsupportedTypes',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertContains('unsupported_return_type', array_column($payload['skipped_methods'], 'reason_code'));
+        self::assertContains('begin', array_column($payload['skipped_methods'], 'name'));
+        self::assertContains('provider', array_column($payload['skipped_methods'], 'name'));
+        self::assertContains('values', array_column($payload['skipped_methods'], 'name'));
+
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qunsupportedtypes.cpp');
+        self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QUnsupportedTypes, begin)', $cpp);
+        self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QUnsupportedTypes, provider)', $cpp);
+        self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QUnsupportedTypes, values)', $cpp);
+    }
+
     public function testGenerateBuildModeDoesNotMistakeSelfPointerConstructorForCopyConstructor(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';

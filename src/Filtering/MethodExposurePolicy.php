@@ -380,6 +380,10 @@ class MethodExposurePolicy
             return false;
         }
 
+        if ($this->isUnsupportedScalarPointerType($trimmed)) {
+            return false;
+        }
+
         if ($this->isEnumOrFlagType($trimmed, $className, $flagAliases, $enumNames)) {
             return true;
         }
@@ -510,11 +514,15 @@ class MethodExposurePolicy
 
     private function looksLikeQualifiedEnumName(string $name): bool
     {
+        if (preg_match('/^[A-Z][A-Za-z0-9_]*$/', $name) !== 1) {
+            return false;
+        }
+
         if (str_ends_with($name, '_t')) {
             return false;
         }
 
-        foreach (['Result', 'Private', 'Data', 'Pointer', 'Iterator', 'Ref', 'Helper', 'Connection'] as $suffix) {
+        foreach (['Result', 'Private', 'Data', 'Pointer', 'Iterator', 'Ref', 'Helper', 'Connection', 'Provider', 'Callback'] as $suffix) {
             if (str_ends_with($name, $suffix)) {
                 return false;
             }
@@ -526,6 +534,21 @@ class MethodExposurePolicy
     private function isDisambiguationTagType(string $cppType): bool
     {
         return trim($cppType) === 'Qt::Disambiguated_t';
+    }
+
+    private function isUnsupportedScalarPointerType(string $cppType): bool
+    {
+        if (!str_contains($cppType, '*')) {
+            return false;
+        }
+
+        if (preg_match('/\(\s*\*/', $cppType) === 1 || str_contains($cppType, 'std::function')) {
+            return true;
+        }
+
+        $phpType = $this->typeMapper->map($cppType);
+
+        return in_array($phpType, ['int', 'float', 'bool'], true);
     }
 
     private function isUnsupportedValueBufferReturn(string $cppType): bool

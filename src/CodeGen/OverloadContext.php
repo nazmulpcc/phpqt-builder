@@ -45,6 +45,9 @@ class OverloadContext
     /** Return strategy for this specific overload */
     public readonly string $returnStrategy;
 
+    /** PHP-mapped return type for this specific overload */
+    public readonly string $phpReturnType;
+
     public function __construct(
         MethodOverload $overload,
         ClassContext $classCtx,
@@ -60,8 +63,8 @@ class OverloadContext
         $this->isPureVirtual = $overload->isPureVirtual;
 
         // Map the C++ return type through the type mapper to get strategy
-        $phpReturnType = $this->cppReturnToPhp($overload->returnType, $typeBridge);
-        $this->returnStrategy = $typeBridge->returnStrategyForCpp($phpReturnType, $overload->returnType);
+        $this->phpReturnType = $this->cppReturnToPhp($overload->returnType, $typeBridge);
+        $this->returnStrategy = $typeBridge->returnStrategyForCpp($this->phpReturnType, $overload->returnType);
 
         $params = [];
         foreach ($overload->parameters as $param) {

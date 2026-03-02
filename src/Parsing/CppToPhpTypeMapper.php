@@ -123,6 +123,11 @@ class CppToPhpTypeMapper
             return 'array';
         }
 
+        // Qt flags are exposed as ints in PHP.
+        if (str_starts_with($normalized, 'QFlags<')) {
+            return 'int';
+        }
+
         if ($this->isChronoDurationType($normalized)) {
             return 'int';
         }
@@ -196,11 +201,15 @@ class CppToPhpTypeMapper
 
     private function looksLikeQualifiedEnumName(string $name): bool
     {
+        if (preg_match('/^[A-Z][A-Za-z0-9_]*$/', $name) !== 1) {
+            return false;
+        }
+
         if (str_ends_with($name, '_t')) {
             return false;
         }
 
-        foreach (['Result', 'Private', 'Data', 'Pointer', 'Iterator', 'Ref', 'Helper', 'Connection'] as $suffix) {
+        foreach (['Result', 'Private', 'Data', 'Pointer', 'Iterator', 'Ref', 'Helper', 'Connection', 'Provider', 'Callback'] as $suffix) {
             if (str_ends_with($name, $suffix)) {
                 return false;
             }
