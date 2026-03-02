@@ -46,6 +46,7 @@ class ClangArgumentBuilder
         $args = [...$args, ...$this->discoverSystemIncludes()];
         $args = [...$args, ...$this->discoverClangResourceDir()];
         $args = [...$args, ...$this->discoverQtIncludes()];
+        $args = [...$args, ...$this->qtFeatureOverrides()];
         $args = [...$args, ...$this->platformDefines()];
 
         foreach ($this->extraIncludePaths as $path) {
@@ -62,6 +63,21 @@ class ClangArgumentBuilder
         }
 
         return array_values(array_unique($args));
+    }
+
+    /**
+     * Pre-include parser feature overrides for optional Qt dependencies.
+     *
+     * @return list<string>
+     */
+    private function qtFeatureOverrides(): array
+    {
+        $overrideHeader = dirname(__DIR__, 2) . '/templates/clang/qt_feature_overrides.h';
+        if (!is_file($overrideHeader)) {
+            return [];
+        }
+
+        return ['-include', $overrideHeader];
     }
 
     // ------------------------------------------------------------------
