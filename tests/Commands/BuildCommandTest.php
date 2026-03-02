@@ -50,6 +50,7 @@ final class BuildCommandTest extends TestCase
         self::assertFileExists($metadataDir . '/gen_stub.stdout.log');
         self::assertFileExists($metadataDir . '/configure.stdout.log');
         self::assertFileExists($metadataDir . '/make.stdout.log');
+        self::assertStringContainsString('Running 2 parallel discovery worker(s)...', $tester->getDisplay());
         self::assertCount(1, $bootstrapper->contexts);
 
         $summary = json_decode((string) file_get_contents($metadataDir . '/build_summary.json'), true, 512, JSON_THROW_ON_ERROR);
@@ -111,6 +112,7 @@ final class BuildCommandTest extends TestCase
         self::assertStringContainsString('discovery_cache.json', $tester->getDisplay());
         self::assertStringContainsString('accepted_candidates.json', $tester->getDisplay());
         self::assertStringContainsString('allowed_classes.json', $tester->getDisplay());
+        self::assertStringNotContainsString('Running 2 parallel discovery worker(s)...', $tester->getDisplay());
 
         $summary = json_decode((string) file_get_contents($metadataDir . '/build_summary.json'), true, 512, JSON_THROW_ON_ERROR);
         self::assertSame(1, $summary['generated_classes']);

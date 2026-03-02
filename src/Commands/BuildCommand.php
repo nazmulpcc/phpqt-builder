@@ -5,7 +5,8 @@ declare(strict_types=1);
 namespace QtBuilder\Commands;
 
 use QtBuilder\Build\BootstrapResult;
-use QtBuilder\Build\ClassGenerationService;
+use QtBuilder\Build\BuildDiscoveryResult;
+use QtBuilder\Build\BuildDiscoveryService;
 use QtBuilder\Build\ExtensionBootstrapper;
 use QtBuilder\Build\ExtensionBuildContext;
 use QtBuilder\Build\ExtensionScaffolder;
@@ -13,12 +14,10 @@ use QtBuilder\Build\GenerateTask;
 use QtBuilder\Build\GenerateWorkerPool;
 use QtBuilder\Build\ProcessExtensionBootstrapper;
 use QtBuilder\Contracts\SystemInformation;
-use QtBuilder\Filtering\ClassExposurePolicy;
-use QtBuilder\Qt\QtInstallation;
 use QtBuilder\Qt\QtInstallationResolver;
 use QtBuilder\Scanning\HeaderCandidate;
-use QtBuilder\Scanning\ModuleHeaderScanner;
 use Symfony\Component\Console\Attribute\AsCommand;
+use Symfony\Component\Console\Input\ArrayInput;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -32,6 +31,7 @@ class BuildCommand extends Command
     public function __construct(
         private readonly SystemInformation $systemInformation,
         ?ExtensionBootstrapper $bootstrapper = null,
+        private readonly BuildDiscoveryService $discoveryService = new BuildDiscoveryService(),
     ) {
         $this->bootstrapper = $bootstrapper ?? new ProcessExtensionBootstrapper($systemInformation);
 
@@ -66,16 +66,38 @@ class BuildCommand extends Command
         $scaffolder->prepare($context);
         $metadataDir = $context->metadataDir();
 
-        $cachedDiscovery = $this->loadDiscoveryCache($metadataDir, $modules, $installation->rootPath);
+        $cachedDiscovery = $this->discoveryService->loadCache($metadataDir, $modules, $installation->rootPath);
         if ($cachedDiscovery !== null) {
-            $acceptedCandidates = $cachedDiscovery['accepted_candidates'];
-            $skippedClasses = $cachedDiscovery['skipped_classes'];
-            $allowedClasses = $cachedDiscovery['allowed_classes'];
-            $candidateCount = $cachedDiscovery['candidate_count'];
+            $acceptedCandidates = $cachedDiscovery->acceptedCandidates;
+            $skippedClasses = $cachedDiscovery->skippedClasses;
+            $allowedClasses = $cachedDiscovery->allowedClasses;
+            $candidateCount = $cachedDiscovery->candidateCount;
             $this->renderCacheUsage($output, $metadataDir);
         } else {
-            [$acceptedCandidates, $skippedClasses, $allowedClasses, $candidateCount] = $this->discoverCandidates($installation, $modules);
-            $this->writeDiscoveryCache($metadataDir, $modules, $installation->rootPath, $acceptedCandidates, $skippedClasses, $allowedClasses, $candidateCount);
+            $output->writeln('<comment>Discovery cache miss; invoking build:discover.</comment>');
+
+            $discoverExitCode = $this->runDiscoverCommand(
+                $input,
+                $output,
+                qtPath: $input->getOption('qt-path') !== null ? (string) $input->getOption('qt-path') : null,
+                modules: $modules,
+                outputDir: $outputDir,
+                jobs: $jobs,
+            );
+            if ($discoverExitCode !== self::SUCCESS) {
+                return $discoverExitCode;
+            }
+
+            $cachedDiscovery = $this->discoveryService->loadCache($metadataDir, $modules, $installation->rootPath);
+            if ($cachedDiscovery === null) {
+                $output->writeln('<error>Discovery completed without producing a usable cache.</error>');
+                return self::FAILURE;
+            }
+
+            $acceptedCandidates = $cachedDiscovery->acceptedCandidates;
+            $skippedClasses = $cachedDiscovery->skippedClasses;
+            $allowedClasses = $cachedDiscovery->allowedClasses;
+            $candidateCount = $cachedDiscovery->candidateCount;
         }
 
         $output->writeln(sprintf('<info>Scanning complete.</info> %d candidates queued, %d filtered before generation.', count($acceptedCandidates), count($skippedClasses)));
@@ -99,16 +121,17 @@ class BuildCommand extends Command
         $errors = $generation['errors'];
         $classmap = $generation['classmap'];
 
-        $this->writeDiscoveryCache(
+        $this->discoveryService->writeCache(
             $metadataDir,
             $modules,
             $installation->rootPath,
-            $acceptedCandidates,
-            $skippedClasses,
-            $generatedClasses,
-            $candidateCount,
+            new BuildDiscoveryResult(
+                acceptedCandidates: $acceptedCandidates,
+                skippedClasses: $skippedClasses,
+                allowedClasses: $generatedClasses,
+                candidateCount: $candidateCount,
+            ),
         );
-        $this->writeAllowedClassesManifest($metadataDir, $generatedClasses);
 
         $context = $context->withGeneratedClasses($generatedClasses);
         $scaffoldFiles = $scaffolder->finalize($context);
@@ -216,6 +239,41 @@ class BuildCommand extends Command
     }
 
     /**
+     * @param list<string> $modules
+     */
+    private function runDiscoverCommand(
+        InputInterface $input,
+        OutputInterface $output,
+        ?string $qtPath,
+        array $modules,
+        string $outputDir,
+        int $jobs,
+    ): int {
+        $application = $this->getApplication();
+        $usingApplicationCommand = $application?->has('build:discover') === true;
+        $discoverCommand = $usingApplicationCommand
+            ? $application->find('build:discover')
+            : new BuildDiscoverCommand($this->systemInformation, $this->discoveryService);
+
+        $arguments = [
+            '--modules' => implode(',', $modules),
+            '--output' => $outputDir,
+            '--jobs' => (string) $jobs,
+        ];
+        if ($usingApplicationCommand) {
+            $arguments['command'] = 'build:discover';
+        }
+        if ($qtPath !== null && $qtPath !== '') {
+            $arguments['--qt-path'] = $qtPath;
+        }
+
+        $discoverInput = new ArrayInput($arguments);
+        $discoverInput->setInteractive($input->isInteractive());
+
+        return $discoverCommand->run($discoverInput, $output);
+    }
+
+    /**
      * @param list<HeaderCandidate> $acceptedCandidates
      * @param list<array<string, string|null>> $initialSkippedClasses
      * @param list<string> $initialAllowedClasses
@@ -269,7 +327,7 @@ class BuildCommand extends Command
 
         do {
             $passes++;
-            $allowedClassesFile = $this->writeAllowedClassesManifest($metadataDir, $currentAllowedClasses);
+            $allowedClassesFile = $this->discoveryService->writeAllowedClassesManifest($metadataDir, $currentAllowedClasses);
 
             if ($passes > 1) {
                 $output->writeln(sprintf(
@@ -390,240 +448,4 @@ class BuildCommand extends Command
         return $tasks;
     }
 
-    /**
-     * @param list<string> $allowedClasses
-     */
-    private function writeAllowedClassesManifest(string $metadataDir, array $allowedClasses): string
-    {
-        $manifestPath = $metadataDir . '/allowed_classes.json';
-        $realMetadataDir = realpath($metadataDir);
-        if ($realMetadataDir !== false) {
-            $manifestPath = $realMetadataDir . '/allowed_classes.json';
-        }
-
-        file_put_contents(
-            $manifestPath,
-            json_encode(array_values($allowedClasses), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]',
-        );
-
-        return $manifestPath;
-    }
-
-    /**
-     * @param list<string> $modules
-     * @return array{0: list<HeaderCandidate>, 1: list<array<string, string|null>>, 2: list<string>, 3: int}
-     */
-    private function discoverCandidates(QtInstallation $installation, array $modules): array
-    {
-        $scanner = new ModuleHeaderScanner();
-        $classPolicy = new ClassExposurePolicy();
-
-        $acceptedCandidates = [];
-        $skippedClasses = [];
-        $candidateCount = 0;
-
-        foreach ($modules as $module) {
-            foreach ($scanner->scan($installation, $module) as $candidate) {
-                $candidateCount++;
-                $decision = $classPolicy->decideCandidate($candidate);
-                if (!$decision->accepted) {
-                    $skippedClasses[] = [
-                        'class' => $candidate->className,
-                        'header' => $candidate->parseHeader,
-                        'reason_code' => $decision->reasonCode,
-                        'reason_message' => $decision->reasonMessage,
-                    ];
-                    continue;
-                }
-
-                $acceptedCandidates[] = $candidate;
-            }
-        }
-
-        [$acceptedCandidates, $preflightSkippedClasses, $allowedClasses] = $this->resolveViableCandidates(
-            $acceptedCandidates,
-            $installation->includeRoots,
-        );
-        array_push($skippedClasses, ...$preflightSkippedClasses);
-
-        return [$acceptedCandidates, $skippedClasses, $allowedClasses, $candidateCount];
-    }
-
-    /**
-     * @param list<string> $modules
-     * @param list<HeaderCandidate> $acceptedCandidates
-     * @param list<array<string, string|null>> $skippedClasses
-     * @param list<string> $allowedClasses
-     */
-    private function writeDiscoveryCache(
-        string $metadataDir,
-        array $modules,
-        string $qtRootPath,
-        array $acceptedCandidates,
-        array $skippedClasses,
-        array $allowedClasses,
-        int $candidateCount,
-    ): void {
-        $payload = [
-            'modules' => array_values($modules),
-            'qt_path' => $qtRootPath,
-            'candidate_count' => $candidateCount,
-            'accepted_candidates' => array_map(
-                static fn(HeaderCandidate $candidate): array => [
-                    'module' => $candidate->module,
-                    'class' => $candidate->className,
-                    'public_header' => $candidate->publicHeader,
-                    'parse_header' => $candidate->parseHeader,
-                ],
-                $acceptedCandidates,
-            ),
-            'skipped_classes' => array_values($skippedClasses),
-            'allowed_classes' => array_values($allowedClasses),
-        ];
-
-        file_put_contents(
-            $metadataDir . '/discovery_cache.json',
-            json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '{}',
-        );
-        file_put_contents(
-            $metadataDir . '/accepted_candidates.json',
-            json_encode($payload['accepted_candidates'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]',
-        );
-    }
-
-    /**
-     * @param list<string> $modules
-     * @return array{
-     *   accepted_candidates: list<HeaderCandidate>,
-     *   skipped_classes: list<array<string, string|null>>,
-     *   allowed_classes: list<string>,
-     *   candidate_count: int
-     * }|null
-     */
-    private function loadDiscoveryCache(string $metadataDir, array $modules, string $qtRootPath): ?array
-    {
-        $cacheFile = $metadataDir . '/discovery_cache.json';
-        if (!is_file($cacheFile)) {
-            return null;
-        }
-
-        $decoded = json_decode((string) file_get_contents($cacheFile), true);
-        if (!is_array($decoded)) {
-            return null;
-        }
-
-        $cachedModules = array_values(array_filter(
-            array_map(static fn(mixed $value): string => is_string($value) ? $value : '', $decoded['modules'] ?? []),
-            static fn(string $value): bool => $value !== '',
-        ));
-        $cachedQtPath = is_string($decoded['qt_path'] ?? null) ? $decoded['qt_path'] : '';
-
-        if ($cachedModules !== array_values($modules) || $cachedQtPath !== $qtRootPath) {
-            return null;
-        }
-
-        $acceptedCandidatePayload = $decoded['accepted_candidates'] ?? [];
-        $acceptedCandidatesFile = $metadataDir . '/accepted_candidates.json';
-        if (is_file($acceptedCandidatesFile)) {
-            $fromFile = json_decode((string) file_get_contents($acceptedCandidatesFile), true);
-            if (is_array($fromFile)) {
-                $acceptedCandidatePayload = $fromFile;
-            }
-        }
-
-        $acceptedCandidates = [];
-        foreach ($acceptedCandidatePayload as $candidate) {
-            if (!is_array($candidate)) {
-                continue;
-            }
-
-            $module = is_string($candidate['module'] ?? null) ? $candidate['module'] : null;
-            $className = is_string($candidate['class'] ?? null) ? $candidate['class'] : null;
-            $publicHeader = is_string($candidate['public_header'] ?? null) ? $candidate['public_header'] : null;
-            $parseHeader = is_string($candidate['parse_header'] ?? null) ? $candidate['parse_header'] : null;
-
-            if ($module === null || $className === null || $publicHeader === null || $parseHeader === null) {
-                continue;
-            }
-
-            $acceptedCandidates[] = new HeaderCandidate($module, $className, $publicHeader, $parseHeader);
-        }
-
-        $skippedClasses = array_values(array_filter(
-            $decoded['skipped_classes'] ?? [],
-            static fn(mixed $value): bool => is_array($value),
-        ));
-
-        $allowedClassPayload = $decoded['allowed_classes'] ?? [];
-        $allowedClassesFile = $metadataDir . '/allowed_classes.json';
-        if (is_file($allowedClassesFile)) {
-            $fromFile = json_decode((string) file_get_contents($allowedClassesFile), true);
-            if (is_array($fromFile)) {
-                $allowedClassPayload = $fromFile;
-            }
-        }
-
-        $allowedClasses = array_values(array_filter(
-            array_map(static fn(mixed $value): string => is_string($value) ? $value : '', $allowedClassPayload),
-            static fn(string $value): bool => $value !== '',
-        ));
-
-        if ($acceptedCandidates === [] || $allowedClasses === []) {
-            return null;
-        }
-
-        return [
-            'accepted_candidates' => $acceptedCandidates,
-            'skipped_classes' => $skippedClasses,
-            'allowed_classes' => $allowedClasses,
-            'candidate_count' => (int) ($decoded['candidate_count'] ?? count($acceptedCandidates) + count($skippedClasses)),
-        ];
-    }
-
-    /**
-     * @param list<HeaderCandidate> $acceptedCandidates
-     * @param list<string> $includePaths
-     * @return array{0: list<HeaderCandidate>, 1: list<array<string, string|null>>, 2: list<string>}
-     */
-    private function resolveViableCandidates(array $acceptedCandidates, array $includePaths): array
-    {
-        $service = new ClassGenerationService();
-        $viableCandidates = [];
-        foreach ($acceptedCandidates as $candidate) {
-            $viableCandidates[$candidate->className] = $candidate;
-        }
-
-        /** @var array<string, array{class: string, header: string, reason_code: string|null, reason_message: string|null}> $skippedByClass */
-        $skippedByClass = [];
-
-        do {
-            $allowedClasses = array_keys($viableCandidates);
-            $nextViableCandidates = [];
-
-            foreach ($viableCandidates as $className => $candidate) {
-                $result = $service->generate($candidate->parseHeader, $candidate->className, $includePaths, $allowedClasses);
-                if ($result->status === 'ok') {
-                    $nextViableCandidates[$className] = $candidate;
-                    unset($skippedByClass[$className]);
-                    continue;
-                }
-
-                $skippedByClass[$className] = [
-                    'class' => $candidate->className,
-                    'header' => $candidate->parseHeader,
-                    'reason_code' => $result->reasonCode,
-                    'reason_message' => $result->reasonMessage,
-                ];
-            }
-
-            $changed = array_keys($nextViableCandidates) !== array_keys($viableCandidates);
-            $viableCandidates = $nextViableCandidates;
-        } while ($changed && $viableCandidates !== []);
-
-        $finalCandidates = array_values($viableCandidates);
-        $allowedClasses = array_keys($viableCandidates);
-        $skippedClasses = array_values($skippedByClass);
-
-        return [$finalCandidates, $skippedClasses, $allowedClasses];
-    }
 }
