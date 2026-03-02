@@ -113,15 +113,24 @@ class ClassGenerationService
         }
 
         $sourceContents = $resolved['contents'];
+        $classBody = is_array($resolved['body'] ?? null) && is_string($resolved['body']['body'] ?? null)
+            ? $resolved['body']['body']
+            : null;
+        $defaultAccess = $resolved['body'] !== null && $resolved['body']['kind'] === 'struct'
+            ? 'public'
+            : ($isStruct ? 'public' : 'private');
+        $lifecycleSegments = $classBody !== null
+            ? $this->topLevelClassSegments($classBody, $defaultAccess)
+            : $this->lifecycleAccessBlocks($sourceContents);
 
         $hasExplicitConstructor = false;
         $hasPublicConstructor = false;
         $hasPublicDefaultConstructor = false;
         $hasExplicitDestructor = false;
         $hasPublicDestructor = true;
-        $isCopyConstructible = !$this->containsCopyDisablingMacro($sourceContents, $className);
+        $isCopyConstructible = !$this->containsCopyDisablingMacro($classBody ?? $sourceContents, $className);
 
-        foreach ($this->lifecycleAccessBlocks($sourceContents) as $segmentInfo) {
+        foreach ($lifecycleSegments as $segmentInfo) {
             $access = $segmentInfo['access'];
             $segment = $segmentInfo['segment'];
 
@@ -156,9 +165,6 @@ class ClassGenerationService
         }
 
         if (!$hasExplicitConstructor) {
-            $defaultAccess = $resolved['body'] !== null && $resolved['body']['kind'] === 'struct'
-                ? 'public'
-                : ($isStruct ? 'public' : 'private');
             $hasPublicConstructor = $defaultAccess === 'public';
             $hasPublicDefaultConstructor = $defaultAccess === 'public';
         }
@@ -338,7 +344,7 @@ class ClassGenerationService
         $braceDepth = 0;
 
         foreach (preg_split("/(\r?\n)/", $body) ?: [] as $line) {
-            if ($braceDepth === 0 && preg_match('/^\s*(public|protected|private)\s*:\s*$/', $line, $matches) === 1) {
+            if ($braceDepth === 0 && preg_match('/^\s*(public|protected|private)\s*:\s*(.*)$/', $line, $matches) === 1) {
                 $trimmed = trim($buffer);
                 if ($trimmed !== '') {
                     $segments[] = ['access' => $access, 'segment' => $trimmed];
@@ -346,6 +352,10 @@ class ClassGenerationService
                 }
 
                 $access = $matches[1];
+                $remainder = trim((string) ($matches[2] ?? ''));
+                if ($remainder !== '') {
+                    $buffer .= $remainder . "\n";
+                }
                 continue;
             }
 

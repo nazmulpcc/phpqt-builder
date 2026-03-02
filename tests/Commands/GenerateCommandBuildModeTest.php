@@ -775,6 +775,36 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringContainsString('RETURN_LONG((zend_long)(QPrivateLifecycleThing::version()));', $cpp);
     }
 
+    public function testGenerateBuildModeSkipsDeleteWhenDestructorIsInImplicitPrivateSection(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qdefaultprivatelifecyclething.h',
+            'class' => 'QDefaultPrivateLifecycleThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QDefaultPrivateLifecycleThing',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertContains('QDefaultPrivateLifecycleThing', array_column($payload['skipped_methods'], 'name'));
+
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qdefaultprivatelifecyclething.cpp');
+        self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QDefaultPrivateLifecycleThing, __construct)', $cpp);
+        self::assertStringNotContainsString('delete intern->native_ptr;', $cpp);
+        self::assertStringContainsString('RETURN_LONG((zend_long)(QDefaultPrivateLifecycleThing::version()));', $cpp);
+    }
+
     public function testGenerateBuildModeConvertsChronoDurationsToAndFromIntegers(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
