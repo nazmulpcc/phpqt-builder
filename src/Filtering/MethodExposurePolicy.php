@@ -393,15 +393,15 @@ class MethodExposurePolicy
             return false;
         }
 
-        if ($this->typeBridge->isValueType($phpType)) {
-            return true;
-        }
-
         if ($phpType === $className) {
             return true;
         }
 
-        return in_array($phpType, $allowedClasses, true);
+        if ($this->typeBridge->isObjectType($phpType)) {
+            return in_array($phpType, $allowedClasses, true);
+        }
+
+        return false;
     }
 
     private function isSupportedTemplateType(string $cppType): bool
