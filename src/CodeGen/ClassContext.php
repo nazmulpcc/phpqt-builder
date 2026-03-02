@@ -120,7 +120,7 @@ class ClassContext
         $this->zMacro = $typeBridge->zMacroName($phpClass->name);
         $this->minitName = $typeBridge->minitName($phpClass->name);
         $this->filePrefix = $typeBridge->minitName($phpClass->name);
-        $this->headerGuard = $typeBridge->classToUpper($phpClass->name) . '_H';
+        $this->headerGuard = strtoupper($this->filePrefix) . '_H';
         $this->qtInclude = $typeBridge->qtInclude($phpClass->name);
 
         // Type classification
