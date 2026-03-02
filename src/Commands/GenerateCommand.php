@@ -172,6 +172,10 @@ class GenerateCommand extends Command
         $includePaths = $input->getOption('include');
         $qtPath = $input->getOption('qt-path');
 
+        if ($buildMode && $includePaths !== []) {
+            return array_values(array_unique($includePaths));
+        }
+
         if ($qtPath === null && !$buildMode) {
             return $includePaths;
         }

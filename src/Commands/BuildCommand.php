@@ -91,7 +91,7 @@ class BuildCommand extends Command
             $allowedClasses,
             $outputDir,
             $extensionName,
-            $installation->rootPath,
+            $installation->includeRoots,
             $metadataDir,
             $jobs,
             $output,
@@ -224,6 +224,7 @@ class BuildCommand extends Command
      * @param list<HeaderCandidate> $acceptedCandidates
      * @param list<array<string, string|null>> $initialSkippedClasses
      * @param list<string> $initialAllowedClasses
+     * @param list<string> $includePaths
      * @return array{
      *   accepted_candidates: list<HeaderCandidate>,
      *   generated_classes: list<string>,
@@ -240,7 +241,7 @@ class BuildCommand extends Command
         array $initialAllowedClasses,
         string $outputDir,
         string $extensionName,
-        string $qtRootPath,
+        array $includePaths,
         string $metadataDir,
         int $jobs,
         OutputInterface $output,
@@ -288,7 +289,7 @@ class BuildCommand extends Command
                     $currentCandidates,
                     $outputDir,
                     $extensionName,
-                    $qtRootPath,
+                    $includePaths,
                     $allowedClassesFile,
                 ),
                 $jobs,
@@ -365,13 +366,14 @@ class BuildCommand extends Command
 
     /**
      * @param list<HeaderCandidate> $candidates
+     * @param list<string> $includePaths
      * @return list<GenerateTask>
      */
     private function buildGenerateTasks(
         array $candidates,
         string $outputDir,
         string $extensionName,
-        string $qtRootPath,
+        array $includePaths,
         string $allowedClassesFile,
     ): array {
         $tasks = [];
@@ -384,7 +386,8 @@ class BuildCommand extends Command
                 namespace: $this->namespaceForModule($candidate->module),
                 outputDir: $outputDir,
                 extensionName: $extensionName,
-                qtPath: $qtRootPath,
+                qtPath: null,
+                includePaths: $includePaths,
                 allowedClassesFile: $allowedClassesFile,
             );
         }

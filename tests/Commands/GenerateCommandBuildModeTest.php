@@ -74,6 +74,35 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertFileDoesNotExist($outputDir . '/classes/qt_qpoint.stub.php');
     }
 
+    public function testGenerateBuildModeUsesExplicitIncludesEvenWhenQtPathIsInvalid(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-includes-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qpoint.h',
+            'class' => 'QPoint',
+            '--qt-path' => '/definitely/not/a/qt/root',
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+            ],
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QPoint',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertFileExists($outputDir . '/classes/qt_qpoint.cpp');
+    }
+
     public function testGenerateBuildModeUsesNullableUnionForOptionalValueObjectParameters(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/qt';

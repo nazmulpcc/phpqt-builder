@@ -67,7 +67,7 @@ class BuildDiscoverCommand extends Command
         $viability = $this->resolveViableCandidates(
             $acceptedCandidates,
             $outputDir,
-            $installation->rootPath,
+            $installation->includeRoots,
             $metadataDir,
             $jobs,
             $output,
@@ -180,6 +180,7 @@ class BuildDiscoverCommand extends Command
 
     /**
      * @param list<HeaderCandidate> $acceptedCandidates
+     * @param list<string> $includePaths
      * @return array{
      *   accepted_candidates: list<HeaderCandidate>,
      *   skipped_classes: list<array<string, string|null>>,
@@ -191,7 +192,7 @@ class BuildDiscoverCommand extends Command
     private function resolveViableCandidates(
         array $acceptedCandidates,
         string $outputDir,
-        string $qtRootPath,
+        array $includePaths,
         string $metadataDir,
         int $jobs,
         OutputInterface $output,
@@ -229,7 +230,7 @@ class BuildDiscoverCommand extends Command
                     $this->buildProbeTasks(
                         array_values($viableCandidates),
                         $outputDir,
-                        $qtRootPath,
+                        $includePaths,
                         $workerAllowedClassesFile,
                     ),
                     $jobs,
@@ -287,12 +288,13 @@ class BuildDiscoverCommand extends Command
 
     /**
      * @param list<HeaderCandidate> $candidates
+     * @param list<string> $includePaths
      * @return list<GenerateTask>
      */
     private function buildProbeTasks(
         array $candidates,
         string $outputDir,
-        string $qtRootPath,
+        array $includePaths,
         string $allowedClassesFile,
     ): array {
         $tasks = [];
@@ -305,7 +307,8 @@ class BuildDiscoverCommand extends Command
                 namespace: $this->namespaceForModule($candidate->module),
                 outputDir: $outputDir,
                 extensionName: 'qt',
-                qtPath: $qtRootPath,
+                qtPath: null,
+                includePaths: $includePaths,
                 allowedClassesFile: $allowedClassesFile,
                 workerMode: 'probe',
             );

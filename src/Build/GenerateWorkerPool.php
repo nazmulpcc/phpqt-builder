@@ -99,6 +99,10 @@ class GenerateWorkerPool
             $command[] = '--qt-path=' . $task->qtPath;
         }
 
+        foreach ($task->includePaths as $includePath) {
+            $command[] = '--include=' . $includePath;
+        }
+
         if ($task->allowedClassesFile !== null && $task->allowedClassesFile !== '') {
             $command[] = '--allowed-classes-file=' . $task->allowedClassesFile;
         } elseif ($task->allowedClasses !== []) {

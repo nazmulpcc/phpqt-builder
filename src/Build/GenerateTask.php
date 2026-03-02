@@ -8,6 +8,7 @@ readonly class GenerateTask
 {
     /**
      * @param list<string> $allowedClasses
+     * @param list<string> $includePaths
      */
     public function __construct(
         public string $headerPath,
@@ -17,6 +18,7 @@ readonly class GenerateTask
         public string $outputDir,
         public string $extensionName,
         public ?string $qtPath,
+        public array $includePaths = [],
         public ?string $allowedClassesFile = null,
         public array $allowedClasses = [],
         public string $workerMode = 'generate',
