@@ -149,7 +149,7 @@ class ClassContext
         $this->hasPublicDestructor = $phpClass->hasPublicDestructor;
         $this->isCloneable = $this->isValueType && $this->isCopyConstructible;
         $this->isAbstract = $phpClass->isAbstract;
-        $this->isFinal = !$phpClass->isAbstract && $this->isValueType;
+        $this->isFinal = false;
         $this->hasPreventDestroy = !$this->isValueType;
 
         // Parent

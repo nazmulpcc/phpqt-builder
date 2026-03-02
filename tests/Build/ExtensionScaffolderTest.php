@@ -325,4 +325,28 @@ final class ExtensionScaffolderTest extends TestCase
         self::assertStringNotContainsString('static zend_object *qt_qpoint_clone_object', $source);
         self::assertStringContainsString('qt_qpoint_handlers.clone_obj = NULL;', $source);
     }
+
+    public function testGeneratedValueTypeStubIsNotMarkedFinal(): void
+    {
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generator-' . bin2hex(random_bytes(4));
+        $generator = new ExtensionGenerator();
+        $phpClass = new PhpClass(
+            name: 'QPixmap',
+            parent: 'QPaintDevice',
+            isAbstract: false,
+            isCopyConstructible: true,
+            hasPublicDestructor: true,
+            properties: [],
+            methods: [],
+        );
+
+        $generator->generate($phpClass, 'Qt\\Gui', $outputDir);
+
+        $stub = (string) file_get_contents($outputDir . '/qt_qpixmap.stub.php');
+        $source = (string) file_get_contents($outputDir . '/qt_qpixmap.cpp');
+
+        self::assertStringContainsString('class QPixmap extends QPaintDevice', $stub);
+        self::assertStringNotContainsString('final class QPixmap', $stub);
+        self::assertStringNotContainsString('ce_flags |= ZEND_ACC_FINAL;', $source);
+    }
 }
