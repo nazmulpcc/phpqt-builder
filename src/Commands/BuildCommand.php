@@ -7,11 +7,12 @@ namespace QtBuilder\Commands;
 use QtBuilder\Build\BootstrapResult;
 use QtBuilder\Build\BuildDiscoveryResult;
 use QtBuilder\Build\BuildDiscoveryService;
-use QtBuilder\CodeGen\ExtensionGenerator;
+use QtBuilder\Build\ClassGenerationService;
 use QtBuilder\Build\ExtensionBootstrapper;
 use QtBuilder\Build\ExtensionBuildContext;
 use QtBuilder\Build\ExtensionScaffolder;
 use QtBuilder\Build\ProcessExtensionBootstrapper;
+use QtBuilder\CodeGen\ExtensionGenerator;
 use QtBuilder\Contracts\SystemInformation;
 use QtBuilder\Qt\QtInstallationResolver;
 use QtBuilder\Scanning\HeaderCandidate;
@@ -46,7 +47,7 @@ class BuildCommand extends Command
             ->addOption('name', null, InputOption::VALUE_REQUIRED, 'Extension name', 'qt')
             ->addOption('ext-version', null, InputOption::VALUE_REQUIRED, 'Extension version', '0.1.0')
             ->addOption('output', 'o', InputOption::VALUE_REQUIRED, 'Output directory', 'build/ext')
-            ->addOption('jobs', 'j', InputOption::VALUE_REQUIRED, 'Number of parallel generate workers');
+            ->addOption('jobs', 'j', InputOption::VALUE_REQUIRED, 'Number of parallel discovery/bootstrap workers');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -322,7 +323,7 @@ class BuildCommand extends Command
         string $outputDir,
         OutputInterface $output,
     ): array {
-        $generationService = new \QtBuilder\Build\ClassGenerationService();
+        $generationService = new ClassGenerationService();
         $generator = new ExtensionGenerator();
         $currentCandidates = array_values($acceptedCandidates);
         $currentAllowedClasses = array_values(array_unique($initialAllowedClasses));

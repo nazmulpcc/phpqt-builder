@@ -162,6 +162,7 @@ class QtClassInspector
 
             $methods[] = [
                 'name' => $className,
+                'declaring_class' => $className,
                 'return_type' => 'void',
                 'access' => 'public',
                 'parameters' => $parameters,
@@ -269,7 +270,7 @@ class QtClassInspector
     }
 
     /**
-     * @return array{name: string, return_type: string, access: string, parameters: list<array<string, mixed>>, is_static: bool, is_const: bool, is_virtual: bool, is_pure_virtual: bool, is_override: bool, is_signal: bool, is_slot: bool}
+     * @return array{name: string, declaring_class: string, return_type: string, access: string, parameters: list<array<string, mixed>>, is_static: bool, is_const: bool, is_virtual: bool, is_pure_virtual: bool, is_override: bool, is_signal: bool, is_slot: bool}
      */
     public function extractMethod(MethodCursor $method): array
     {
@@ -282,6 +283,7 @@ class QtClassInspector
 
         return [
             'name' => $method->getSpelling(),
+            'declaring_class' => $method->getParent()?->getSpelling() ?? '',
             'return_type' => $method->getReturnType()->toString(),
             'access' => self::accessLabel($method->getAccessSpecifier()),
             'parameters' => $parameters,
@@ -314,7 +316,7 @@ class QtClassInspector
      * Constructors are CXXConstructor cursors that must be fetched via getChildren().
      * We deduplicate by display name since Qt headers may produce duplicate entries.
      *
-     * @return list<array{name: string, return_type: string, access: string, parameters: list<array<string, mixed>>, is_static: bool, is_const: bool, is_virtual: bool, is_pure_virtual: bool, is_override: bool, is_signal: bool, is_slot: bool}>
+     * @return list<array{name: string, declaring_class: string, return_type: string, access: string, parameters: list<array<string, mixed>>, is_static: bool, is_const: bool, is_virtual: bool, is_pure_virtual: bool, is_override: bool, is_signal: bool, is_slot: bool}>
      */
     private function extractConstructors(ClassCursor $class): array
     {
@@ -340,6 +342,7 @@ class QtClassInspector
             // will rename it to __construct.
             $constructors[] = [
                 'name' => $ctor->getSpelling(),
+                'declaring_class' => $class->getSpelling(),
                 'return_type' => 'void',
                 'access' => 'public', // generic Cursor lacks getAccessSpecifier()
                 'parameters' => $parameters,

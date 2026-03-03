@@ -20,6 +20,8 @@ readonly class PhpMethod
         public string $name,
         public string $access,
         public bool $isStatic,
+        public bool $isSignal,
+        public bool $isSlot,
         public string $returnType,
         public array $parameters,
         public array $overloads,
@@ -36,7 +38,7 @@ readonly class PhpMethod
     }
 
     /**
-     * @return array{name: string, access: string, is_static: bool, return_type: string, parameters: list<array<string, mixed>>, overloads: list<array<string, mixed>>, overload_count: int}
+     * @return array{name: string, access: string, is_static: bool, is_signal: bool, is_slot: bool, return_type: string, parameters: list<array<string, mixed>>, overloads: list<array<string, mixed>>, overload_count: int}
      */
     public function toArray(): array
     {
@@ -44,6 +46,8 @@ readonly class PhpMethod
             'name' => $this->name,
             'access' => $this->access,
             'is_static' => $this->isStatic,
+            'is_signal' => $this->isSignal,
+            'is_slot' => $this->isSlot,
             'return_type' => $this->returnType,
             'parameters' => array_map(
                 static fn(PhpParameter $p): array => $p->toArray(),

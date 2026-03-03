@@ -21,6 +21,9 @@ class OverloadContext
     /** C++ return type (raw) */
     public readonly string $cppReturnType;
 
+    /** Declaring C++ class for member pointer expressions */
+    public readonly string $declaringClass;
+
     /** Number of C++ parameters */
     public readonly int $paramCount;
 
@@ -54,6 +57,7 @@ class OverloadContext
         TypeBridge $typeBridge,
     ) {
         $this->typeMapper = new CppToPhpTypeMapper();
+        $this->declaringClass = $overload->declaringClass;
         $this->cppReturnType = $overload->returnType;
         $this->paramCount = $overload->parameterCount();
         $this->requiredParamCount = $overload->requiredParameterCount();

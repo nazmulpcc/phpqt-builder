@@ -210,6 +210,7 @@ final class ExtensionScaffolderTest extends TestCase
             hasPublicDestructor: true,
             properties: [],
             methods: [],
+            signals: [],
         );
 
         $generator->generate($phpClass, 'Qt\\Core', $outputDir);
@@ -234,12 +235,15 @@ final class ExtensionScaffolderTest extends TestCase
             methods: [
                 new PhpMethod(
                     name: 'label',
-                    returnType: 'string',
                     access: 'public',
                     isStatic: false,
+                    isSignal: false,
+                    isSlot: false,
+                    returnType: 'string',
                     parameters: [],
                     overloads: [
                         new MethodOverload(
+                            declaringClass: 'QStringEmitter',
                             returnType: 'QString',
                             parameters: [],
                             isConst: true,
@@ -250,6 +254,7 @@ final class ExtensionScaffolderTest extends TestCase
                     ],
                 ),
             ],
+            signals: [],
         );
 
         $generator->generate($phpClass, 'Qt\\Core', $outputDir);
@@ -274,12 +279,15 @@ final class ExtensionScaffolderTest extends TestCase
             methods: [
                 new PhpMethod(
                     name: 'focusObject',
-                    returnType: 'QObject',
                     access: 'public',
                     isStatic: true,
+                    isSignal: false,
+                    isSlot: false,
+                    returnType: 'QObject',
                     parameters: [],
                     overloads: [
                         new MethodOverload(
+                            declaringClass: 'QGuiApplication',
                             returnType: 'QObject *',
                             parameters: [],
                             isConst: false,
@@ -290,6 +298,7 @@ final class ExtensionScaffolderTest extends TestCase
                     ],
                 ),
             ],
+            signals: [],
         );
 
         $generator->generate($phpClass, 'Qt\\Gui', $outputDir, [
@@ -316,6 +325,7 @@ final class ExtensionScaffolderTest extends TestCase
             hasPublicDestructor: true,
             properties: [],
             methods: [],
+            signals: [],
         );
 
         $generator->generate($phpClass, 'Qt\\Core', $outputDir);
@@ -338,6 +348,7 @@ final class ExtensionScaffolderTest extends TestCase
             hasPublicDestructor: true,
             properties: [],
             methods: [],
+            signals: [],
         );
 
         $generator->generate($phpClass, 'Qt\\Gui', $outputDir);

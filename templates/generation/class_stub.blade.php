@@ -33,4 +33,12 @@ namespace {!! $ctx->phpNamespace !!};
 
 @endif
 @endforeach
+@if($ctx->hasSignals())
+
+    public function connectSignal(string $signalSignature, callable $callback): void {}
+@foreach($ctx->signalOverloads as $signal)
+
+    public function {!! $signal->phpMethodName !!}(callable $callback): void {}
+@endforeach
+@endif
 }

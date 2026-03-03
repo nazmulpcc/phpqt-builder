@@ -749,6 +749,98 @@ class TypeBridge
         );
     }
 
+    public function signalMethodSuffix(array $params): string
+    {
+        if ($params === []) {
+            return 'NoArgs';
+        }
+
+        $parts = array_map(
+            fn(OverloadParamContext $param): string => $this->signalTypeSuffixPart($param->cppType, $param->phpType),
+            $params,
+        );
+
+        return implode('', $parts);
+    }
+
+    public function signalSignature(string $signalName, OverloadContext $overload): string
+    {
+        $types = array_map(
+            fn(OverloadParamContext $param): string => $this->normalizedSignalType($param->cppType),
+            $overload->params,
+        );
+
+        return sprintf('%s(%s)', $signalName, implode(',', $types));
+    }
+
+    public function signalMemberPointerExpr(string $declaringClass, string $methodName, OverloadContext $overload): string
+    {
+        $parameterTypes = array_map(
+            static fn(OverloadParamContext $param): string => $param->cppType,
+            $overload->params,
+        );
+
+        return sprintf(
+            'static_cast<void (%s::*)(%s)>(&%s::%s)',
+            $declaringClass,
+            implode(', ', $parameterTypes),
+            $declaringClass,
+            $methodName,
+        );
+    }
+
+    public function signalArgToZvalBlock(string $zvalVar, string $phpType, string $cppType, string $sourceExpr): string
+    {
+        $strategy = $this->returnStrategyForCpp($phpType, $cppType);
+
+        if ($strategy === 'scalar') {
+            return match ($phpType) {
+                'int' => sprintf('ZVAL_LONG(%s, %s);', $zvalVar, $this->nativeScalarToPhpExpr($phpType, $cppType, $sourceExpr)),
+                'float' => sprintf('ZVAL_DOUBLE(%s, %s);', $zvalVar, $this->nativeScalarToPhpExpr($phpType, $cppType, $sourceExpr)),
+                'bool' => sprintf('ZVAL_BOOL(%s, %s);', $zvalVar, $this->nativeScalarToPhpExpr($phpType, $cppType, $sourceExpr)),
+                default => sprintf('ZVAL_NULL(%s);', $zvalVar),
+            };
+        }
+
+        if ($strategy === 'string') {
+            $base = $this->normalizeCppType($cppType);
+
+            if ($base === 'QByteArray') {
+                return sprintf('ZVAL_STRINGL(%s, %s.constData(), %s.size());', $zvalVar, $sourceExpr, $sourceExpr);
+            }
+
+            return sprintf(
+                "QByteArray _qt_utf8 = %s.toUtf8();\n    ZVAL_STRINGL(%s, _qt_utf8.constData(), _qt_utf8.size());",
+                $sourceExpr,
+                $zvalVar,
+            );
+        }
+
+        if ($strategy === 'value_object') {
+            return sprintf(
+                "object_init_ex(%s, %s);\n    %s(%s)->native_ptr = new %s(%s);",
+                $zvalVar,
+                $this->ceVarName($phpType),
+                $this->zMacroName($phpType),
+                $zvalVar,
+                $phpType,
+                $sourceExpr,
+            );
+        }
+
+        if ($strategy === 'qobject_pointer') {
+            return sprintf(
+                '%s(%s, %s, %s, true);',
+                $this->wrapNativeFuncName($phpType),
+                $zvalVar,
+                $this->writableObjectPointerExpr($cppType, $phpType, $sourceExpr),
+                $this->ceVarName($phpType),
+            );
+        }
+
+        return sprintf('ZVAL_NULL(%s);', $zvalVar);
+    }
+
     // ------------------------------------------------------------------
     // Naming helpers for generated C symbols
     // ------------------------------------------------------------------
@@ -1119,5 +1211,29 @@ class TypeBridge
         }
 
         return false;
+    }
+
+    private function normalizedSignalType(string $cppType): string
+    {
+        $normalized = trim(preg_replace('/\s+/', ' ', $cppType) ?? $cppType);
+        $normalized = preg_replace('/\bconst\b\s*/', '', $normalized) ?? $normalized;
+        $normalized = str_replace([' &', '&', ' *'], ['', '', '*'], $normalized);
+        $normalized = preg_replace('/\s*\*\s*/', '*', $normalized) ?? $normalized;
+        $normalized = preg_replace('/^(class|struct|enum)\s+/', '', $normalized) ?? $normalized;
+
+        return trim($normalized);
+    }
+
+    private function signalTypeSuffixPart(string $cppType, string $phpType): string
+    {
+        if (isset(self::ZEND_TYPE_MAP[$phpType])) {
+            return ucfirst($phpType);
+        }
+
+        $normalized = $this->normalizedSignalType($cppType);
+        $normalized = str_replace(['::', '*'], ['', 'Ptr'], $normalized);
+        $normalized = preg_replace('/[^A-Za-z0-9]/', '', $normalized) ?? $normalized;
+
+        return $normalized !== '' ? ucfirst($normalized) : 'Value';
     }
 }

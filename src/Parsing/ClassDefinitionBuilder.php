@@ -29,13 +29,14 @@ class ClassDefinitionBuilder
     /**
      * Build a PhpClass from the array produced by QtClassInspector::inspect().
      *
-     * @param array{name: string, is_abstract: bool, is_copy_constructible?: bool, has_public_destructor?: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>} $classData
+     * @param array{name: string, is_abstract: bool, is_copy_constructible?: bool, has_public_destructor?: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, signals?: list<array<string, mixed>>} $classData
      */
     public function build(array $classData): PhpClass
     {
         $className = $classData['name'];
         $properties = $this->buildProperties($classData['properties']);
         $methods = $this->buildMethods($classData['methods'], $className);
+        $signals = $this->buildMethods($classData['signals'] ?? [], $className);
 
         // Use the first base class as the PHP parent (single inheritance).
         $parent = $classData['bases'][0] ?? null;
@@ -48,6 +49,7 @@ class ClassDefinitionBuilder
             hasPublicDestructor: (bool) ($classData['has_public_destructor'] ?? true),
             properties: $properties,
             methods: $methods,
+            signals: $signals,
         );
     }
 
@@ -162,6 +164,8 @@ class ClassDefinitionBuilder
             name: $name,
             access: $access,
             isStatic: $isStatic,
+            isSignal: $this->allFlagged($variants, 'is_signal'),
+            isSlot: $this->allFlagged($variants, 'is_slot'),
             returnType: $returnType,
             parameters: $parameters,
             overloads: $overloads,
@@ -192,6 +196,7 @@ class ClassDefinitionBuilder
         );
 
         return new MethodOverload(
+            declaringClass: (string) ($variant['declaring_class'] ?? ''),
             returnType: $variant['return_type'],
             parameters: $params,
             isConst: $variant['is_const'],
@@ -199,6 +204,24 @@ class ClassDefinitionBuilder
             isVirtual: $variant['is_virtual'],
             isPureVirtual: $variant['is_pure_virtual'],
         );
+    }
+
+    /**
+     * @param list<array<string, mixed>> $variants
+     */
+    private function allFlagged(array $variants, string $key): bool
+    {
+        if ($variants === []) {
+            return false;
+        }
+
+        foreach ($variants as $variant) {
+            if (($variant[$key] ?? false) !== true) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     // ------------------------------------------------------------------

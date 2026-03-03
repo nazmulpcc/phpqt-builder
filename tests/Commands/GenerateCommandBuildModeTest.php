@@ -414,7 +414,7 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QProtectedThing, tweak)', $cpp);
     }
 
-    public function testGenerateBuildModeGeneratesSignalApisAndRetainsProtectedSlots(): void
+    public function testGenerateBuildModeGeneratesSignalApisAndSkipsProtectedSlots(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/signals-qt';
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-signals-' . bin2hex(random_bytes(4));
@@ -440,12 +440,13 @@ final class GenerateCommandBuildModeTest extends TestCase
 
         $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
         self::assertSame('ok', $payload['status']);
-        self::assertNotContains('resetValue', array_column($payload['skipped_methods'], 'name'));
+        self::assertContains('resetValue', array_column($payload['skipped_methods'], 'name'));
+        self::assertContains('non_public_method', array_column($payload['skipped_methods'], 'reason_code'));
 
         $stub = (string) file_get_contents($outputDir . '/classes/qt_qsignalfixture.stub.php');
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qsignalfixture.cpp');
 
-        self::assertStringContainsString('protected function resetValue(): void {}', $stub);
+        self::assertStringNotContainsString('protected function resetValue(): void {}', $stub);
         self::assertStringContainsString('public function connectSignal(string $signalSignature, callable $callback): void {}', $stub);
         self::assertStringContainsString('public function onTriggered(callable $callback): void {}', $stub);
         self::assertStringContainsString('public function onValueChanged(callable $callback): void {}', $stub);
@@ -456,6 +457,7 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringContainsString('zend_string_equals_literal(signalSignature, "triggered()")', $cpp);
         self::assertStringContainsString('static_cast<void (QSignalFixture::*)(int)>(&QSignalFixture::valueChanged)', $cpp);
         self::assertStringContainsString('ZEND_ME(Qt_Core_QSignalFixture, onTriggered,', $cpp);
+        self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QSignalFixture, resetValue)', $cpp);
     }
 
     public function testGenerateBuildModeDisambiguatesOverloadedSignalSugarMethods(): void
@@ -492,6 +494,52 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringContainsString('public function onValueChangedBool(callable $callback): void {}', $stub);
         self::assertStringContainsString('zend_string_equals_literal(signalSignature, "valueChanged(int)")', $cpp);
         self::assertStringContainsString('zend_string_equals_literal(signalSignature, "valueChanged(bool)")', $cpp);
+    }
+
+    public function testGenerateBuildModeSkipsSignalsWithNonCopyableCallbackParameters(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/signals-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-nocopy-signals-' . bin2hex(random_bytes(4));
+        $classHeadersFile = $outputDir . '/class_headers.json';
+
+        mkdir($outputDir, 0755, true);
+        file_put_contents($classHeadersFile, json_encode([
+            'QSignalNoCopyFixture' => $fixtureRoot . '/include/QtCore/qsignalnocopyfixture.h',
+            'QSignalNoCopyValue' => $fixtureRoot . '/include/QtCore/qsignalnocopyfixture.h',
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qsignalnocopyfixture.h',
+            'class' => 'QSignalNoCopyFixture',
+            '--qt-path' => $fixtureRoot,
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+            ],
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QSignalNoCopyFixture,QSignalNoCopyValue',
+            '--class-headers-file' => $classHeadersFile,
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertContains('blocked', array_column($payload['skipped_methods'], 'name'));
+        self::assertContains('unsupported_signal_callback_parameter', array_column($payload['skipped_methods'], 'reason_code'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qsignalnocopyfixture.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qsignalnocopyfixture.cpp');
+
+        self::assertStringNotContainsString('public function connectSignal(string $signalSignature, callable $callback): void {}', $stub);
+        self::assertStringNotContainsString('public function onBlocked(callable $callback): void {}', $stub);
+        self::assertStringNotContainsString('zend_string_equals_literal(signalSignature, "blocked(QSignalNoCopyValue)")', $cpp);
+        self::assertStringNotContainsString('new QSignalNoCopyValue(_qt_arg_0)', $cpp);
     }
 
     public function testGenerateBuildModeIncludesInheritedSignalsInConnectApi(): void

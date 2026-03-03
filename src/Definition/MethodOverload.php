@@ -17,6 +17,7 @@ readonly class MethodOverload
      * @param list<OverloadParameter> $parameters
      */
     public function __construct(
+        public string $declaringClass,
         public string $returnType,
         public array $parameters,
         public bool $isConst,
@@ -45,11 +46,12 @@ readonly class MethodOverload
     }
 
     /**
-     * @return array{return_type: string, parameters: list<array<string, mixed>>, is_const: bool, is_static: bool, is_virtual: bool, is_pure_virtual: bool}
+     * @return array{declaring_class: string, return_type: string, parameters: list<array<string, mixed>>, is_const: bool, is_static: bool, is_virtual: bool, is_pure_virtual: bool}
      */
     public function toArray(): array
     {
         return [
+            'declaring_class' => $this->declaringClass,
             'return_type' => $this->returnType,
             'parameters' => array_map(
                 static fn(OverloadParameter $p): array => $p->toArray(),

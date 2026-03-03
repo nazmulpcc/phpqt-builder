@@ -12,10 +12,17 @@
 #include "{!! $ctx->filePrefix !!}_arginfo.h"
 #include <chrono>
 #include <filesystem>
+#include <memory>
 #include <new>
 #include <string>
 #include <QString>
 #include <QByteArray>
+@if($ctx->hasSignals())
+#include <QCoreApplication>
+#include <QMetaObject>
+#include <QObject>
+#include <QThread>
+@endif
 @if($ctx->parentCeVarName)
 #include "{!! 'qt_' . strtolower($ctx->parentClassName) !!}.h"
 @endif
@@ -29,6 +36,116 @@
 
 zend_class_entry *{!! $ctx->ceVarName !!} = NULL;
 zend_object_handlers {!! $ctx->handlersVarName !!};
+
+/* ------------------------------------------------------------------ */
+/* Internal PHP method dispatch helper                                 */
+/* ------------------------------------------------------------------ */
+
+static zend_always_inline zval *qt_call_method_with_params(zend_object *object, const char *function_name, zval *retval, uint32_t param_count, zval *params)
+{
+    zend_fcall_info fci;
+    zend_fcall_info_cache fcc;
+
+    memset(&fci, 0, sizeof(fci));
+    memset(&fcc, 0, sizeof(fcc));
+
+    fci.size = sizeof(fci);
+    fci.object = object;
+    fci.retval = retval;
+    fci.param_count = param_count;
+    fci.params = params;
+
+    zval functionName;
+    ZVAL_STRINGL(&functionName, function_name, strlen(function_name));
+    fci.function_name = functionName;
+    zend_call_function(&fci, &fcc);
+    zval_ptr_dtor(&functionName);
+
+    return retval;
+}
+
+@if($ctx->hasSignals())
+/* ------------------------------------------------------------------ */
+/* Signal callback runtime                                             */
+/* ------------------------------------------------------------------ */
+
+struct qt_signal_callback_t {
+    zend_fcall_info fci;
+    zend_fcall_info_cache fci_cache;
+};
+
+static inline void qt_signal_callback_clear(const std::shared_ptr<qt_signal_callback_t> &callback)
+{
+    if (!callback) {
+        return;
+    }
+
+    zend_fcall_info_args_clear(&callback->fci, true);
+    if (!Z_ISUNDEF(callback->fci.function_name)) {
+        zval_ptr_dtor(&callback->fci.function_name);
+        ZVAL_UNDEF(&callback->fci.function_name);
+    }
+}
+
+static inline std::shared_ptr<qt_signal_callback_t> qt_signal_callback_create(const QObject *sender, zval *callback)
+{
+    auto handle = std::make_shared<qt_signal_callback_t>();
+    memset(&handle->fci, 0, sizeof(handle->fci));
+    memset(&handle->fci_cache, 0, sizeof(handle->fci_cache));
+    ZVAL_UNDEF(&handle->fci.function_name);
+
+    char *error = NULL;
+    if (zend_fcall_info_init(callback, 0, &handle->fci, &handle->fci_cache, NULL, &error) != SUCCESS) {
+        if (error != NULL) {
+            zend_throw_exception_ex(zend_ce_type_error, 0, "Invalid signal callback: %s", error);
+            efree(error);
+        } else {
+            zend_throw_exception_ex(zend_ce_type_error, 0, "Invalid signal callback.");
+        }
+        return nullptr;
+    }
+
+    Z_TRY_ADDREF(handle->fci.function_name);
+
+    if (sender != NULL) {
+        QObject::connect(sender, &QObject::destroyed, [handle]() {
+            qt_signal_callback_clear(handle);
+        });
+    }
+
+    return handle;
+}
+
+static inline bool qt_signal_callback_invoke(const std::shared_ptr<qt_signal_callback_t> &callback, uint32_t param_count, zval *params)
+{
+    zval retval;
+    ZVAL_NULL(&retval);
+
+    callback->fci.retval = &retval;
+    callback->fci.params = params;
+    callback->fci.param_count = param_count;
+
+    bool ok = zend_call_function(&callback->fci, &callback->fci_cache) == SUCCESS;
+    zval_ptr_dtor(&retval);
+
+    return ok;
+}
+
+template <typename InvokeCallback>
+static inline void qt_signal_dispatch(InvokeCallback invoke)
+{
+    QCoreApplication *_qt_app = QCoreApplication::instance();
+    if (_qt_app != NULL && QThread::currentThread() != _qt_app->thread()) {
+        QMetaObject::invokeMethod(_qt_app, [invoke]() mutable {
+            invoke();
+        }, Qt::QueuedConnection);
+        return;
+    }
+
+    invoke();
+}
+
+@endif
 
 /* ------------------------------------------------------------------ */
 /* create_object                                                       */
@@ -155,6 +272,56 @@ void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativeCppType !!
 @include('generation.method.simple', ['ctx' => $ctx, 'method' => $method])
 @endif
 @endforeach
+@if($ctx->hasSignals())
+
+/* connectSignal */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connectSignal)
+{
+    zend_string *signalSignature;
+    zval *callback;
+
+    ZEND_PARSE_PARAMETERS_START(2, 2)
+        Z_PARAM_STR(signalSignature)
+        Z_PARAM_ZVAL(callback)
+    ZEND_PARSE_PARAMETERS_END();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (intern->native_ptr == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+@foreach($ctx->signalOverloads as $signal)
+    if (zend_string_equals_literal(signalSignature, "{!! $signal->signatureLiteral() !!}")) {
+@include('generation.method.signal_bind', ['ctx' => $ctx, 'signal' => $signal])
+    }
+@endforeach
+
+    zend_throw_error(NULL, "Unknown signal signature for {!! $ctx->phpClassName !!}::connectSignal().");
+    RETURN_THROWS();
+}
+
+@foreach($ctx->signalOverloads as $signal)
+/* {!! $signal->phpMethodName !!} */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $signal->phpMethodName !!})
+{
+    zval *callback;
+
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_ZVAL(callback)
+    ZEND_PARSE_PARAMETERS_END();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (intern->native_ptr == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+@include('generation.method.signal_bind', ['ctx' => $ctx, 'signal' => $signal])
+}
+
+@endforeach
+@endif
 
 /* ------------------------------------------------------------------ */
 /* Function entry table                                                */
@@ -164,6 +331,12 @@ static const zend_function_entry {!! $ctx->filePrefix !!}_methods[] = {
 @foreach($ctx->methods as $method)
     ZEND_ME({!! $ctx->zendClassSymbol !!}, {!! $method->name !!}, {!! $method->arginfoName !!}, {!! $method->accessFlags !!})
 @endforeach
+@if($ctx->hasSignals())
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, connectSignal, {!! $ctx->connectSignalArginfoName !!}, ZEND_ACC_PUBLIC)
+@foreach($ctx->signalOverloads as $signal)
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, {!! $signal->phpMethodName !!}, {!! $signal->arginfoName !!}, ZEND_ACC_PUBLIC)
+@endforeach
+@endif
     ZEND_FE_END
 };
 

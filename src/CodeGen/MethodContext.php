@@ -38,6 +38,12 @@ class MethodContext
     /** Whether all overloads are static */
     public readonly bool $isStatic;
 
+    /** Whether this method is a Qt signal */
+    public readonly bool $isSignal;
+
+    /** Whether this method is a Qt slot */
+    public readonly bool $isSlot;
+
     /** Whether this method has multiple C++ overloads */
     public readonly bool $isOverloaded;
 
@@ -89,6 +95,8 @@ class MethodContext
         $this->access = $method->access;
         $this->isConstructor = $method->name === '__construct';
         $this->isStatic = $method->isStatic;
+        $this->isSignal = $method->isSignal;
+        $this->isSlot = $method->isSlot;
         $this->isOverloaded = $method->isOverloaded();
         $this->overloadCount = $method->overloadCount();
         $this->returnType = $method->returnType;

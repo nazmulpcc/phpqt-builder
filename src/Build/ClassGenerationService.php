@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace QtBuilder\Build;
 
+use QtBuilder\CodeGen\TypeBridge;
 use QtBuilder\Definition\PhpClass;
 use QtBuilder\Definition\PhpMethod;
 use QtBuilder\Filtering\ClassExposurePolicy;
 use QtBuilder\Filtering\MethodExposurePolicy;
 use QtBuilder\Parsing\ClassDefinitionBuilder;
 use QtBuilder\Parsing\ClangArgumentBuilder;
+use QtBuilder\Parsing\CppToPhpTypeMapper;
 use QtBuilder\Parsing\QtClassInspector;
 
 class ClassGenerationService
@@ -18,6 +20,8 @@ class ClassGenerationService
         private readonly ClassExposurePolicy $classPolicy = new ClassExposurePolicy(),
         private readonly MethodExposurePolicy $methodPolicy = new MethodExposurePolicy(),
         private readonly ClassDefinitionBuilder $builder = new ClassDefinitionBuilder(),
+        private readonly TypeBridge $typeBridge = new TypeBridge(),
+        private readonly CppToPhpTypeMapper $typeMapper = new CppToPhpTypeMapper(),
     ) {}
 
     /**
@@ -57,13 +61,18 @@ class ClassGenerationService
         }
 
         $filtered = $this->methodPolicy->filter($classData, $allowedClasses);
+        $signalFilter = $this->filterSignalCallbackMethods(
+            $filtered['selected_methods'],
+            $includePaths,
+            $classHeaders,
+        );
         $classData['signals'] = $this->collectSignalVariants(
             $className,
             $headerPath,
             $includePaths,
             $allowedClasses,
             $classHeaders,
-            $filtered['selected_methods'],
+            $signalFilter['selected_methods'],
         );
         $classData['methods'] = array_values(array_filter(
             $filtered['selected_methods'],
@@ -79,7 +88,7 @@ class ClassGenerationService
             $classHeaders,
         );
         $phpClass = $inheritanceFiltered['class'];
-        $skippedMethods = [...$filtered['skipped_methods'], ...$inheritanceFiltered['skipped_methods']];
+        $skippedMethods = [...$filtered['skipped_methods'], ...$signalFilter['skipped_methods'], ...$inheritanceFiltered['skipped_methods']];
 
         if (count($phpClass->methods) === 0 && count($phpClass->signals) === 0 && !$phpClass->isAbstract) {
             return ClassGenerationResult::skipped(
@@ -187,12 +196,18 @@ class ClassGenerationService
         }
 
         $filtered = $this->methodPolicy->filter($classData, $allowedClasses);
+        $signalFilter = $this->filterSignalCallbackMethods(
+            $filtered['selected_methods'],
+            [],
+            [],
+            $preparedClassDataByClass,
+        );
         $classData['signals'] = $this->collectSignalVariantsFromPrepared(
             $classData,
             $headerPath,
             $allowedClasses,
             $preparedClassDataByClass,
-            $filtered['selected_methods'],
+            $signalFilter['selected_methods'],
         );
         $classData['methods'] = array_values(array_filter(
             $filtered['selected_methods'],
@@ -207,7 +222,7 @@ class ClassGenerationService
             $preparedClassDataByClass,
         );
         $phpClass = $inheritanceFiltered['class'];
-        $skippedMethods = [...$filtered['skipped_methods'], ...$inheritanceFiltered['skipped_methods']];
+        $skippedMethods = [...$filtered['skipped_methods'], ...$signalFilter['skipped_methods'], ...$inheritanceFiltered['skipped_methods']];
 
         if (count($phpClass->methods) === 0 && count($phpClass->signals) === 0 && !$phpClass->isAbstract) {
             return ClassGenerationResult::skipped(
@@ -353,7 +368,6 @@ class ClassGenerationService
         array $selectedMethods,
     ): array {
         $signals = [];
-        $parentClass = null;
 
         foreach ($selectedMethods as $method) {
             if (($method['is_signal'] ?? false) === true) {
@@ -368,7 +382,9 @@ class ClassGenerationService
             $allowedClasses,
             $classHeaders,
         );
-        $parentClass = is_string($rawClassData['bases'][0] ?? null) ? $rawClassData['bases'][0] : null;
+        $parentClass = is_array($rawClassData)
+            ? (is_string($rawClassData['bases'][0] ?? null) ? $rawClassData['bases'][0] : null)
+            : null;
 
         if ($parentClass === null || $parentClass === '' || $parentClass === $className || !in_array($parentClass, $allowedClasses, true)) {
             return $signals;
@@ -466,7 +482,12 @@ class ClassGenerationService
             );
         }
 
-        foreach ($classData['selected_methods'] as $method) {
+        $signalFilter = $this->filterSignalCallbackMethods(
+            $classData['selected_methods'],
+            $includePaths,
+            $classHeaders,
+        );
+        foreach ($signalFilter['selected_methods'] as $method) {
             if (($method['is_signal'] ?? false) === true) {
                 $signals[] = $method;
             }
@@ -511,13 +532,233 @@ class ClassGenerationService
         }
 
         $filtered = $this->methodPolicy->filter($classData, $allowedClasses);
-        foreach ($filtered['selected_methods'] as $method) {
+        $signalFilter = $this->filterSignalCallbackMethods(
+            $filtered['selected_methods'],
+            [],
+            [],
+            $preparedClassDataByClass,
+        );
+        foreach ($signalFilter['selected_methods'] as $method) {
             if (($method['is_signal'] ?? false) === true) {
                 $signals[] = $method;
             }
         }
 
         return $signals;
+    }
+
+    /**
+     * @param list<array<string, mixed>> $selectedMethods
+     * @param list<string> $includePaths
+     * @param array<string, string> $classHeaders
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @return array{selected_methods: list<array<string, mixed>>, skipped_methods: list<array<string, string>>}
+     */
+    private function filterSignalCallbackMethods(
+        array $selectedMethods,
+        array $includePaths = [],
+        array $classHeaders = [],
+        array $preparedClassDataByClass = [],
+    ): array {
+        $keptMethods = [];
+        $skippedMethods = [];
+        /** @var array<string, array<string, mixed>|null> $parameterClassFactsCache */
+        $parameterClassFactsCache = [];
+
+        foreach ($selectedMethods as $method) {
+            if (($method['is_signal'] ?? false) !== true) {
+                $keptMethods[] = $method;
+                continue;
+            }
+
+            $unsupportedReason = $this->unsupportedSignalCallbackReason(
+                $method,
+                $includePaths,
+                $classHeaders,
+                $preparedClassDataByClass,
+                $parameterClassFactsCache,
+            );
+            if ($unsupportedReason !== null) {
+                $skippedMethods[] = [
+                    'name' => (string) ($method['name'] ?? ''),
+                    'reason_code' => $unsupportedReason['code'],
+                    'reason_message' => $unsupportedReason['message'],
+                ];
+                continue;
+            }
+
+            $keptMethods[] = $method;
+        }
+
+        return [
+            'selected_methods' => $keptMethods,
+            'skipped_methods' => $skippedMethods,
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $method
+     * @param list<string> $includePaths
+     * @param array<string, string> $classHeaders
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @param array<string, array<string, mixed>|null> $parameterClassFactsCache
+     * @return array{code: string, message: string}|null
+     */
+    private function unsupportedSignalCallbackReason(
+        array $method,
+        array $includePaths,
+        array $classHeaders,
+        array $preparedClassDataByClass,
+        array &$parameterClassFactsCache,
+    ): ?array {
+        $parameters = is_array($method['parameters'] ?? null) ? $method['parameters'] : [];
+
+        foreach ($parameters as $parameter) {
+            $cppType = is_string($parameter['type'] ?? null) ? $parameter['type'] : '';
+            if ($cppType === '') {
+                return [
+                    'code' => 'unsupported_signal_callback_parameter',
+                    'message' => sprintf('Signal %s() has a parameter with an unknown native type.', (string) ($method['name'] ?? '')),
+                ];
+            }
+
+            $phpType = $this->typeMapper->map($cppType);
+            $strategy = $this->typeBridge->returnStrategyForCpp($phpType, $cppType);
+            if (in_array($strategy, ['scalar', 'string', 'qobject_pointer'], true)) {
+                continue;
+            }
+
+            if ($strategy !== 'value_object') {
+                return [
+                    'code' => 'unsupported_signal_callback_parameter',
+                    'message' => sprintf('Signal %s() uses callback parameter type %s which is not supported.', (string) ($method['name'] ?? ''), $cppType),
+                ];
+            }
+
+            $classFacts = $this->signalParameterClassFacts(
+                $phpType,
+                $includePaths,
+                $classHeaders,
+                $preparedClassDataByClass,
+                $parameterClassFactsCache,
+            );
+            if ($classFacts === null) {
+                return [
+                    'code' => 'unsupported_signal_callback_parameter',
+                    'message' => sprintf('Signal %s() uses callback parameter type %s which cannot be prepared as a PHP object safely.', (string) ($method['name'] ?? ''), $cppType),
+                ];
+            }
+
+            if (!$this->isSignalParameterCopyable($classFacts, $phpType)) {
+                return [
+                    'code' => 'unsupported_signal_callback_parameter',
+                    'message' => sprintf('Signal %s() uses callback parameter type %s which is not copy-constructible.', (string) ($method['name'] ?? ''), $cppType),
+                ];
+            }
+
+            if (!(bool) ($classFacts['has_public_destructor'] ?? false)) {
+                return [
+                    'code' => 'unsupported_signal_callback_parameter',
+                    'message' => sprintf('Signal %s() uses callback parameter type %s which does not have a public destructor.', (string) ($method['name'] ?? ''), $cppType),
+                ];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param list<string> $includePaths
+     * @param array<string, string> $classHeaders
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @param array<string, array<string, mixed>|null> $parameterClassFactsCache
+     * @return array<string, mixed>|null
+     */
+    private function signalParameterClassFacts(
+        string $phpType,
+        array $includePaths,
+        array $classHeaders,
+        array $preparedClassDataByClass,
+        array &$parameterClassFactsCache,
+    ): ?array {
+        if (isset($preparedClassDataByClass[$phpType]) && is_array($preparedClassDataByClass[$phpType])) {
+            return $preparedClassDataByClass[$phpType];
+        }
+
+        if (array_key_exists($phpType, $parameterClassFactsCache)) {
+            return $parameterClassFactsCache[$phpType];
+        }
+
+        $headerPath = $classHeaders[$phpType] ?? null;
+        if (!is_string($headerPath) || $headerPath === '') {
+            $parameterClassFactsCache[$phpType] = null;
+
+            return null;
+        }
+
+        $facts = $this->prepareDiscoveryFacts($headerPath, $phpType, $includePaths);
+        if (($facts['status'] ?? 'error') !== 'ok' || !is_array($facts['class_data'] ?? null)) {
+            $parameterClassFactsCache[$phpType] = null;
+
+            return null;
+        }
+
+        $parameterClassFactsCache[$phpType] = $facts['class_data'];
+
+        return $parameterClassFactsCache[$phpType];
+    }
+
+    /**
+     * @param array<string, mixed> $classFacts
+     */
+    private function isSignalParameterCopyable(array $classFacts, string $className): bool
+    {
+        if (!(bool) ($classFacts['is_copy_constructible'] ?? false)) {
+            return false;
+        }
+
+        $methods = is_array($classFacts['methods'] ?? null) ? $classFacts['methods'] : [];
+        foreach ($methods as $method) {
+            if (!is_array($method) || ($method['name'] ?? null) !== $className) {
+                continue;
+            }
+
+            $parameters = is_array($method['parameters'] ?? null) ? $method['parameters'] : [];
+            if (count($parameters) !== 1) {
+                continue;
+            }
+
+            $parameterType = is_string($parameters[0]['type'] ?? null) ? $parameters[0]['type'] : '';
+            if ($parameterType === '' || !str_contains($parameterType, '&')) {
+                continue;
+            }
+
+            if ($this->normalizeSignalParameterClassName($parameterType) !== $className) {
+                continue;
+            }
+
+            if (($method['is_deleted'] ?? false) === true) {
+                return false;
+            }
+
+            return ($method['access'] ?? 'private') === 'public';
+        }
+
+        return true;
+    }
+
+    private function normalizeSignalParameterClassName(string $cppType): string
+    {
+        $type = trim($cppType);
+        $type = preg_replace('/\bconst\b/', '', $type) ?? $type;
+        $type = trim(preg_replace('/\s+/', ' ', $type) ?? $type);
+        $type = rtrim($type, '& ');
+
+        while (str_ends_with($type, '*')) {
+            $type = rtrim(substr($type, 0, -1));
+        }
+
+        return trim($type);
     }
 
     /**

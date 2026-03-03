@@ -98,6 +98,12 @@ class ClassContext
     /** @var list<MethodContext> */
     public readonly array $methods;
 
+    /** @var list<MethodContext> */
+    public readonly array $signals;
+
+    /** @var list<SignalOverloadContext> */
+    public readonly array $signalOverloads;
+
     /** @var list<PropertyContext> */
     public readonly array $properties;
 
@@ -118,6 +124,9 @@ class ClassContext
 
     /** Fully-qualified parent class name for stub generation or null */
     public readonly ?string $stubParentClassName;
+
+    /** Arginfo symbol for connectSignal() */
+    public readonly string $connectSignalArginfoName;
 
     public function __construct(
         PhpClass $phpClass,
@@ -177,6 +186,18 @@ class ClassContext
             $methods[] = new MethodContext($method, $this, $typeBridge);
         }
         $this->methods = $methods;
+
+        $signals = [];
+        foreach ($phpClass->signals as $signal) {
+            $signals[] = new MethodContext($signal, $this, $typeBridge);
+        }
+        $this->signals = $signals;
+        $this->signalOverloads = $this->buildSignalOverloads($signals, $typeBridge);
+        $this->connectSignalArginfoName = $typeBridge->arginfoName(
+            $this->phpNamespace,
+            $this->phpClassName,
+            'connectSignal',
+        );
         $this->needsArgvStorage = $this->computeNeedsArgvStorage($methods);
         $this->argvStorageStructName = $this->needsArgvStorage
             ? 'qt_argv_storage'
@@ -259,6 +280,12 @@ class ClassContext
             }
         }
 
+        foreach ($phpClass->signals as $signal) {
+            foreach ($signal->parameters as $param) {
+                $this->collectClassRefs($param->phpType, $typeBridge, $classes);
+            }
+        }
+
         // Remove self
         unset($classes[$phpClass->name]);
 
@@ -307,5 +334,57 @@ class ClassContext
         }
 
         return false;
+    }
+
+    public function hasSignals(): bool
+    {
+        return $this->signalOverloads !== [];
+    }
+
+    /**
+     * @param list<MethodContext> $signals
+     * @return list<SignalOverloadContext>
+     */
+    private function buildSignalOverloads(array $signals, TypeBridge $typeBridge): array
+    {
+        $signalOverloads = [];
+        $usedMethodNames = [];
+
+        foreach ($signals as $signal) {
+            $baseMethodName = 'on' . ucfirst($signal->name);
+
+            foreach ($signal->overloads as $overload) {
+                $phpMethodName = $baseMethodName;
+                if (\count($signal->overloads) > 1) {
+                    $phpMethodName .= $typeBridge->signalMethodSuffix($overload->params);
+                }
+
+                if (isset($usedMethodNames[$phpMethodName])) {
+                    $usedMethodNames[$phpMethodName]++;
+                    $phpMethodName .= (string) $usedMethodNames[$phpMethodName];
+                } else {
+                    $usedMethodNames[$phpMethodName] = 1;
+                }
+
+                $signalOverloads[] = new SignalOverloadContext(
+                    name: $signal->name,
+                    phpMethodName: $phpMethodName,
+                    signature: $typeBridge->signalSignature($signal->name, $overload),
+                    arginfoName: $typeBridge->arginfoName(
+                        $this->phpNamespace,
+                        $this->phpClassName,
+                        $phpMethodName,
+                    ),
+                    memberPointerExpr: $typeBridge->signalMemberPointerExpr(
+                        $overload->declaringClass !== '' ? $overload->declaringClass : $this->phpClassName,
+                        $signal->name,
+                        $overload,
+                    ),
+                    params: $overload->params,
+                );
+            }
+        }
+
+        return $signalOverloads;
     }
 }
