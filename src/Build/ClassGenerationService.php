@@ -49,6 +49,7 @@ class ClassGenerationService
 
         /** @var array<string, mixed> $classData */
         $classData = $facts['class_data'];
+        $sourceClassData = $classData;
 
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
         if ($parentClass !== null && !in_array($parentClass, $allowedClasses, true)) {
@@ -94,6 +95,36 @@ class ClassGenerationService
         );
         $phpClass = $inheritanceFiltered['class'];
         $skippedMethods = [...$filtered['skipped_methods'], ...$signalFilter['skipped_methods'], ...$virtualFilter['skipped_methods'], ...$inheritanceFiltered['skipped_methods']];
+        $abstractConstructorAdjusted = $this->filterUnsupportedAbstractConstructors(
+            $phpClass,
+            $sourceClassData,
+            function () use ($className, $sourceClassData, $headerPath, $includePaths, $allowedClasses, $classHeaders): array {
+                /** @var array<string, true> $names */
+                $names = [];
+                $visited = [];
+
+                foreach ((array) ($sourceClassData['bases'] ?? []) as $baseClass) {
+                    if (!is_string($baseClass) || $baseClass === '' || $baseClass === $className) {
+                        continue;
+                    }
+
+                    foreach ($this->collectInheritedPureVirtualRequirementNames(
+                        $baseClass,
+                        $headerPath,
+                        $includePaths,
+                        $allowedClasses,
+                        $classHeaders,
+                        $visited,
+                    ) as $methodName) {
+                        $names[$methodName] = true;
+                    }
+                }
+
+                return array_keys($names);
+            },
+        );
+        $phpClass = $abstractConstructorAdjusted['class'];
+        $skippedMethods = [...$skippedMethods, ...$abstractConstructorAdjusted['skipped_methods']];
 
         if (count($phpClass->methods) === 0 && count($phpClass->signals) === 0 && !$phpClass->isAbstract) {
             return ClassGenerationResult::skipped(
@@ -189,6 +220,7 @@ class ClassGenerationService
                 'Prepared class data is missing the class name.',
             );
         }
+        $sourceClassData = $classData;
 
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
         if ($parentClass !== null && !in_array($parentClass, $allowedClasses, true)) {
@@ -234,6 +266,35 @@ class ClassGenerationService
         );
         $phpClass = $inheritanceFiltered['class'];
         $skippedMethods = [...$filtered['skipped_methods'], ...$signalFilter['skipped_methods'], ...$virtualFilter['skipped_methods'], ...$inheritanceFiltered['skipped_methods']];
+        $abstractConstructorAdjusted = $this->filterUnsupportedAbstractConstructors(
+            $phpClass,
+            $sourceClassData,
+            function () use ($className, $sourceClassData, $headerPath, $allowedClasses, $preparedClassDataByClass): array {
+                /** @var array<string, true> $names */
+                $names = [];
+                $visited = [];
+
+                foreach ((array) ($sourceClassData['bases'] ?? []) as $baseClass) {
+                    if (!is_string($baseClass) || $baseClass === '' || $baseClass === $className) {
+                        continue;
+                    }
+
+                    foreach ($this->collectInheritedPureVirtualRequirementNamesFromPrepared(
+                        $baseClass,
+                        $headerPath,
+                        $allowedClasses,
+                        $preparedClassDataByClass,
+                        $visited,
+                    ) as $methodName) {
+                        $names[$methodName] = true;
+                    }
+                }
+
+                return array_keys($names);
+            },
+        );
+        $phpClass = $abstractConstructorAdjusted['class'];
+        $skippedMethods = [...$skippedMethods, ...$abstractConstructorAdjusted['skipped_methods']];
 
         if (count($phpClass->methods) === 0 && count($phpClass->signals) === 0 && !$phpClass->isAbstract) {
             return ClassGenerationResult::skipped(
@@ -1149,6 +1210,230 @@ class ClassGenerationService
         }
 
         return true;
+    }
+
+    /**
+     * @param callable(): list<string> $inheritedPureVirtualCollector
+     * @return array{class: PhpClass, skipped_methods: list<array<string, string>>}
+     */
+    private function filterUnsupportedAbstractConstructors(
+        PhpClass $phpClass,
+        array $classData,
+        callable $inheritedPureVirtualCollector,
+    ): array {
+        if (!$phpClass->isAbstract) {
+            return ['class' => $phpClass, 'skipped_methods' => []];
+        }
+
+        $hasConstructor = false;
+        foreach ($phpClass->methods as $method) {
+            if ($method->name === '__construct') {
+                $hasConstructor = true;
+                break;
+            }
+        }
+
+        if (!$hasConstructor) {
+            return ['class' => $phpClass, 'skipped_methods' => []];
+        }
+
+        if ($this->canInstantiateAbstractSubclass($phpClass, $classData, $inheritedPureVirtualCollector)) {
+            return ['class' => $phpClass, 'skipped_methods' => []];
+        }
+
+        $methods = array_values(array_filter(
+            $phpClass->methods,
+            static fn(PhpMethod $method): bool => $method->name !== '__construct',
+        ));
+
+        return [
+            'class' => new PhpClass(
+                name: $phpClass->name,
+                parent: $phpClass->parent,
+                isAbstract: $phpClass->isAbstract,
+                isCopyConstructible: $phpClass->isCopyConstructible,
+                hasPublicDestructor: $phpClass->hasPublicDestructor,
+                properties: $phpClass->properties,
+                methods: $methods,
+                signals: $phpClass->signals,
+            ),
+            'skipped_methods' => [[
+                'name' => '__construct',
+                'reason_code' => 'unsupported_abstract_subclass_constructor',
+                'reason_message' => 'Abstract class constructors are only exposed when the generated native subclass can satisfy all pure virtual requirements.',
+            ]],
+        ];
+    }
+
+    /**
+     * @param callable(): list<string> $inheritedPureVirtualCollector
+     */
+    private function canInstantiateAbstractSubclass(
+        PhpClass $phpClass,
+        array $classData,
+        callable $inheritedPureVirtualCollector,
+    ): bool {
+        /** @var array<string, PhpMethod> $generatedMethodsByName */
+        $generatedMethodsByName = [];
+        foreach ($phpClass->methods as $method) {
+            if ($method->name === '__construct') {
+                continue;
+            }
+
+            $generatedMethodsByName[$method->name] = $method;
+        }
+
+        $requiresPureVirtualCoverage = false;
+        foreach ($this->declaredPureVirtualMethodNames($classData) as $methodName) {
+            $requiresPureVirtualCoverage = true;
+            if (!isset($generatedMethodsByName[$methodName])) {
+                return false;
+            }
+        }
+
+        foreach ($inheritedPureVirtualCollector() as $methodName) {
+            $requiresPureVirtualCoverage = true;
+            if (!isset($generatedMethodsByName[$methodName])) {
+                return false;
+            }
+        }
+
+        return $requiresPureVirtualCoverage;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function declaredPureVirtualMethodNames(array $classData): array
+    {
+        $className = (string) ($classData['name'] ?? '');
+        $methods = is_array($classData['methods'] ?? null) ? $classData['methods'] : [];
+        $names = [];
+
+        foreach ($methods as $method) {
+            if (!is_array($method) || ($method['is_pure_virtual'] ?? false) !== true) {
+                continue;
+            }
+
+            $declaringClass = is_string($method['declaring_class'] ?? null)
+                ? (string) $method['declaring_class']
+                : $className;
+            if ($declaringClass !== '' && $className !== '' && $declaringClass !== $className) {
+                continue;
+            }
+
+            $methodName = is_string($method['name'] ?? null) ? (string) $method['name'] : '';
+            if ($methodName === '' || $methodName === $className) {
+                continue;
+            }
+
+            $names[$methodName] = true;
+        }
+
+        return array_keys($names);
+    }
+
+    /**
+     * @param list<string> $includePaths
+     * @param list<string> $allowedClasses
+     * @param array<string, string> $classHeaders
+     * @param array<string, bool> $visited
+     * @return list<string>
+     */
+    private function collectInheritedPureVirtualRequirementNames(
+        string $className,
+        string $fallbackHeaderPath,
+        array $includePaths,
+        array $allowedClasses,
+        array $classHeaders,
+        array &$visited = [],
+    ): array {
+        if (isset($visited[$className])) {
+            return [];
+        }
+
+        $visited[$className] = true;
+        $headerPath = $classHeaders[$className] ?? $fallbackHeaderPath;
+        $facts = $this->prepareDiscoveryFacts($headerPath, $className, $includePaths);
+        if (($facts['status'] ?? 'error') !== 'ok' || !is_array($facts['class_data'] ?? null)) {
+            return [];
+        }
+
+        /** @var array<string, mixed> $classData */
+        $classData = $facts['class_data'];
+        /** @var array<string, true> $names */
+        $names = [];
+
+        foreach ($this->declaredPureVirtualMethodNames($classData) as $methodName) {
+            $names[$methodName] = true;
+        }
+
+        foreach ((array) ($classData['bases'] ?? []) as $baseClass) {
+            if (!is_string($baseClass) || $baseClass === '' || $baseClass === $className || !in_array($baseClass, $allowedClasses, true)) {
+                continue;
+            }
+
+            foreach ($this->collectInheritedPureVirtualRequirementNames(
+                $baseClass,
+                $headerPath,
+                $includePaths,
+                $allowedClasses,
+                $classHeaders,
+                $visited,
+            ) as $methodName) {
+                $names[$methodName] = true;
+            }
+        }
+
+        return array_keys($names);
+    }
+
+    /**
+     * @param list<string> $allowedClasses
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @param array<string, bool> $visited
+     * @return list<string>
+     */
+    private function collectInheritedPureVirtualRequirementNamesFromPrepared(
+        string $className,
+        string $fallbackHeaderPath,
+        array $allowedClasses,
+        array $preparedClassDataByClass,
+        array &$visited = [],
+    ): array {
+        if (isset($visited[$className])) {
+            return [];
+        }
+
+        $visited[$className] = true;
+        $classData = $preparedClassDataByClass[$className] ?? null;
+        if (!is_array($classData)) {
+            return [];
+        }
+
+        /** @var array<string, true> $names */
+        $names = [];
+        foreach ($this->declaredPureVirtualMethodNames($classData) as $methodName) {
+            $names[$methodName] = true;
+        }
+
+        foreach ((array) ($classData['bases'] ?? []) as $baseClass) {
+            if (!is_string($baseClass) || $baseClass === '' || $baseClass === $className || !in_array($baseClass, $allowedClasses, true)) {
+                continue;
+            }
+
+            foreach ($this->collectInheritedPureVirtualRequirementNamesFromPrepared(
+                $baseClass,
+                $fallbackHeaderPath,
+                $allowedClasses,
+                $preparedClassDataByClass,
+                $visited,
+            ) as $methodName) {
+                $names[$methodName] = true;
+            }
+        }
+
+        return array_keys($names);
     }
 
     private function requiredParameterCount(PhpMethod $method): int

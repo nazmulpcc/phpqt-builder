@@ -179,7 +179,7 @@ class MethodContext
             if ($overload->isPureVirtual) {
                 $hasPureVirtualOverloads = true;
             }
-            if ($overload->access === 'protected' && !$overload->isPureVirtual) {
+            if (!$this->isConstructor && $overload->access === 'protected' && !$overload->isPureVirtual) {
                 $hasCallableProtectedOverloads = true;
             }
         }
@@ -196,7 +196,7 @@ class MethodContext
     public function hasInstanceProtectedCallPath(): bool
     {
         foreach ($this->overloads as $overload) {
-            if ($overload->access === 'protected' && !$overload->isStatic && !$overload->isPureVirtual) {
+            if (!$this->isConstructor && $overload->access === 'protected' && !$overload->isStatic && !$overload->isPureVirtual) {
                 return true;
             }
         }

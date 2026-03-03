@@ -461,17 +461,21 @@ final class GenerateCommandBuildModeTest extends TestCase
 
         $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
         self::assertSame('ok', $payload['status']);
-        self::assertContains('QAbstractThing', array_column($payload['skipped_methods'], 'name'));
-        self::assertContains('abstract_constructor', array_column($payload['skipped_methods'], 'reason_code'));
+        self::assertNotContains('abstract_constructor', array_column($payload['skipped_methods'], 'reason_code'));
         self::assertFileExists($outputDir . '/classes/qt_qabstractthing.cpp');
 
         $stub = (string) file_get_contents($outputDir . '/classes/qt_qabstractthing.stub.php');
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qabstractthing.cpp');
 
         self::assertStringContainsString('abstract class QAbstractThing', $stub);
-        self::assertStringNotContainsString('public function __construct()', $stub);
+        self::assertStringContainsString('protected function __construct() {}', $stub);
         self::assertStringContainsString('public function size(): int {}', $stub);
         self::assertStringContainsString('class qt_php_QAbstractThing : public QAbstractThing', $cpp);
+        self::assertStringContainsString('ZEND_ME(Qt_Core_QAbstractThing, __construct,', $cpp);
+        self::assertStringContainsString('ZEND_ACC_PROTECTED', $cpp);
+        self::assertStringContainsString('bool _qt_use_trampoline = (Z_OBJCE_P(ZEND_THIS) != qt_ce_QAbstractThing);', $cpp);
+        self::assertStringContainsString('intern->native_ptr = new qt_php_QAbstractThing();', $cpp);
+        self::assertStringContainsString('zend_throw_error(NULL, "Abstract class QAbstractThing cannot be instantiated directly.");', $cpp);
         self::assertStringContainsString('if (!qt_method_is_overridden(this->php_object, qt_ce_QAbstractThing, "size"))', $cpp);
         self::assertStringContainsString('ce_flags |= ZEND_ACC_ABSTRACT;', $cpp);
     }
@@ -507,6 +511,70 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringNotContainsString('function __construct', $stub);
         self::assertStringContainsString('public function size(): int {}', $stub);
         self::assertStringContainsString('class qt_php_QAbstractShell : public QAbstractShell', $cpp);
+    }
+
+    public function testGenerateBuildModeOmitsAbstractConstructorsWhenPureVirtualsCannotBeSatisfied(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/abstract-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qabstractconstructorgaps.h',
+            'class' => 'QAbstractUnsupportedCtorThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QAbstractUnsupportedCtorThing',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertContains('unsupported_abstract_subclass_constructor', array_column($payload['skipped_methods'], 'reason_code'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qabstractunsupportedctorthing.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qabstractunsupportedctorthing.cpp');
+
+        self::assertStringContainsString('abstract class QAbstractUnsupportedCtorThing', $stub);
+        self::assertStringNotContainsString('function __construct', $stub);
+        self::assertStringNotContainsString('ZEND_ME(Qt_Core_QAbstractUnsupportedCtorThing, __construct,', $cpp);
+    }
+
+    public function testGenerateBuildModeOmitsAbstractConstructorsWhenPureVirtualsAreOnlyInherited(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/abstract-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qabstractconstructorgaps.h',
+            'class' => 'QAbstractCtorChildThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QAbstractCtorParentThing,QAbstractCtorChildThing',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertContains('unsupported_abstract_subclass_constructor', array_column($payload['skipped_methods'], 'reason_code'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qabstractctorchildthing.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qabstractctorchildthing.cpp');
+
+        self::assertStringContainsString('abstract class QAbstractCtorChildThing extends QAbstractCtorParentThing', $stub);
+        self::assertStringNotContainsString('function __construct', $stub);
+        self::assertStringNotContainsString('ZEND_ME(Qt_Core_QAbstractCtorChildThing, __construct,', $cpp);
     }
 
     public function testGenerateBuildModeAllowsConcreteChildrenOfAbstractParents(): void

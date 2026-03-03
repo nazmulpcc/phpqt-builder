@@ -47,9 +47,14 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
         intern->native_is_generated_subclass = true;
         intern->native_is_virtual_trampoline = true;
     } else {
+@if($ctx->isAbstract)
+        zend_throw_error(NULL, "Abstract class {!! $ctx->phpClassName !!} cannot be instantiated directly.");
+        RETURN_THROWS();
+@else
         intern->native_ptr = new {!! $ctx->plainNativeInstantiationType !!}();
         intern->native_is_generated_subclass = {!! $ctx->plainInstantiationUsesGeneratedType() ? 'true' : 'false' !!};
         intern->native_is_virtual_trampoline = false;
+@endif
     }
 @else
     intern->native_ptr = new {!! $ctx->nativeInstantiationType !!}();
@@ -80,9 +85,14 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
         intern->native_is_generated_subclass = true;
         intern->native_is_virtual_trampoline = true;
     } else {
+@if($ctx->isAbstract)
+        zend_throw_error(NULL, "Abstract class {!! $ctx->phpClassName !!} cannot be instantiated directly.");
+        RETURN_THROWS();
+@else
         intern->native_ptr = new {!! $ctx->plainNativeInstantiationType !!}({!! implode(', ', $callPlan['args']) !!});
         intern->native_is_generated_subclass = {!! $ctx->plainInstantiationUsesGeneratedType() ? 'true' : 'false' !!};
         intern->native_is_virtual_trampoline = false;
+@endif
     }
 @else
     intern->native_ptr = new {!! $ctx->nativeInstantiationType !!}({!! implode(', ', $callPlan['args']) !!});

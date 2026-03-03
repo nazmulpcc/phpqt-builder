@@ -158,7 +158,7 @@ class MethodExposurePolicy
                 continue;
             }
 
-            $normalizedVariant = $this->normalizeSpecialTypes($className, $variant, $flagAliases, $enumNames);
+            $normalizedVariant = $this->normalizeSpecialTypes($className, $variant, $flagAliases, $enumNames, $isAbstractClass);
             $dispatchSignature = $this->dispatchSignature($normalizedVariant);
             $score = $this->score($normalizedVariant);
             $existing = $selectedByDispatch[$dispatchSignature] ?? null;
@@ -228,19 +228,21 @@ class MethodExposurePolicy
     {
         $access = (string) ($variant['access'] ?? 'unknown');
         $isConstructor = $this->isConstructor($className, $variant);
-        if ($isConstructor && $access !== 'public') {
-            return ['code' => 'non_public_constructor', 'message' => sprintf('Constructors with %s access are not exposed.', $access)];
+        if ($isConstructor) {
+            if ($isAbstractClass) {
+                if ($access !== 'public' && $access !== 'protected') {
+                    return ['code' => 'non_public_constructor', 'message' => sprintf('Constructors with %s access are not exposed.', $access)];
+                }
+            } elseif ($access !== 'public') {
+                return ['code' => 'non_public_constructor', 'message' => sprintf('Constructors with %s access are not exposed.', $access)];
+            }
         }
 
-        if ($access === 'private' || $access === 'unknown') {
+        if (!$isConstructor && ($access === 'private' || $access === 'unknown')) {
             return ['code' => 'non_public_method', 'message' => sprintf('Methods with %s access are not exposed.', $access)];
         }
 
         if ($isConstructor) {
-            if ($isAbstractClass) {
-                return ['code' => 'abstract_constructor', 'message' => 'Constructors on abstract classes are skipped in the current build mode.'];
-            }
-
             if (($variant['is_deleted'] ?? false) === true) {
                 return ['code' => 'deleted_constructor', 'message' => 'Deleted constructors are not exposed.'];
             }
@@ -253,11 +255,11 @@ class MethodExposurePolicy
                 return ['code' => 'non_public_destructor', 'message' => 'Classes with non-public destructors cannot be directly instantiated.'];
             }
 
-            if (!$hasPublicConstructor) {
+            if (!$isAbstractClass && !$hasPublicConstructor) {
                 return ['code' => 'non_public_constructor', 'message' => 'Class does not provide a public constructor for direct instantiation.'];
             }
 
-            if ($this->isDefaultConstructor($variant) && !$hasPublicDefaultConstructor) {
+            if (!$isAbstractClass && $this->isDefaultConstructor($variant) && !$hasPublicDefaultConstructor) {
                 return ['code' => 'non_public_constructor', 'message' => 'Default constructor is not publicly accessible.'];
             }
         }
@@ -520,7 +522,7 @@ class MethodExposurePolicy
      * @param list<string> $enumNames
      * @return array<string, mixed>
      */
-    private function normalizeSpecialTypes(string $className, array $variant, array $flagAliases, array $enumNames = []): array
+    private function normalizeSpecialTypes(string $className, array $variant, array $flagAliases, array $enumNames = [], bool $isAbstractClass = false): array
     {
         $variant['return_type'] = $this->normalizeEnumType($className, (string) $variant['return_type'], $flagAliases, $enumNames);
         $variant['parameters'] = array_map(
@@ -531,6 +533,10 @@ class MethodExposurePolicy
             },
             $variant['parameters'],
         );
+
+        if ($isAbstractClass && $this->isConstructor($className, $variant)) {
+            $variant['access'] = 'protected';
+        }
 
         return $variant;
     }
