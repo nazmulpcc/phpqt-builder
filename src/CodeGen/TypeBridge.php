@@ -779,11 +779,13 @@ class TypeBridge
             static fn(OverloadParamContext $param): string => $param->cppType,
             $overload->params,
         );
+        $constQualifier = $overload->isConst ? ' const' : '';
 
         return sprintf(
-            'static_cast<void (%s::*)(%s)>(&%s::%s)',
+            'static_cast<void (%s::*)(%s)%s>(&%s::%s)',
             $declaringClass,
             implode(', ', $parameterTypes),
+            $constQualifier,
             $declaringClass,
             $methodName,
         );

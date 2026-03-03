@@ -587,6 +587,41 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringContainsString('static_cast<void (QSignalBaseFixture::*)()>(&QSignalBaseFixture::triggered)', $cpp);
     }
 
+    public function testGenerateBuildModePreservesConstSignalMemberPointers(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/signals-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-const-signals-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qconstsignalfixture.h',
+            'class' => 'QSignalConstFixture',
+            '--qt-path' => $fixtureRoot,
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+            ],
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QSignalConstFixture',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qsignalconstfixture.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qsignalconstfixture.cpp');
+
+        self::assertStringContainsString('public function connectSignal(string $signalSignature, callable $callback): void {}', $stub);
+        self::assertStringContainsString('public function onChanged(callable $callback): void {}', $stub);
+        self::assertStringContainsString('static_cast<void (QSignalConstFixture::*)(int) const>(&QSignalConstFixture::changed)', $cpp);
+    }
+
     public function testGenerateBuildModeCastsEnumParametersBackToNativeTypes(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
