@@ -2485,4 +2485,69 @@ CPP);
         self::assertStringContainsString('intern->native_ptr = new QRefConstructorThing(*qt_qsizelike_from_obj(Z_OBJ_P(size))->native_ptr);', $cpp);
         self::assertStringNotContainsString('? *qt_qsizelike_from_obj(Z_OBJ_P(size))->native_ptr : QSizeLike()', $cpp);
     }
+
+    public function testGenerateBuildModeMoveOnlyValueObjectReturnsUseMoveConstruction(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/qml-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtQml/qjsmanagedvalue.h',
+            'class' => 'QJSManagedValue',
+            '--qt-path' => '/definitely/not/a/qt/root',
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtQml',
+            ],
+            '--module' => 'QtQml',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QJSManagedValue,QJSEngine',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qjsmanagedvalue.cpp');
+        self::assertStringContainsString('_ret_intern->native_ptr = new QJSManagedValue(std::move(_result));', $cpp);
+    }
+
+    public function testGenerateBuildModeRvalueReferenceObjectParametersUseMoveAwareBridge(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/qml-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtQml/qjsvalue.h',
+            'class' => 'QJSValue',
+            '--qt-path' => '/definitely/not/a/qt/root',
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtQml',
+            ],
+            '--module' => 'QtQml',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QJSValue,QJSManagedValue,QJSPrimitiveValue,QJSEngine',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qjsvalue.cpp');
+        self::assertStringContainsString('QJSPrimitiveValue _qt_arg_0 = QJSPrimitiveValue(*qt_qjsprimitivevalue_from_obj(Z_OBJ_P(value))->native_ptr);', $cpp);
+        self::assertStringContainsString('new QJSValue(std::move(_qt_arg_0));', $cpp);
+        self::assertStringContainsString('QJSManagedValue _qt_arg_0 = QJSManagedValue(qt_qjsmanagedvalue_from_obj(Z_OBJ_P(value))->native_ptr->toJSValue(), qt_qjsmanagedvalue_from_obj(Z_OBJ_P(value))->native_ptr->engine());', $cpp);
+        self::assertStringContainsString('new QJSValue(std::move(_qt_arg_0));', $cpp);
+    }
 }

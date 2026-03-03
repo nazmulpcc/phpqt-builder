@@ -33,6 +33,9 @@ class OverloadParamContext
     /** Whether this parameter is a writable reference in C++ */
     public readonly bool $isNonConstReference;
 
+    /** Whether this parameter is an rvalue reference in C++ */
+    public readonly bool $isRvalueReference;
+
     /** Raw pointer depth from the original C++ type */
     public readonly int $pointerDepth;
 
@@ -49,6 +52,7 @@ class OverloadParamContext
         $this->isReference = $param->isReference;
         $this->isConstReference = $param->isConstReference;
         $this->isNonConstReference = $param->isNonConstReference;
+        $this->isRvalueReference = $param->isRvalueReference;
         $this->pointerDepth = $param->pointerDepth;
 
         $mapper = new CppToPhpTypeMapper();

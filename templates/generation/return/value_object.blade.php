@@ -46,5 +46,5 @@ if ($overload?->isPureVirtual) {
     {!! $returnClass !!} _result = {!! $callExpr !!};
     object_init_ex(return_value, {!! $returnCe !!});
     {!! $returnStruct !!} *_ret_intern = {!! $returnFromObj !!}(Z_OBJ_P(return_value));
-    _ret_intern->native_ptr = new {!! $returnClass !!}(_result);
+    _ret_intern->native_ptr = new {!! $returnClass !!}(std::move(_result));
 @endif

@@ -28,4 +28,14 @@ final class ClassExposurePolicyTest extends TestCase
         self::assertFalse($decision->accepted);
         self::assertSame('class_filtered', $decision->reasonCode);
     }
+
+    public function testInternalQmlPlaceholderTypeIsExplicitlyFiltered(): void
+    {
+        $policy = new ClassExposurePolicy();
+
+        $decision = $policy->decideClassName('QQmlTypeNotAvailable');
+
+        self::assertFalse($decision->accepted);
+        self::assertSame('class_filtered', $decision->reasonCode);
+    }
 }

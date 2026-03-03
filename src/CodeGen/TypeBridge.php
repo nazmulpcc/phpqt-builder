@@ -567,6 +567,7 @@ class TypeBridge
         string $nativeVarName,
         bool $sourceIsZval = false,
         bool $nullable = false,
+        bool $isRvalueReference = false,
         ?string $persistentStorageVar = null,
         ?string $pairedCountVarName = null,
     ): array {
@@ -587,6 +588,18 @@ class TypeBridge
             return [
                 'lines' => $this->phpArrayToNativeContainerLines($cppType, $sourceVarName, $nativeVarName),
                 'expr' => $nativeVarName,
+                'local_var' => $nativeVarName,
+            ];
+        }
+
+        if ($isRvalueReference) {
+            $initExpr = $sourceIsZval
+                ? $this->zvalToNativeRvalueExpr($phpType, $cppType, $sourceVarName, $nullable)
+                : $this->directPhpToNativeRvalueExpr($phpType, $cppType, $sourceVarName, $nullable);
+
+            return [
+                'lines' => [sprintf('%s %s = %s;', $this->localValueType($phpType, $cppType), $nativeVarName, $initExpr)],
+                'expr' => sprintf('std::move(%s)', $nativeVarName),
                 'local_var' => $nativeVarName,
             ];
         }
@@ -706,6 +719,19 @@ class TypeBridge
         };
     }
 
+    private function zvalToNativeRvalueExpr(string $phpType, string $cppType, string $varName, bool $nullable = false): string
+    {
+        return match ($phpType) {
+            'int' => $this->phpIntToNativeExpr($cppType, sprintf('Z_LVAL_P(%s)', $varName)),
+            'float' => sprintf('(%s)Z_DVAL_P(%s)', $this->cppCastType($cppType), $varName),
+            'bool' => sprintf('Z_TYPE_P(%s) == IS_TRUE', $varName),
+            'string' => $this->phpStringToNativeExpr($cppType, sprintf('Z_STR_P(%s)', $varName)),
+            default => $this->isObjectType($phpType)
+                ? $this->phpObjectToNativeRvalueExpr($phpType, $cppType, $varName, $nullable)
+                : $varName,
+        };
+    }
+
     private function directPhpToNativeExpr(string $phpType, string $cppType, string $varName, bool $nullable = false): string
     {
         return match ($phpType) {
@@ -715,6 +741,19 @@ class TypeBridge
             'string' => $this->phpStringToNativeExpr($cppType, $varName),
             default => $this->isObjectType($phpType)
                 ? $this->phpObjectToNativeExpr($phpType, $cppType, $varName, $nullable)
+                : $varName,
+        };
+    }
+
+    private function directPhpToNativeRvalueExpr(string $phpType, string $cppType, string $varName, bool $nullable = false): string
+    {
+        return match ($phpType) {
+            'int' => $this->phpIntToNativeExpr($cppType, $varName),
+            'float' => sprintf('(%s)%s', $this->cppCastType($cppType), $varName),
+            'bool' => $varName,
+            'string' => $this->phpStringToNativeExpr($cppType, $varName),
+            default => $this->isObjectType($phpType)
+                ? $this->phpObjectToNativeRvalueExpr($phpType, $cppType, $varName, $nullable)
                 : $varName,
         };
     }
@@ -748,6 +787,19 @@ class TypeBridge
         }
 
         return '*' . $baseExpr;
+    }
+
+    public function phpObjectToNativeRvalueExpr(string $phpType, string $cppType, string $varName, bool $nullable = false): string
+    {
+        $fromObj = $this->fromObjFuncName($phpType);
+        $baseExpr = sprintf('%s(Z_OBJ_P(%s))->native_ptr', $fromObj, $varName);
+        $normalizedType = $this->normalizeCppType($cppType);
+
+        if ($nullable) {
+            return sprintf('(%s != NULL ? %s : %s())', $varName, $this->nonNullableObjectRvalueExpr($normalizedType, $baseExpr), $normalizedType);
+        }
+
+        return $this->nonNullableObjectRvalueExpr($normalizedType, $baseExpr);
     }
 
     /**
@@ -1725,6 +1777,15 @@ class TypeBridge
             'int', 'float' => $this->cppCastType($cppType),
             'bool' => 'bool',
             default => $this->normalizeCppType($cppType),
+        };
+    }
+
+    private function nonNullableObjectRvalueExpr(string $normalizedType, string $baseExpr): string
+    {
+        return match ($normalizedType) {
+            'QJSPrimitiveValue' => sprintf('QJSPrimitiveValue(*%s)', $baseExpr),
+            'QJSManagedValue' => sprintf('QJSManagedValue(%1$s->toJSValue(), %1$s->engine())', $baseExpr),
+            default => sprintf('%s(*%s)', $normalizedType, $baseExpr),
         };
     }
 

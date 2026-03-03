@@ -289,6 +289,7 @@ class MethodContext
                 nativeVarName: sprintf('_qt_arg_%d', $i),
                 sourceIsZval: $sourceIsZval,
                 nullable: $nullable,
+                isRvalueReference: $param->isRvalueReference,
                 persistentStorageVar: $persistentStorageVar,
                 pairedCountVarName: $pairedCountVarName,
             );

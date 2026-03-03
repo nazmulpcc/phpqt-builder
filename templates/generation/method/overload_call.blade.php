@@ -65,7 +65,7 @@ if (!$overload->isPureVirtual) {
 {!! $indent !!}{!! $returnClass !!} _result = {!! $callExpr !!};
 {!! $indent !!}object_init_ex(return_value, {!! $returnCe !!});
 {!! $indent !!}{!! $returnStruct !!} *_ret_intern = {!! $returnFromObj !!}(Z_OBJ_P(return_value));
-{!! $indent !!}_ret_intern->native_ptr = new {!! $returnClass !!}(_result);
+{!! $indent !!}_ret_intern->native_ptr = new {!! $returnClass !!}(std::move(_result));
 @elseif($overload->returnStrategy === 'qobject_pointer')
 @php
     $returnClass = trim(str_replace(['const ', '&', '*'], '', $overload->cppReturnType));

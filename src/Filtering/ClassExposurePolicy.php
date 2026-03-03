@@ -21,6 +21,7 @@ class ClassExposurePolicy
         'QGenericReturnArgument',
         'QFlag',
         'QFlags',
+        'QQmlTypeNotAvailable',
         'QArrayData',
         'QArrayDataPointer',
         'QArrayDataOps',

@@ -192,6 +192,7 @@ class ClassDefinitionBuilder
                     isReference: $metadata['is_reference'],
                     isConstReference: $metadata['is_const_reference'],
                     isNonConstReference: $metadata['is_non_const_reference'],
+                    isRvalueReference: $metadata['is_rvalue_reference'],
                     pointerDepth: $metadata['pointer_depth'],
                 );
             },
@@ -364,18 +365,20 @@ class ClassDefinitionBuilder
     }
 
     /**
-     * @return array{is_reference: bool, is_const_reference: bool, is_non_const_reference: bool, pointer_depth: int}
+     * @return array{is_reference: bool, is_const_reference: bool, is_non_const_reference: bool, is_rvalue_reference: bool, pointer_depth: int}
      */
     private function analyzeCppParameterType(string $cppType): array
     {
         $normalized = trim($cppType);
-        $isReference = str_contains($normalized, '&');
-        $isConstReference = $isReference && preg_match('/^\s*const\b/', $normalized) === 1;
+        $isRvalueReference = str_contains($normalized, '&&');
+        $isReference = $isRvalueReference || str_contains($normalized, '&');
+        $isConstReference = !$isRvalueReference && $isReference && preg_match('/^\s*const\b/', $normalized) === 1;
 
         return [
             'is_reference' => $isReference,
             'is_const_reference' => $isConstReference,
-            'is_non_const_reference' => $isReference && !$isConstReference,
+            'is_non_const_reference' => !$isRvalueReference && $isReference && !$isConstReference,
+            'is_rvalue_reference' => $isRvalueReference,
             'pointer_depth' => substr_count($normalized, '*'),
         ];
     }

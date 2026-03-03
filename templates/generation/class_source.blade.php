@@ -19,6 +19,7 @@
 #include <string>
 #include <type_traits>
 #include <unordered_set>
+#include <utility>
 #include <QString>
 #include <QByteArray>
 #include <QVariant>
