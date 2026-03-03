@@ -80,7 +80,9 @@ static inline void qt_signal_callback_clear(const std::shared_ptr<qt_signal_call
         return;
     }
 
-    zend_fcall_info_args_clear(&callback->fci, true);
+    callback->fci.params = NULL;
+    callback->fci.param_count = 0;
+    callback->fci.retval = NULL;
     if (!Z_ISUNDEF(callback->fci.function_name)) {
         zval_ptr_dtor(&callback->fci.function_name);
         ZVAL_UNDEF(&callback->fci.function_name);
@@ -121,11 +123,18 @@ static inline bool qt_signal_callback_invoke(const std::shared_ptr<qt_signal_cal
     zval retval;
     ZVAL_NULL(&retval);
 
+    zval *previousRetval = callback->fci.retval;
+    zval *previousParams = callback->fci.params;
+    uint32_t previousParamCount = callback->fci.param_count;
+
     callback->fci.retval = &retval;
     callback->fci.params = params;
     callback->fci.param_count = param_count;
 
     bool ok = zend_call_function(&callback->fci, &callback->fci_cache) == SUCCESS;
+    callback->fci.retval = previousRetval;
+    callback->fci.params = previousParams;
+    callback->fci.param_count = previousParamCount;
     zval_ptr_dtor(&retval);
 
     return ok;

@@ -791,7 +791,7 @@ class TypeBridge
         );
     }
 
-    public function signalArgToZvalBlock(string $zvalVar, string $phpType, string $cppType, string $sourceExpr): string
+    public function signalArgToZvalBlock(string $zvalVar, string $phpType, string $cppType, string $sourceExpr, ?int $paramIndex = null): string
     {
         $strategy = $this->returnStrategyForCpp($phpType, $cppType);
 
@@ -811,10 +811,17 @@ class TypeBridge
                 return sprintf('ZVAL_STRINGL(%s, %s.constData(), %s.size());', $zvalVar, $sourceExpr, $sourceExpr);
             }
 
+            $utf8Var = $paramIndex === null
+                ? '_qt_utf8'
+                : sprintf('_qt_utf8_%d', $paramIndex);
+
             return sprintf(
-                "QByteArray _qt_utf8 = %s.toUtf8();\n    ZVAL_STRINGL(%s, _qt_utf8.constData(), _qt_utf8.size());",
+                "QByteArray %s = %s.toUtf8();\n    ZVAL_STRINGL(%s, %s.constData(), %s.size());",
+                $utf8Var,
                 $sourceExpr,
                 $zvalVar,
+                $utf8Var,
+                $utf8Var,
             );
         }
 

@@ -458,6 +458,9 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringContainsString('static_cast<void (QSignalFixture::*)(int)>(&QSignalFixture::valueChanged)', $cpp);
         self::assertStringContainsString('ZEND_ME(Qt_Core_QSignalFixture, onTriggered,', $cpp);
         self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QSignalFixture, resetValue)', $cpp);
+        self::assertStringNotContainsString('zend_fcall_info_args_clear(&callback->fci, true);', $cpp);
+        self::assertStringContainsString('callback->fci.params = previousParams;', $cpp);
+        self::assertStringContainsString('callback->fci.param_count = previousParamCount;', $cpp);
     }
 
     public function testGenerateBuildModeDisambiguatesOverloadedSignalSugarMethods(): void
@@ -494,6 +497,39 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringContainsString('public function onValueChangedBool(callable $callback): void {}', $stub);
         self::assertStringContainsString('zend_string_equals_literal(signalSignature, "valueChanged(int)")', $cpp);
         self::assertStringContainsString('zend_string_equals_literal(signalSignature, "valueChanged(bool)")', $cpp);
+    }
+
+    public function testGenerateBuildModeUsesUniqueUtf8TempNamesForMultiQStringSignalCallbacks(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/signals-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-qstring-signals-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qstringsignalfixture.h',
+            'class' => 'QStringSignalFixture',
+            '--qt-path' => $fixtureRoot,
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+            ],
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QStringSignalFixture',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qstringsignalfixture.cpp');
+        self::assertStringContainsString('QByteArray _qt_utf8_0 = _qt_arg_0.toUtf8();', $cpp);
+        self::assertStringContainsString('QByteArray _qt_utf8_1 = _qt_arg_1.toUtf8();', $cpp);
+        self::assertStringContainsString('QByteArray _qt_utf8_2 = _qt_arg_2.toUtf8();', $cpp);
     }
 
     public function testGenerateBuildModeSkipsSignalsWithNonCopyableCallbackParameters(): void

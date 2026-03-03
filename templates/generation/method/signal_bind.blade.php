@@ -20,6 +20,7 @@ foreach ($signal->params as $index => $param) {
         $param->phpType,
         $param->cppType,
         $nativeVar,
+        $index,
     );
     $teardownLines[] = sprintf('zval_ptr_dtor(&_qt_params[%d]);', $index);
 }
