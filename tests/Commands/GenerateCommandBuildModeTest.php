@@ -1495,7 +1495,7 @@ final class GenerateCommandBuildModeTest extends TestCase
 
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qbitarray.cpp');
         self::assertStringContainsString('QBitArray _result = QBitArray::fromBits(ZSTR_VAL(data), (int)len);', $cpp);
-        self::assertStringContainsString('_ret_intern->native_ptr = new QBitArray(_result);', $cpp);
+        self::assertStringContainsString('_ret_intern->native_ptr = new QBitArray(std::move(_result));', $cpp);
         self::assertStringNotContainsString('QBitArray *_result = QBitArray::fromBits', $cpp);
         self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QBitArray, toUInt32)', $cpp);
     }
@@ -1753,7 +1753,7 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringContainsString('public function normalized(): QValueReturnHolder {}', $stub);
         self::assertStringContainsString('QValueReturnHolder _result = QValueReturnHolder::create();', $cpp);
         self::assertStringContainsString('QValueReturnHolder _result = intern->native_ptr->normalized();', $cpp);
-        self::assertStringContainsString('_ret_intern->native_ptr = new QValueReturnHolder(_result);', $cpp);
+        self::assertStringContainsString('_ret_intern->native_ptr = new QValueReturnHolder(std::move(_result));', $cpp);
         self::assertStringNotContainsString('QValueReturnHolder *_result = QValueReturnHolder::create();', $cpp);
         self::assertStringNotContainsString('QValueReturnHolder *_result = intern->native_ptr->normalized();', $cpp);
     }
@@ -2414,11 +2414,44 @@ CPP);
         self::assertStringContainsString('public function resize(QSizeLike|int $size, int $height = 0): void {}', $stub);
         self::assertStringContainsString('public function setSlot(int $slot, QSizeLike|int $size): void {}', $stub);
         self::assertStringContainsString('int _qt_overload_index = -1;', $cpp);
+        self::assertStringContainsString('int _qt_overload_best_score = -1;', $cpp);
         self::assertStringContainsString('intern->native_ptr->resize(*qt_qsizelike_from_obj(Z_OBJ_P(size))->native_ptr);', $cpp);
         self::assertStringContainsString('intern->native_ptr->resize((int)Z_LVAL_P(size), (int)height);', $cpp);
-        self::assertStringContainsString('instanceof_function(Z_OBJCE_P(size), qt_ce_QSizeLike)', $cpp);
+        self::assertStringContainsString('qt_zval_object_match_score(size, qt_ce_QSizeLike)', $cpp);
         self::assertStringContainsString('Z_TYPE_P(size) == IS_LONG', $cpp);
         self::assertStringContainsString('zend_throw_error(NULL, "No matching overload for QOverloadHost::setSlot().");', $cpp);
+    }
+
+    public function testGenerateBuildModePrefersMoreSpecificObjectOverloads(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/qml-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-overload-specificity-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtQml/qcomponentoverload.h',
+            'class' => 'QComponentLike',
+            '--qt-path' => '/definitely/not/a/qt/root',
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtQml',
+            ],
+            '--module' => 'QtQml',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QObject,QEngineLike,QComponentLike',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qcomponentlike.cpp');
+
+        self::assertStringContainsString('int _qt_overload_best_score = -1;', $cpp);
+        self::assertStringContainsString('qt_zval_object_match_score(parent, qt_ce_QEngineLike)', $cpp);
+        self::assertStringContainsString('qt_zval_object_match_score(parent, qt_ce_QObject)', $cpp);
+        self::assertStringContainsString('_qt_score_1 > _qt_overload_best_score', $cpp);
     }
 
     public function testGenerateBuildModeSkipsPrivateReferenceConstructorVariants(): void

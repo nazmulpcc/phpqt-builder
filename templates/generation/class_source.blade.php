@@ -61,6 +61,46 @@ static zend_always_inline zend_function *qt_lookup_method(zend_class_entry *ce, 
     return (zend_function *) zend_hash_str_find_ptr_lc(&ce->function_table, function_name, strlen(function_name));
 }
 
+static zend_always_inline int qt_match_score_max(int left, int right)
+{
+    return left > right ? left : right;
+}
+
+static zend_always_inline int qt_zend_class_distance(zend_class_entry *actual, zend_class_entry *expected)
+{
+    if (actual == NULL || expected == NULL) {
+        return -1;
+    }
+
+    int distance = 0;
+    for (zend_class_entry *cursor = actual; cursor != NULL; cursor = cursor->parent) {
+        if (cursor == expected) {
+            return distance;
+        }
+        distance++;
+    }
+
+    return instanceof_function(actual, expected) ? 500 : -1;
+}
+
+static zend_always_inline int qt_zval_object_match_score(zval *value, zend_class_entry *expected_ce)
+{
+    if (value == NULL || Z_TYPE_P(value) != IS_OBJECT || expected_ce == NULL) {
+        return -1;
+    }
+
+    int distance = qt_zend_class_distance(Z_OBJCE_P(value), expected_ce);
+    if (distance < 0) {
+        return -1;
+    }
+
+    if (distance > 999) {
+        distance = 999;
+    }
+
+    return 1000 - distance;
+}
+
 static zend_always_inline bool qt_method_is_overridden(zend_object *object, zend_class_entry *base_ce, const char *function_name)
 {
     if (object == NULL || object->ce == NULL || base_ce == NULL) {

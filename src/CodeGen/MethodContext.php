@@ -226,6 +226,40 @@ class MethodContext
         return implode(' && ', $conditions);
     }
 
+    /**
+     * @return list<string>
+     */
+    public function overloadScoreSetupLines(OverloadContext $overload, int $overloadIndex, string $argcVar = '_argc'): array
+    {
+        $matchVar = sprintf('_qt_match_%d', $overloadIndex);
+        $scoreVar = sprintf('_qt_score_%d', $overloadIndex);
+        $lines = [
+            sprintf('    bool %s = (%s >= %d && %s <= %d);', $matchVar, $argcVar, $overload->requiredParamCount, $argcVar, $overload->paramCount),
+            sprintf('    int %s = -1;', $scoreVar),
+            sprintf('    if (%s) {', $matchVar),
+            sprintf('        %s = 0;', $scoreVar),
+        ];
+
+        foreach ($overload->params as $position => $param) {
+            $paramScoreVar = sprintf('_qt_param_score_%d_%d', $overloadIndex, $position);
+            $lines[] = sprintf('        if (%s >= %d) {', $argcVar, $position + 1);
+            $lines[] = sprintf('            int %s = %s;', $paramScoreVar, $this->overloadParamMatchScoreExpr($position, $param));
+            $lines[] = sprintf('            if (%s < 0) {', $paramScoreVar);
+            $lines[] = sprintf('                %s = false;', $matchVar);
+            $lines[] = '            } else {';
+            $lines[] = sprintf('                %s += %s;', $scoreVar, $paramScoreVar);
+            $lines[] = '            }';
+            $lines[] = '        }';
+        }
+
+        $lines[] = sprintf('        if (!%s) {', $matchVar);
+        $lines[] = sprintf('            %s = -1;', $scoreVar);
+        $lines[] = '        }';
+        $lines[] = '    }';
+
+        return $lines;
+    }
+
     public function noMatchingOverloadMessage(): string
     {
         return sprintf('No matching overload for %s::%s().', $this->className, $this->name);
@@ -444,6 +478,20 @@ class MethodContext
         }
 
         return $mergedParam->phpType === $param->phpType ? 'true' : 'false';
+    }
+
+    private function overloadParamMatchScoreExpr(int $position, OverloadParamContext $param): string
+    {
+        $mergedParam = $this->params[$position] ?? null;
+        if ($mergedParam === null) {
+            return '-1';
+        }
+
+        if ($mergedParam->isParsedAsZval) {
+            return $this->typeBridge->zvalTypeMatchScoreExpr($mergedParam->cVarName, $param->phpType);
+        }
+
+        return $mergedParam->phpType === $param->phpType ? '500' : '-1';
     }
 
     /**

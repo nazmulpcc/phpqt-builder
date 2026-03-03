@@ -228,6 +228,40 @@ class TypeBridge
         };
     }
 
+    /**
+     * Build a runtime match score expression for a zval* against a PHP type.
+     *
+     * Returns -1 for no match. Higher scores are more specific.
+     */
+    public function zvalTypeMatchScoreExpr(string $varName, string $phpType): string
+    {
+        if ($this->isUnionType($phpType)) {
+            $parts = array_values(array_filter(explode('|', $phpType), static fn(string $part): bool => $part !== ''));
+            if ($parts === []) {
+                return '-1';
+            }
+
+            $expr = $this->zvalTypeMatchScoreExpr($varName, array_shift($parts));
+            foreach ($parts as $part) {
+                $expr = sprintf('qt_match_score_max(%s, %s)', $expr, $this->zvalTypeMatchScoreExpr($varName, $part));
+            }
+
+            return $expr;
+        }
+
+        return match ($phpType) {
+            'int' => sprintf('((Z_TYPE_P(%s) == IS_LONG) ? 500 : -1)', $varName),
+            'float' => sprintf('((Z_TYPE_P(%s) == IS_DOUBLE) ? 500 : -1)', $varName),
+            'string' => sprintf('((Z_TYPE_P(%s) == IS_STRING) ? 500 : -1)', $varName),
+            'bool' => sprintf('(((Z_TYPE_P(%1$s) == IS_TRUE || Z_TYPE_P(%1$s) == IS_FALSE)) ? 500 : -1)', $varName),
+            'array' => sprintf('((Z_TYPE_P(%s) == IS_ARRAY) ? 500 : -1)', $varName),
+            'null' => sprintf('((Z_TYPE_P(%s) == IS_NULL) ? 500 : -1)', $varName),
+            'void' => '-1',
+            'mixed' => '0',
+            default => sprintf('qt_zval_object_match_score(%s, %s)', $varName, $this->ceVarName($phpType)),
+        };
+    }
+
     // ------------------------------------------------------------------
     // Zend type constants (for arginfo)
     // ------------------------------------------------------------------

@@ -15,18 +15,24 @@
 @endif
 
     int _qt_overload_index = -1;
+    int _qt_overload_best_score = -1;
     bool _qt_overload_ambiguous = false;
 @foreach($method->overloads as $index => $ol)
-    if ({!! $method->overloadMatchCondition($ol) !!}) {
-        if (_qt_overload_index != -1) {
-            _qt_overload_ambiguous = true;
-        } else {
+@foreach($method->overloadScoreSetupLines($ol, $index) as $line)
+{!! $line !!}
+@endforeach
+    if (_qt_score_{!! $index !!} >= 0) {
+        if (_qt_score_{!! $index !!} > _qt_overload_best_score) {
+            _qt_overload_best_score = _qt_score_{!! $index !!};
             _qt_overload_index = {!! $index !!};
+            _qt_overload_ambiguous = false;
+        } else if (_qt_score_{!! $index !!} == _qt_overload_best_score) {
+            _qt_overload_ambiguous = true;
         }
     }
 @endforeach
 
-    if (_qt_overload_ambiguous) {
+    if (_qt_overload_ambiguous && _qt_overload_best_score >= 0) {
         zend_throw_error(NULL, "{!! addslashes($method->ambiguousOverloadMessage()) !!}");
         RETURN_THROWS();
     }
