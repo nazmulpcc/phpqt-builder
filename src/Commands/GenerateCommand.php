@@ -140,7 +140,7 @@ class GenerateCommand extends Command
         }
 
         $workerMode = (string) $input->getOption('worker-mode');
-        if (!in_array($workerMode, ['generate', 'probe'], true)) {
+        if (!in_array($workerMode, ['generate', 'probe', 'facts'], true)) {
             return $this->renderFailure(
                 $output,
                 true,
@@ -178,6 +178,12 @@ class GenerateCommand extends Command
         }
 
         $service = new ClassGenerationService();
+        if ($workerMode === 'facts') {
+            $output->writeln($this->encodeJson($service->prepareDiscoveryFacts($headerPath, $className, $includePaths)));
+
+            return self::SUCCESS;
+        }
+
         $result = $service->generate($headerPath, $className, $includePaths, $allowedClasses, $classHeaders);
 
         if ($workerMode === 'generate' && $result->status === 'ok' && $result->phpClass !== null) {

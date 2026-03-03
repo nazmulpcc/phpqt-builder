@@ -19,6 +19,7 @@ final class BuildCommandTest extends TestCase
         $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-' . bin2hex(random_bytes(4));
         $outputDir = $buildRoot . '/ext';
         $metadataDir = $buildRoot . '/generated';
+        $classCacheDir = $buildRoot . '/classes';
         $bootstrapper = new FakeExtensionBootstrapper();
 
         $command = new BuildCommand(FakeSystemInformation::passing(), $bootstrapper);
@@ -46,11 +47,14 @@ final class BuildCommandTest extends TestCase
         self::assertFileExists($metadataDir . '/allowed_classes.json');
         self::assertFileExists($metadataDir . '/discovery_cache.json');
         self::assertFileExists($metadataDir . '/accepted_candidates.json');
+        self::assertFileExists($classCacheDir . '/QPoint.json');
         self::assertFileExists($metadataDir . '/phpize.stdout.log');
         self::assertFileExists($metadataDir . '/gen_stub.stdout.log');
         self::assertFileExists($metadataDir . '/configure.stdout.log');
         self::assertFileExists($metadataDir . '/make.stdout.log');
         self::assertStringContainsString('Running 2 parallel discovery worker(s)...', $tester->getDisplay());
+        self::assertStringContainsString('Class structure cache:', $tester->getDisplay());
+        self::assertStringContainsString('Discovery pass 1', $tester->getDisplay());
         self::assertCount(1, $bootstrapper->contexts);
 
         $summary = json_decode((string) file_get_contents($metadataDir . '/build_summary.json'), true, 512, JSON_THROW_ON_ERROR);
