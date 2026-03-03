@@ -616,6 +616,7 @@ void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativeCppType !!
 @foreach($ctx->methods as $method)
 @if($method->isConstructor)
 @include('generation.method.constructor', ['ctx' => $ctx, 'method' => $method])
+@elseif($method->isAbstractMethod)
 @elseif($method->isOverloaded)
 @include('generation.method.overloaded', ['ctx' => $ctx, 'method' => $method])
 @else
@@ -707,7 +708,11 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $signal->phpMethodName !!})
 
 static const zend_function_entry {!! $ctx->filePrefix !!}_methods[] = {
 @foreach($ctx->methods as $method)
+@if($method->isAbstractMethod)
+    ZEND_RAW_FENTRY("{!! $method->name !!}", NULL, {!! $method->arginfoName !!}, {!! $method->accessFlags !!} | ZEND_ACC_ABSTRACT, NULL, NULL)
+@else
     ZEND_ME({!! $ctx->zendClassSymbol !!}, {!! $method->name !!}, {!! $method->arginfoName !!}, {!! $method->accessFlags !!})
+@endif
 @endforeach
 @if($ctx->hasSignals())
     ZEND_ME({!! $ctx->zendClassSymbol !!}, connect, {!! $ctx->signalConnectArginfoName !!}, ZEND_ACC_PUBLIC)

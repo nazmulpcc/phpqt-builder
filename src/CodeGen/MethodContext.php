@@ -50,6 +50,9 @@ class MethodContext
     /** Whether any overload is pure virtual */
     public readonly bool $hasPureVirtualOverloads;
 
+    /** Whether this PHP-visible method should be registered as abstract */
+    public readonly bool $isAbstractMethod;
+
     /** Whether any overload is a callable protected base implementation */
     public readonly bool $hasCallableProtectedOverloads;
 
@@ -186,6 +189,14 @@ class MethodContext
         $this->hasVirtualOverloads = $hasVirtualOverloads;
         $this->hasPureVirtualOverloads = $hasPureVirtualOverloads;
         $this->hasCallableProtectedOverloads = $hasCallableProtectedOverloads;
+        $allPureVirtualOverloads = $overloads !== [];
+        foreach ($overloads as $overload) {
+            if (!$overload->isPureVirtual) {
+                $allPureVirtualOverloads = false;
+                break;
+            }
+        }
+        $this->isAbstractMethod = !$this->isConstructor && $allPureVirtualOverloads;
     }
 
     public function accessShimHelperName(int $overloadIndex = 0): string

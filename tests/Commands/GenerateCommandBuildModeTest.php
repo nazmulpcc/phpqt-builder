@@ -469,10 +469,12 @@ final class GenerateCommandBuildModeTest extends TestCase
 
         self::assertStringContainsString('abstract class QAbstractThing', $stub);
         self::assertStringContainsString('protected function __construct() {}', $stub);
-        self::assertStringContainsString('public function size(): int {}', $stub);
+        self::assertStringContainsString('abstract public function size(): int;', $stub);
         self::assertStringContainsString('class qt_php_QAbstractThing : public QAbstractThing', $cpp);
         self::assertStringContainsString('ZEND_ME(Qt_Core_QAbstractThing, __construct,', $cpp);
         self::assertStringContainsString('ZEND_ACC_PROTECTED', $cpp);
+        self::assertStringContainsString('ZEND_RAW_FENTRY("size", NULL, arginfo_class_Qt_Core_QAbstractThing_size, ZEND_ACC_PUBLIC | ZEND_ACC_ABSTRACT, NULL, NULL)', $cpp);
+        self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QAbstractThing, size)', $cpp);
         self::assertStringContainsString('bool _qt_use_trampoline = (Z_OBJCE_P(ZEND_THIS) != qt_ce_QAbstractThing);', $cpp);
         self::assertStringContainsString('intern->native_ptr = new qt_php_QAbstractThing();', $cpp);
         self::assertStringContainsString('zend_throw_error(NULL, "Abstract class QAbstractThing cannot be instantiated directly.");', $cpp);
@@ -509,8 +511,10 @@ final class GenerateCommandBuildModeTest extends TestCase
 
         self::assertStringContainsString('abstract class QAbstractShell', $stub);
         self::assertStringNotContainsString('function __construct', $stub);
-        self::assertStringContainsString('public function size(): int {}', $stub);
+        self::assertStringContainsString('abstract public function size(): int;', $stub);
         self::assertStringContainsString('class qt_php_QAbstractShell : public QAbstractShell', $cpp);
+        self::assertStringContainsString('ZEND_RAW_FENTRY("size", NULL, arginfo_class_Qt_Core_QAbstractShell_size, ZEND_ACC_PUBLIC | ZEND_ACC_ABSTRACT, NULL, NULL)', $cpp);
+        self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QAbstractShell, size)', $cpp);
     }
 
     public function testGenerateBuildModeOmitsAbstractConstructorsWhenPureVirtualsCannotBeSatisfied(): void
