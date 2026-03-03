@@ -414,6 +414,131 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QProtectedThing, tweak)', $cpp);
     }
 
+    public function testGenerateBuildModeGeneratesSignalApisAndRetainsProtectedSlots(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/signals-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-signals-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qsignalfixture.h',
+            'class' => 'QSignalFixture',
+            '--qt-path' => $fixtureRoot,
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+            ],
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QSignalFixture',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertNotContains('resetValue', array_column($payload['skipped_methods'], 'name'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qsignalfixture.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qsignalfixture.cpp');
+
+        self::assertStringContainsString('protected function resetValue(): void {}', $stub);
+        self::assertStringContainsString('public function connectSignal(string $signalSignature, callable $callback): void {}', $stub);
+        self::assertStringContainsString('public function onTriggered(callable $callback): void {}', $stub);
+        self::assertStringContainsString('public function onValueChanged(callable $callback): void {}', $stub);
+        self::assertStringNotContainsString('function triggered(): void {}', $stub);
+        self::assertStringNotContainsString('function valueChanged(int $value): void {}', $stub);
+
+        self::assertStringContainsString('ZEND_METHOD(Qt_Core_QSignalFixture, connectSignal)', $cpp);
+        self::assertStringContainsString('zend_string_equals_literal(signalSignature, "triggered()")', $cpp);
+        self::assertStringContainsString('static_cast<void (QSignalFixture::*)(int)>(&QSignalFixture::valueChanged)', $cpp);
+        self::assertStringContainsString('ZEND_ME(Qt_Core_QSignalFixture, onTriggered,', $cpp);
+    }
+
+    public function testGenerateBuildModeDisambiguatesOverloadedSignalSugarMethods(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/signals-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-overloaded-signals-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qoverloadedsignalfixture.h',
+            'class' => 'QOverloadedSignalFixture',
+            '--qt-path' => $fixtureRoot,
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+            ],
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QOverloadedSignalFixture',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qoverloadedsignalfixture.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qoverloadedsignalfixture.cpp');
+
+        self::assertStringContainsString('public function onValueChangedInt(callable $callback): void {}', $stub);
+        self::assertStringContainsString('public function onValueChangedBool(callable $callback): void {}', $stub);
+        self::assertStringContainsString('zend_string_equals_literal(signalSignature, "valueChanged(int)")', $cpp);
+        self::assertStringContainsString('zend_string_equals_literal(signalSignature, "valueChanged(bool)")', $cpp);
+    }
+
+    public function testGenerateBuildModeIncludesInheritedSignalsInConnectApi(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/signals-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-inherited-signals-' . bin2hex(random_bytes(4));
+        $classHeadersFile = $outputDir . '/class_headers.json';
+
+        mkdir($outputDir, 0755, true);
+        file_put_contents($classHeadersFile, json_encode([
+            'QSignalBaseFixture' => $fixtureRoot . '/include/QtCore/qsignalbasefixture.h',
+            'QSignalChildFixture' => $fixtureRoot . '/include/QtCore/qsignalchildfixture.h',
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qsignalchildfixture.h',
+            'class' => 'QSignalChildFixture',
+            '--qt-path' => $fixtureRoot,
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+            ],
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--class-headers-file' => $classHeadersFile,
+            '--allowed-classes' => 'QSignalBaseFixture,QSignalChildFixture',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qsignalchildfixture.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qsignalchildfixture.cpp');
+
+        self::assertStringContainsString('public function onTriggered(callable $callback): void {}', $stub);
+        self::assertStringContainsString('public function onChanged(callable $callback): void {}', $stub);
+        self::assertStringContainsString('zend_string_equals_literal(signalSignature, "triggered()")', $cpp);
+        self::assertStringContainsString('zend_string_equals_literal(signalSignature, "changed(int)")', $cpp);
+        self::assertStringContainsString('static_cast<void (QSignalBaseFixture::*)()>(&QSignalBaseFixture::triggered)', $cpp);
+    }
+
     public function testGenerateBuildModeCastsEnumParametersBackToNativeTypes(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';

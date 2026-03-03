@@ -236,7 +236,7 @@ final class BuildCommandTest extends TestCase
 
         self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
         self::assertStringContainsString('Using cached build metadata:', $tester->getDisplay());
-        self::assertStringContainsString('Regenerating against actual generated dependency set', $tester->getDisplay());
+        self::assertStringContainsString('Re-evaluating generated dependency set', $tester->getDisplay());
 
         $allowedClasses = json_decode((string) file_get_contents($metadataDir . '/allowed_classes.json'), true, 512, JSON_THROW_ON_ERROR);
         self::assertSame(['QCStringHolder'], $allowedClasses);

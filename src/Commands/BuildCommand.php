@@ -7,11 +7,10 @@ namespace QtBuilder\Commands;
 use QtBuilder\Build\BootstrapResult;
 use QtBuilder\Build\BuildDiscoveryResult;
 use QtBuilder\Build\BuildDiscoveryService;
+use QtBuilder\CodeGen\ExtensionGenerator;
 use QtBuilder\Build\ExtensionBootstrapper;
 use QtBuilder\Build\ExtensionBuildContext;
 use QtBuilder\Build\ExtensionScaffolder;
-use QtBuilder\Build\GenerateTask;
-use QtBuilder\Build\GenerateWorkerPool;
 use QtBuilder\Build\ProcessExtensionBootstrapper;
 use QtBuilder\Contracts\SystemInformation;
 use QtBuilder\Qt\QtInstallationResolver;
@@ -21,6 +20,7 @@ use Symfony\Component\Console\Input\ArrayInput;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
+use Symfony\Component\Console\Helper\ProgressBar;
 use Symfony\Component\Console\Output\OutputInterface;
 
 #[AsCommand('build', 'Generate a PHP extension source tree from Qt modules.')]
@@ -101,16 +101,35 @@ class BuildCommand extends Command
         }
 
         $output->writeln(sprintf('<info>Scanning complete.</info> %d candidates queued, %d filtered before generation.', count($acceptedCandidates), count($skippedClasses)));
-        $output->writeln(sprintf('<info>Running %d parallel generate worker(s)...</info>', $jobs));
+        $classStructures = $this->discoveryService->prepareClassStructures(
+            $acceptedCandidates,
+            $outputDir,
+            $installation->includeRoots,
+            $metadataDir,
+            $jobs,
+            $output,
+            $extensionName,
+        );
+
+        if ($classStructures['errors'] !== []) {
+            foreach ($classStructures['errors'] as $error) {
+                $message = is_string($error['reason_message'] ?? null) ? $error['reason_message'] : 'Class structure cache failed.';
+                $output->writeln(sprintf('<error>%s</error>', $message));
+            }
+
+            return self::FAILURE;
+        }
+
+        $acceptedCandidates = $classStructures['accepted_candidates'];
+        $skippedClasses = [...$skippedClasses, ...$classStructures['skipped_classes']];
+
+        $output->writeln('<info>Evaluating generated class set from cached class structures...</info>');
         $generation = $this->stabilizeGeneratedCandidates(
             $acceptedCandidates,
             $skippedClasses,
             $allowedClasses,
+            $classStructures['prepared_class_data'],
             $outputDir,
-            $extensionName,
-            $installation->includeRoots,
-            $metadataDir,
-            $jobs,
             $output,
         );
 
@@ -282,7 +301,7 @@ class BuildCommand extends Command
      * @param list<HeaderCandidate> $acceptedCandidates
      * @param list<array<string, string|null>> $initialSkippedClasses
      * @param list<string> $initialAllowedClasses
-     * @param list<string> $includePaths
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
      * @return array{
      *   accepted_candidates: list<HeaderCandidate>,
      *   generated_classes: list<string>,
@@ -299,14 +318,12 @@ class BuildCommand extends Command
         array $acceptedCandidates,
         array $initialSkippedClasses,
         array $initialAllowedClasses,
+        array $preparedClassDataByClass,
         string $outputDir,
-        string $extensionName,
-        array $includePaths,
-        string $metadataDir,
-        int $jobs,
         OutputInterface $output,
     ): array {
-        $workerPool = new GenerateWorkerPool(dirname(__DIR__, 2));
+        $generationService = new \QtBuilder\Build\ClassGenerationService();
+        $generator = new ExtensionGenerator();
         $currentCandidates = array_values($acceptedCandidates);
         $currentAllowedClasses = array_values(array_unique($initialAllowedClasses));
         sort($currentAllowedClasses);
@@ -334,52 +351,69 @@ class BuildCommand extends Command
         $generatedClassParents = [];
         /** @var array<string, list<string>> $generatedClassDependencies */
         $generatedClassDependencies = [];
+        /** @var array<string, \QtBuilder\Definition\PhpClass> $generatedPhpClasses */
+        $generatedPhpClasses = [];
         $passes = 0;
-        $classNamespacesFile = $this->writeClassNamespacesManifest($metadataDir, $acceptedCandidates);
-        $classHeadersFile = $this->discoveryService->writeClassHeadersManifest($metadataDir, $acceptedCandidates);
+        $classNamespaces = $this->classNamespaces($acceptedCandidates);
 
         do {
             $passes++;
-            $allowedClassesFile = $this->discoveryService->writeAllowedClassesManifest($metadataDir, $currentAllowedClasses);
-
             if ($passes > 1) {
                 $output->writeln(sprintf(
-                    '<comment>Regenerating against actual generated dependency set (pass %d, %d class(es)).</comment>',
+                    '<comment>Re-evaluating generated dependency set (pass %d, %d class(es)).</comment>',
                     $passes,
                     count($currentCandidates),
                 ));
             }
 
-            $results = $workerPool->run(
-                $this->buildGenerateTasks(
-                    $currentCandidates,
-                    $outputDir,
-                    $extensionName,
-                    $includePaths,
-                    $allowedClassesFile,
-                    $classNamespacesFile,
-                    $classHeadersFile,
-                ),
-                $jobs,
+            $progressBar = $this->createBuildProgressBar(
+                $output,
+                count($currentCandidates),
+                'qt_generate_analysis',
+                'Generate analysis pass ' . $passes,
             );
+            $progressBar?->start();
 
             $generatedClasses = [];
-            $classmap = [];
+            $generatedPhpClasses = [];
 
-            foreach ($results as $result) {
+            foreach ($currentCandidates as $candidate) {
+                $classData = $preparedClassDataByClass[$candidate->className] ?? null;
+                if (!is_array($classData)) {
+                    $errorsByClass[$candidate->className] = [
+                        'class' => $candidate->className,
+                        'header' => $candidate->parseHeader,
+                        'reason_code' => 'missing_class_data',
+                        'reason_message' => 'Prepared class data is missing from the class cache.',
+                    ];
+                    $progressBar?->advance();
+                    continue;
+                }
+
+                $result = $generationService->generateFromPreparedData(
+                    $classData,
+                    $candidate->parseHeader,
+                    $currentAllowedClasses,
+                    $preparedClassDataByClass,
+                );
                 unset($errorsByClass[$result->className]);
 
-                if ($result->isOk()) {
+                if ($result->status === 'ok' && $result->phpClass !== null) {
                     $generatedClasses[] = $result->className;
-                    $generatedClassParents[$result->className] = $result->parentClassName;
-                    $generatedClassDependencies[$result->className] = $result->classDependencies;
-                    $classmap[] = [
-                        'class' => $result->className,
-                        'header' => $result->headerPath,
-                        'files' => $result->generatedFiles,
-                    ];
+                    $generatedPhpClasses[$result->className] = $result->phpClass;
+                    $payload = $result->toArray();
+                    $generatedClassParents[$result->className] = is_string($payload['parent_class'] ?? null)
+                        ? $payload['parent_class']
+                        : null;
+                    $generatedClassDependencies[$result->className] = array_values(array_filter(
+                        array_map(
+                            static fn(mixed $value): string => is_string($value) ? $value : '',
+                            $payload['class_dependencies'] ?? [],
+                        ),
+                        static fn(string $value): bool => $value !== '',
+                    ));
                     unset($skippedByClass[$result->className]);
-                } elseif ($result->isSkipped()) {
+                } elseif ($result->status === 'skipped') {
                     $skippedByClass[$result->className] = [
                         'class' => $result->className,
                         'header' => $result->headerPath,
@@ -387,12 +421,11 @@ class BuildCommand extends Command
                         'reason_message' => $result->reasonMessage,
                     ];
                 } else {
-                    $errorsByClass[$result->className] = [
-                        'class' => $result->className,
-                        'header' => $result->headerPath,
-                        'reason_code' => $result->reasonCode,
-                        'reason_message' => $result->reasonMessage,
-                        'stderr' => $result->stderr,
+                    $errorsByClass[$candidate->className] = [
+                        'class' => $candidate->className,
+                        'header' => $candidate->parseHeader,
+                        'reason_code' => 'generation_failed',
+                        'reason_message' => 'Class generation analysis failed.',
                     ];
                 }
 
@@ -400,6 +433,13 @@ class BuildCommand extends Command
                 foreach ($result->skippedMethods as $skippedMethod) {
                     $skippedMethodsByClass[$result->className][] = ['class' => $result->className] + $skippedMethod;
                 }
+
+                $progressBar?->advance();
+            }
+
+            if ($progressBar !== null) {
+                $progressBar->finish();
+                $output->write(PHP_EOL);
             }
 
             sort($generatedClasses);
@@ -415,6 +455,50 @@ class BuildCommand extends Command
             $currentCandidates = $nextCandidates;
             $currentAllowedClasses = $generatedClasses;
         } while (!$stable && $errorsByClass === [] && $currentCandidates !== []);
+
+        if ($generatedClasses !== [] && $errorsByClass === []) {
+            $output->writeln(sprintf('<info>Emitting %d generated class wrapper(s)...</info>', count($generatedClasses)));
+            $emitProgressBar = $this->createBuildProgressBar(
+                $output,
+                count($generatedClasses),
+                'qt_generate_emit',
+                'Generate emit',
+            );
+            $emitProgressBar?->start();
+
+            $classmap = [];
+            foreach ($generatedClasses as $className) {
+                $phpClass = $generatedPhpClasses[$className] ?? null;
+                if ($phpClass === null) {
+                    $errorsByClass[$className] = [
+                        'class' => $className,
+                        'header' => '',
+                        'reason_code' => 'missing_php_class',
+                        'reason_message' => 'Stable generation set is missing the PHP class definition.',
+                    ];
+                    $emitProgressBar?->advance();
+                    continue;
+                }
+
+                $files = $generator->generate(
+                    $phpClass,
+                    $classNamespaces[$className] ?? 'Qt\\Core',
+                    $outputDir . '/classes',
+                    $classNamespaces,
+                );
+                $classmap[] = [
+                    'class' => $className,
+                    'header' => $this->headerPathForClass($currentCandidates, $acceptedCandidates, $className),
+                    'files' => $files,
+                ];
+                $emitProgressBar?->advance();
+            }
+
+            if ($emitProgressBar !== null) {
+                $emitProgressBar->finish();
+                $output->write(PHP_EOL);
+            }
+        }
 
         $skippedMethods = [];
         foreach ($skippedMethodsByClass as $items) {
@@ -437,57 +521,56 @@ class BuildCommand extends Command
     }
 
     /**
-     * @param list<HeaderCandidate> $candidates
-     * @param list<string> $includePaths
-     * @return list<GenerateTask>
-     */
-    private function buildGenerateTasks(
-        array $candidates,
-        string $outputDir,
-        string $extensionName,
-        array $includePaths,
-        string $allowedClassesFile,
-        string $classNamespacesFile,
-        string $classHeadersFile,
-    ): array {
-        $tasks = [];
-
-        foreach ($candidates as $candidate) {
-            $tasks[] = new GenerateTask(
-                headerPath: $candidate->parseHeader,
-                className: $candidate->className,
-                module: $candidate->module,
-                namespace: $this->namespaceForModule($candidate->module),
-                outputDir: $outputDir,
-                extensionName: $extensionName,
-                qtPath: null,
-                includePaths: $includePaths,
-                allowedClassesFile: $allowedClassesFile,
-                classNamespacesFile: $classNamespacesFile,
-                classHeadersFile: $classHeadersFile,
-            );
-        }
-
-        return $tasks;
-    }
-
-    /**
      * @param list<HeaderCandidate> $acceptedCandidates
+     * @return array<string, string>
      */
-    private function writeClassNamespacesManifest(string $metadataDir, array $acceptedCandidates): string
-    {
+    private function classNamespaces(
+        array $acceptedCandidates,
+    ): array {
         $payload = [];
         foreach ($acceptedCandidates as $candidate) {
             $payload[$candidate->className] = $this->namespaceForModule($candidate->module);
         }
 
-        $manifestPath = $metadataDir . '/class_namespaces.json';
-        file_put_contents(
-            $manifestPath,
-            json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '{}',
+        return $payload;
+    }
+
+    private function headerPathForClass(array $currentCandidates, array $acceptedCandidates, string $className): string
+    {
+        foreach ($currentCandidates as $candidate) {
+            if ($candidate->className === $className) {
+                return $candidate->parseHeader;
+            }
+        }
+
+        foreach ($acceptedCandidates as $candidate) {
+            if ($candidate->className === $className) {
+                return $candidate->parseHeader;
+            }
+        }
+
+        return '';
+    }
+
+    private function createBuildProgressBar(OutputInterface $output, int $total, string $formatName, string $label): ?ProgressBar
+    {
+        if ($total <= 0) {
+            return null;
+        }
+
+        ProgressBar::setFormatDefinition(
+            $formatName,
+            '%message% %current%/%max% [%bar%] %percent:3s%% %elapsed:6s%',
         );
 
-        return $manifestPath;
+        $progressBar = new ProgressBar($output, $total);
+        $progressBar->setFormat($formatName);
+        $progressBar->setMessage($label);
+        $progressBar->setRedrawFrequency(max(1, (int) ceil($total / 100)));
+        $progressBar->minSecondsBetweenRedraws(0.1);
+        $progressBar->maxSecondsBetweenRedraws(0.25);
+
+        return $progressBar;
     }
 
 }

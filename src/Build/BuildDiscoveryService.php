@@ -39,7 +39,7 @@ class BuildDiscoveryService
         @mkdir($this->classCacheDir($metadataDir), 0755, true);
 
         [$acceptedCandidates, $initialSkippedClasses, $candidateCount] = $this->scanCandidates($installation, $modules);
-        $classStructures = $this->loadOrPopulateClassStructures(
+        $classStructures = $this->prepareClassStructures(
             $acceptedCandidates,
             $outputDir,
             $installation->includeRoots,
@@ -261,7 +261,7 @@ class BuildDiscoveryService
      *   errors: list<array<string, string|null>>
      * }
      */
-    private function loadOrPopulateClassStructures(
+    public function prepareClassStructures(
         array $acceptedCandidates,
         string $outputDir,
         array $includePaths,
