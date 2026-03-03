@@ -43,6 +43,9 @@ typedef struct _{!! $ctx->argvStorageStructName !!} {
 @endif
 typedef struct _{!! $ctx->objectStructName !!} {
     {!! $ctx->nativeCppType !!} *native_ptr;
+@if($ctx->tracksGeneratedNativeSubclass)
+    bool native_is_generated_subclass;
+@endif
 @if($ctx->hasPreventDestroy)
     bool prevent_destroy;
     void *extra_storage;

@@ -47,27 +47,37 @@ zend_object_handlers {!! $ctx->handlersVarName !!};
 /* Internal PHP method dispatch helper                                 */
 /* ------------------------------------------------------------------ */
 
-static zend_always_inline zval *qt_call_method_with_params(zend_object *object, const char *function_name, zval *retval, uint32_t param_count, zval *params)
+static zend_always_inline zend_function *qt_lookup_method(zend_class_entry *ce, const char *function_name)
 {
-    zend_fcall_info fci;
-    zend_fcall_info_cache fcc;
+    return (zend_function *) zend_hash_str_find_ptr_lc(&ce->function_table, function_name, strlen(function_name));
+}
 
-    memset(&fci, 0, sizeof(fci));
-    memset(&fcc, 0, sizeof(fcc));
+static zend_always_inline bool qt_method_is_overridden(zend_object *object, zend_class_entry *base_ce, const char *function_name)
+{
+    if (object == NULL || object->ce == NULL || base_ce == NULL) {
+        return false;
+    }
 
-    fci.size = sizeof(fci);
-    fci.object = object;
-    fci.retval = retval;
-    fci.param_count = param_count;
-    fci.params = params;
+    zend_function *current = qt_lookup_method(object->ce, function_name);
+    zend_function *base = qt_lookup_method(base_ce, function_name);
 
-    zval functionName;
-    ZVAL_STRINGL(&functionName, function_name, strlen(function_name));
-    fci.function_name = functionName;
-    zend_call_function(&fci, &fcc);
-    zval_ptr_dtor(&functionName);
+    return current != NULL && base != NULL && current != base;
+}
 
-    return retval;
+static zend_always_inline bool qt_call_php_method(zend_object *object, const char *function_name, zval *retval, uint32_t param_count, zval *params)
+{
+    if (object == NULL || object->ce == NULL) {
+        return false;
+    }
+
+    zend_function *method = qt_lookup_method(object->ce, function_name);
+    if (method == NULL) {
+        return false;
+    }
+
+    zend_call_known_function(method, object, object->ce, retval, param_count, params, NULL);
+
+    return !EG(exception);
 }
 
 @if($ctx->hasSignals())
@@ -162,6 +172,180 @@ static inline void qt_signal_dispatch(InvokeCallback invoke)
 
 @endif
 
+@if($ctx->requiresAccessShim)
+/* ------------------------------------------------------------------ */
+/* Protected access shim                                               */
+/* ------------------------------------------------------------------ */
+
+class {!! $ctx->accessShimTypeName !!} : public {!! $ctx->nativeCppType !!}
+{
+public:
+    using {!! $ctx->nativeCppType !!}::{!! $ctx->nativeCppType !!};
+
+@foreach($ctx->methodsWithCallableProtectedOverloads() as $method)
+@foreach($method->overloads as $overloadIndex => $overload)
+@if($overload->access === 'protected' && !$overload->isPureVirtual)
+@php
+    $paramDecls = [];
+    $paramArgs = [];
+    foreach ($overload->params as $paramIndex => $param) {
+        $paramVar = sprintf('_qt_p%d', $paramIndex);
+        $paramDecls[] = sprintf(
+            '%s %s',
+            $ctx->typeBridge->accessShimBoundaryType($param->phpType, $param->cppType),
+            $paramVar,
+        );
+        $paramArgs[] = $ctx->typeBridge->accessShimBoundaryExpr($param->phpType, $param->cppType, $paramVar);
+    }
+    $declaringClass = $overload->declaringClass !== '' ? $overload->declaringClass : $ctx->nativeCppType;
+    $helperReturnType = $ctx->typeBridge->accessShimBoundaryType($overload->phpReturnType, $overload->cppReturnType, true);
+    $helperSignature = implode(', ', $paramDecls);
+    $helperArgs = implode(', ', $paramArgs);
+    $helperCall = $overload->isStatic
+        ? sprintf('%s::%s(%s)', $declaringClass, $method->cppName, $helperArgs)
+        : sprintf('this->%s::%s(%s)', $declaringClass, $method->cppName, $helperArgs);
+    $helperConst = !$overload->isStatic && $overload->isConst ? ' const' : '';
+    $helperPrefix = $overload->isStatic ? 'static inline ' : 'inline ';
+@endphp
+    {!! $helperPrefix !!}{!! $helperReturnType !!} {!! $method->accessShimHelperName($overloadIndex) !!}({!! $helperSignature !!}){!! $helperConst !!}
+    {
+@if($overload->returnStrategy === 'void')
+        {!! $helperCall !!};
+@else
+        return {!! $ctx->typeBridge->accessShimBoundaryReturnExpr($overload->phpReturnType, $overload->cppReturnType, $helperCall) !!};
+@endif
+    }
+
+@endif
+@endforeach
+@endforeach
+};
+
+@endif
+@if($ctx->requiresVirtualTrampoline)
+/* ------------------------------------------------------------------ */
+/* Native virtual trampoline                                           */
+/* ------------------------------------------------------------------ */
+
+class {!! $ctx->trampolineTypeName !!} : public @if($ctx->requiresAccessShim){!! $ctx->accessShimTypeName !!}@else{!! $ctx->nativeCppType !!}@endif
+{
+public:
+    using @if($ctx->requiresAccessShim){!! $ctx->accessShimTypeName !!}@else{!! $ctx->nativeCppType !!}@endif::@if($ctx->requiresAccessShim){!! $ctx->accessShimTypeName !!}@else{!! $ctx->nativeCppType !!}@endif;
+
+    zend_object *php_object = nullptr;
+
+@foreach($ctx->virtualMethods() as $method)
+@foreach($method->overloads as $overloadIndex => $overload)
+@if($overload->isVirtual || $overload->isPureVirtual)
+@php
+    $paramDecls = [];
+    $paramArgs = [];
+    foreach ($overload->params as $paramIndex => $param) {
+        $paramDecls[] = sprintf('%s _qt_p%d', $param->cppType, $paramIndex);
+        $paramArgs[] = sprintf('_qt_p%d', $paramIndex);
+    }
+    $overrideSignature = implode(', ', $paramDecls);
+    $overrideArgs = implode(', ', $paramArgs);
+    $declaringClass = $overload->declaringClass !== '' ? $overload->declaringClass : $ctx->nativeCppType;
+    $constQualifier = $overload->isConst ? ' const' : '';
+    $baseCall = sprintf('%s::%s(%s)', $declaringClass, $method->cppName, $overrideArgs);
+    $returnSetup = $ctx->typeBridge->nativeReturnFromZvalSetup($overload->phpReturnType, $overload->cppReturnType, '&_qt_retval', '_qt_native_return');
+@endphp
+@if($method->access === 'protected')
+protected:
+@else
+public:
+@endif
+    {!! $overload->cppReturnType !!} {!! $method->cppName !!}({!! $overrideSignature !!}){!! $constQualifier !!} override
+    {
+        if (this->php_object == nullptr) {
+            zend_throw_error(NULL, "Missing PHP object for {!! $ctx->phpClassName !!}::{!! $method->name !!}() virtual dispatch.");
+@if($overload->returnStrategy === 'void')
+            return;
+@else
+            return {!! $ctx->typeBridge->defaultNativeReturnExpr($overload->phpReturnType, $overload->cppReturnType) !!};
+@endif
+        }
+
+        if (!qt_method_is_overridden(this->php_object, {!! $ctx->ceVarName !!}, "{!! $method->name !!}")) {
+@if($overload->isPureVirtual)
+            zend_throw_error(NULL, "Pure virtual method {!! $ctx->phpClassName !!}::{!! $method->name !!}() must be overridden in PHP.");
+@if($overload->returnStrategy === 'void')
+            return;
+@else
+            return {!! $ctx->typeBridge->defaultNativeReturnExpr($overload->phpReturnType, $overload->cppReturnType) !!};
+@endif
+@else
+@if($overload->returnStrategy === 'void')
+            {!! $baseCall !!};
+            return;
+@else
+            return {!! $baseCall !!};
+@endif
+@endif
+        }
+
+        zval _qt_retval;
+        ZVAL_NULL(&_qt_retval);
+@if(count($overload->params) > 0)
+        zval _qt_params[{!! count($overload->params) !!}];
+@foreach($overload->params as $paramIndex => $param)
+        {!! $ctx->typeBridge->signalArgToZvalBlock(sprintf('&_qt_params[%d]', $paramIndex), $param->phpType, $param->cppType, sprintf('_qt_p%d', $paramIndex), $paramIndex) !!}
+@endforeach
+        if (!qt_call_php_method(this->php_object, "{!! $method->name !!}", &_qt_retval, {!! count($overload->params) !!}, _qt_params)) {
+@else
+        if (!qt_call_php_method(this->php_object, "{!! $method->name !!}", &_qt_retval, 0, NULL)) {
+@endif
+            zval_ptr_dtor(&_qt_retval);
+@foreach($overload->params as $paramIndex => $param)
+        zval_ptr_dtor(&_qt_params[{!! $paramIndex !!}]);
+@endforeach
+@if($overload->isPureVirtual)
+            zend_throw_error(NULL, "Pure virtual method {!! $ctx->phpClassName !!}::{!! $method->name !!}() failed during PHP override dispatch.");
+@if($overload->returnStrategy === 'void')
+            return;
+@else
+            return {!! $ctx->typeBridge->defaultNativeReturnExpr($overload->phpReturnType, $overload->cppReturnType) !!};
+@endif
+@else
+@if($overload->returnStrategy === 'void')
+            {!! $baseCall !!};
+            return;
+@else
+            return {!! $baseCall !!};
+@endif
+@endif
+        }
+
+@foreach($returnSetup['lines'] as $line)
+        {!! $line !!}
+@endforeach
+@if($overload->returnStrategy === 'void')
+        zval_ptr_dtor(&_qt_retval);
+@foreach($overload->params as $paramIndex => $param)
+        zval_ptr_dtor(&_qt_params[{!! $paramIndex !!}]);
+@endforeach
+        return;
+@else
+        auto _qt_native_result = {!! $returnSetup['expr'] !!};
+@foreach($returnSetup['cleanup_lines'] as $line)
+        {!! $line !!}
+@endforeach
+        zval_ptr_dtor(&_qt_retval);
+@foreach($overload->params as $paramIndex => $param)
+        zval_ptr_dtor(&_qt_params[{!! $paramIndex !!}]);
+@endforeach
+        return _qt_native_result;
+@endif
+    }
+
+@endif
+@endforeach
+@endforeach
+};
+
+@endif
+
 @if($ctx->hasPreventDestroy)
 /* ------------------------------------------------------------------ */
 /* Ownership helpers                                                   */
@@ -247,6 +431,9 @@ static zend_object *{!! $ctx->filePrefix !!}_create_object(zend_class_entry *ce)
         sizeof({!! $ctx->objectStructName !!}), ce
     );
     intern->native_ptr = NULL;
+@if($ctx->tracksGeneratedNativeSubclass)
+    intern->native_is_generated_subclass = false;
+@endif
 @if($ctx->hasPreventDestroy)
     intern->prevent_destroy = false;
     intern->extra_storage = NULL;
@@ -272,13 +459,29 @@ static void {!! $ctx->filePrefix !!}_free_object(zend_object *object)
 @if($ctx->hasPreventDestroy)
 @if($ctx->hasPublicDestructor)
     if (qt_should_delete_native(intern->native_ptr, intern->prevent_destroy)) {
+@if($ctx->tracksGeneratedNativeSubclass)
+        if (intern->native_is_generated_subclass) {
+            delete static_cast<{!! $ctx->nativeInstantiationType !!} *>(intern->native_ptr);
+        } else {
+            delete intern->native_ptr;
+        }
+@else
         delete intern->native_ptr;
+@endif
     }
 @endif
 @else
 @if($ctx->hasPublicDestructor)
     if (intern->native_ptr) {
+@if($ctx->tracksGeneratedNativeSubclass)
+        if (intern->native_is_generated_subclass) {
+            delete static_cast<{!! $ctx->nativeInstantiationType !!} *>(intern->native_ptr);
+        } else {
+            delete intern->native_ptr;
+        }
+@else
         delete intern->native_ptr;
+@endif
     }
 @endif
 @endif
@@ -347,6 +550,9 @@ void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativeCppType !!
     intern->native_ptr = native;
     qt_track_native_instance(intern->native_ptr);
     intern->prevent_destroy = prevent_destroy;
+@if($ctx->tracksGeneratedNativeSubclass)
+    intern->native_is_generated_subclass = false;
+@endif
 }
 
 @endif

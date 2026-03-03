@@ -77,6 +77,27 @@ class ClassContext
     /** Whether the generated object wrapper needs persistent argv backing storage */
     public readonly bool $needsArgvStorage;
 
+    /** Whether this class needs an access shim for protected native calls */
+    public readonly bool $requiresAccessShim;
+
+    /** Whether this class needs a native trampoline subclass for virtual dispatch */
+    public readonly bool $requiresVirtualTrampoline;
+
+    /** Whether constructors allocate a generated native subclass */
+    public readonly bool $usesGeneratedNativeSubclass;
+
+    /** Whether wrapper/runtime paths track generated-subclass instances */
+    public readonly bool $tracksGeneratedNativeSubclass;
+
+    /** Generated access shim type name */
+    public readonly string $accessShimTypeName;
+
+    /** Generated trampoline type name */
+    public readonly string $trampolineTypeName;
+
+    /** Native C++ type used in constructor allocation paths */
+    public readonly string $nativeInstantiationType;
+
     /** Helper struct name for argv-backed application wrappers */
     public readonly ?string $argvStorageStructName;
 
@@ -158,7 +179,6 @@ class ClassContext
         $this->isValueType = $typeBridge->isValueType($phpClass->name);
         $this->isCopyConstructible = $phpClass->isCopyConstructible;
         $this->hasPublicDestructor = $phpClass->hasPublicDestructor;
-        $this->isCloneable = $this->isValueType && $this->isCopyConstructible;
         $this->isAbstract = $phpClass->isAbstract;
         $this->isFinal = false;
         $this->hasPreventDestroy = !$this->isValueType;
@@ -188,6 +208,16 @@ class ClassContext
             $methods[] = new MethodContext($method, $this, $typeBridge);
         }
         $this->methods = $methods;
+        $this->requiresAccessShim = $this->computeRequiresAccessShim($methods);
+        $this->requiresVirtualTrampoline = $this->computeRequiresVirtualTrampoline($methods);
+        $this->usesGeneratedNativeSubclass = $this->requiresVirtualTrampoline || $this->computeUsesGeneratedNativeSubclass($methods);
+        $this->tracksGeneratedNativeSubclass = $this->usesGeneratedNativeSubclass;
+        $this->accessShimTypeName = 'qt_access_' . $phpClass->name;
+        $this->trampolineTypeName = 'qt_php_' . $phpClass->name;
+        $this->nativeInstantiationType = $this->requiresVirtualTrampoline
+            ? $this->trampolineTypeName
+            : ($this->usesGeneratedNativeSubclass ? $this->accessShimTypeName : $this->nativeCppType);
+        $this->isCloneable = !$this->usesGeneratedNativeSubclass && $this->isValueType && $this->isCopyConstructible;
 
         $signals = [];
         foreach ($phpClass->signals as $signal) {
@@ -348,6 +378,33 @@ class ClassContext
         return $this->signalOverloads !== [];
     }
 
+    public function hasVirtualMethods(): bool
+    {
+        return $this->requiresVirtualTrampoline;
+    }
+
+    /**
+     * @return list<MethodContext>
+     */
+    public function methodsWithCallableProtectedOverloads(): array
+    {
+        return array_values(array_filter(
+            $this->methods,
+            static fn(MethodContext $method): bool => $method->hasCallableProtectedOverloads,
+        ));
+    }
+
+    /**
+     * @return list<MethodContext>
+     */
+    public function virtualMethods(): array
+    {
+        return array_values(array_filter(
+            $this->methods,
+            static fn(MethodContext $method): bool => $method->hasVirtualOverloads,
+        ));
+    }
+
     /**
      * @param list<MethodContext> $signals
      * @return list<SignalOverloadContext>
@@ -393,5 +450,47 @@ class ClassContext
         }
 
         return $signalOverloads;
+    }
+
+    /**
+     * @param list<MethodContext> $methods
+     */
+    private function computeRequiresAccessShim(array $methods): bool
+    {
+        foreach ($methods as $method) {
+            if ($method->hasCallableProtectedOverloads) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param list<MethodContext> $methods
+     */
+    private function computeRequiresVirtualTrampoline(array $methods): bool
+    {
+        foreach ($methods as $method) {
+            if ($method->hasVirtualOverloads) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param list<MethodContext> $methods
+     */
+    private function computeUsesGeneratedNativeSubclass(array $methods): bool
+    {
+        foreach ($methods as $method) {
+            if ($method->hasInstanceProtectedCallPath()) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

@@ -20,6 +20,7 @@ readonly class MethodOverload
         public string $declaringClass,
         public string $returnType,
         public array $parameters,
+        public string $access,
         public bool $isConst,
         public bool $isStatic,
         public bool $isVirtual,
@@ -46,7 +47,7 @@ readonly class MethodOverload
     }
 
     /**
-     * @return array{declaring_class: string, return_type: string, parameters: list<array<string, mixed>>, is_const: bool, is_static: bool, is_virtual: bool, is_pure_virtual: bool}
+     * @return array{declaring_class: string, return_type: string, parameters: list<array<string, mixed>>, access: string, is_const: bool, is_static: bool, is_virtual: bool, is_pure_virtual: bool}
      */
     public function toArray(): array
     {
@@ -57,6 +58,7 @@ readonly class MethodOverload
                 static fn(OverloadParameter $p): array => $p->toArray(),
                 $this->parameters,
             ),
+            'access' => $this->access,
             'is_const' => $this->isConst,
             'is_static' => $this->isStatic,
             'is_virtual' => $this->isVirtual,

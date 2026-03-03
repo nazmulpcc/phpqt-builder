@@ -36,7 +36,13 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
     }
 
 @if($method->hasNoParams())
-    intern->native_ptr = new {!! $ctx->nativeCppType !!}();
+    intern->native_ptr = new {!! $ctx->nativeInstantiationType !!}();
+@if($ctx->requiresVirtualTrampoline)
+    static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr)->php_object = &intern->std;
+@endif
+@if($ctx->tracksGeneratedNativeSubclass)
+    intern->native_is_generated_subclass = true;
+@endif
 @if($ctx->hasPreventDestroy)
     qt_track_native_instance(intern->native_ptr);
 @endif
@@ -53,7 +59,13 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
 @foreach($callPlan['setup_lines'] as $line)
     {!! $line !!}
 @endforeach
-    intern->native_ptr = new {!! $ctx->nativeCppType !!}({!! implode(', ', $callPlan['args']) !!});
+    intern->native_ptr = new {!! $ctx->nativeInstantiationType !!}({!! implode(', ', $callPlan['args']) !!});
+@if($ctx->requiresVirtualTrampoline)
+    static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr)->php_object = &intern->std;
+@endif
+@if($ctx->tracksGeneratedNativeSubclass)
+    intern->native_is_generated_subclass = true;
+@endif
 @if($ctx->hasPreventDestroy)
     qt_track_native_instance(intern->native_ptr);
 @foreach($method->params as $param)

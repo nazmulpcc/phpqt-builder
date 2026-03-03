@@ -36,6 +36,9 @@ class OverloadContext
     /** Whether this overload is static */
     public readonly bool $isStatic;
 
+    /** Access for this specific overload */
+    public readonly string $access;
+
     /** Whether this overload is virtual */
     public readonly bool $isVirtual;
 
@@ -61,6 +64,7 @@ class OverloadContext
         $this->cppReturnType = $overload->returnType;
         $this->paramCount = $overload->parameterCount();
         $this->requiredParamCount = $overload->requiredParameterCount();
+        $this->access = $overload->access;
         $this->isConst = $overload->isConst;
         $this->isStatic = $overload->isStatic;
         $this->isVirtual = $overload->isVirtual;

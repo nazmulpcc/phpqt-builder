@@ -200,6 +200,7 @@ class TypeBridge
             'bool' => sprintf('(Z_TYPE_P(%1$s) == IS_TRUE || Z_TYPE_P(%1$s) == IS_FALSE)', $varName),
             'array' => sprintf('Z_TYPE_P(%s) == IS_ARRAY', $varName),
             'null' => sprintf('Z_TYPE_P(%s) == IS_NULL', $varName),
+            'void' => 'false',
             'mixed' => 'true',
             default => sprintf(
                 '(Z_TYPE_P(%1$s) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s), %2$s))',
@@ -585,6 +586,50 @@ class TypeBridge
         ];
     }
 
+    public function accessShimBoundaryType(string $phpType, string $cppType, bool $forReturn = false): string
+    {
+        if (!$this->requiresAccessShimTypeErasure($cppType)) {
+            return $cppType;
+        }
+
+        return match ($phpType) {
+            'int' => 'zend_long',
+            'float' => 'double',
+            'bool' => 'bool',
+            'string' => $forReturn ? $cppType : 'zend_string *',
+            default => $cppType,
+        };
+    }
+
+    public function accessShimBoundaryExpr(string $phpType, string $cppType, string $varName): string
+    {
+        $boundaryType = $this->accessShimBoundaryType($phpType, $cppType);
+        if ($boundaryType === $cppType) {
+            return $varName;
+        }
+
+        return match ($phpType) {
+            'int' => $this->phpIntToNativeExpr($cppType, $varName),
+            'float' => sprintf('(%s)%s', $this->cppCastType($cppType), $varName),
+            'bool' => $varName,
+            'string' => $this->phpStringToNativeExpr($cppType, $varName),
+            default => $varName,
+        };
+    }
+
+    public function accessShimBoundaryReturnExpr(string $phpType, string $cppType, string $expr): string
+    {
+        $boundaryType = $this->accessShimBoundaryType($phpType, $cppType, true);
+        if ($boundaryType === $cppType) {
+            return $expr;
+        }
+
+        return match ($phpType) {
+            'int', 'float', 'bool' => $this->nativeScalarToPhpExpr($phpType, $cppType, $expr),
+            default => $expr,
+        };
+    }
+
     /**
      * Generate a C++ expression that converts a C (ZPP-parsed) variable
      * to the C++ type needed by the Qt method call.
@@ -811,6 +856,39 @@ class TypeBridge
                 return sprintf('ZVAL_STRINGL(%s, %s.constData(), %s.size());', $zvalVar, $sourceExpr, $sourceExpr);
             }
 
+            if ($base === 'std::string' || $base === 'std::string_view') {
+                return sprintf('ZVAL_STRINGL(%s, %s.data(), %s.size());', $zvalVar, $sourceExpr, $sourceExpr);
+            }
+
+            if ($base === 'std::filesystem::path') {
+                $pathVar = $paramIndex === null
+                    ? '_qt_path'
+                    : sprintf('_qt_path_%d', $paramIndex);
+
+                return sprintf(
+                    "std::string %s = %s.string();\n    ZVAL_STRINGL(%s, %s.data(), %s.size());",
+                    $pathVar,
+                    $sourceExpr,
+                    $zvalVar,
+                    $pathVar,
+                    $pathVar,
+                );
+            }
+
+            if ($base === 'char') {
+                if ($this->isPointerType($cppType)) {
+                    return sprintf(
+                        "if (%s != NULL) {\n    ZVAL_STRING(%s, %s);\n} else {\n    ZVAL_NULL(%s);\n}",
+                        $sourceExpr,
+                        $zvalVar,
+                        $sourceExpr,
+                        $zvalVar,
+                    );
+                }
+
+                return sprintf('ZVAL_STRINGL(%s, &%s, 1);', $zvalVar, $sourceExpr);
+            }
+
             $utf8Var = $paramIndex === null
                 ? '_qt_utf8'
                 : sprintf('_qt_utf8_%d', $paramIndex);
@@ -838,6 +916,20 @@ class TypeBridge
         }
 
         if ($strategy === 'qobject_pointer') {
+            if ($this->isValueType($phpType)) {
+                return sprintf(
+                    "if (%s != NULL) {\n    object_init_ex(%s, %s);\n    %s(%s)->native_ptr = new %s(*%s);\n} else {\n    ZVAL_NULL(%s);\n}",
+                    $sourceExpr,
+                    $zvalVar,
+                    $this->ceVarName($phpType),
+                    $this->zMacroName($phpType),
+                    $zvalVar,
+                    $phpType,
+                    $sourceExpr,
+                    $zvalVar,
+                );
+            }
+
             return sprintf(
                 '%s(%s, %s, %s, true);',
                 $this->wrapNativeFuncName($phpType),
@@ -848,6 +940,63 @@ class TypeBridge
         }
 
         return sprintf('ZVAL_NULL(%s);', $zvalVar);
+    }
+
+    public function zvalToNativeReturnExpr(string $phpType, string $cppType, string $zvalPtrExpr, bool $nullable = false): string
+    {
+        return match ($phpType) {
+            'void' => '',
+            'int' => $this->phpIntToNativeExpr($cppType, sprintf('zval_get_long(%s)', $zvalPtrExpr)),
+            'float' => sprintf('(%s)zval_get_double(%s)', $this->cppCastType($cppType), $zvalPtrExpr),
+            'bool' => sprintf('(bool)zend_is_true(%s)', $zvalPtrExpr),
+            'string' => $this->phpStringToNativeExpr($cppType, sprintf('zval_get_string(%s)', $zvalPtrExpr)),
+            default => $this->isObjectType($phpType)
+                ? $this->phpObjectToNativeExpr($phpType, $cppType, $zvalPtrExpr, $nullable)
+                : '',
+        };
+    }
+
+    public function defaultNativeReturnExpr(string $phpType, string $cppType): string
+    {
+        $strategy = $this->returnStrategyForCpp($phpType, $cppType);
+
+        return match ($strategy) {
+            'void' => '',
+            'scalar' => match ($phpType) {
+                'bool' => 'false',
+                'float' => '0.0',
+                default => $this->phpIntToNativeExpr($cppType, '0'),
+            },
+            'string' => sprintf('%s()', $this->normalizeCppType($cppType)),
+            'qobject_pointer' => 'NULL',
+            default => '{}',
+        };
+    }
+
+    /**
+     * @return array{lines: list<string>, expr: string, cleanup_lines: list<string>}
+     */
+    public function nativeReturnFromZvalSetup(string $phpType, string $cppType, string $zvalPtrExpr, string $tempPrefix = '_qt_ret'): array
+    {
+        if ($phpType === 'string') {
+            $stringVar = $tempPrefix . '_string';
+
+            return [
+                'lines' => [
+                    sprintf('zend_string *%s = zval_get_string(%s);', $stringVar, $zvalPtrExpr),
+                ],
+                'expr' => $this->phpStringToNativeExpr($cppType, $stringVar),
+                'cleanup_lines' => [
+                    sprintf('zend_string_release(%s);', $stringVar),
+                ],
+            ];
+        }
+
+        return [
+            'lines' => [],
+            'expr' => $this->zvalToNativeReturnExpr($phpType, $cppType, $zvalPtrExpr),
+            'cleanup_lines' => [],
+        ];
     }
 
     // ------------------------------------------------------------------
@@ -1220,6 +1369,13 @@ class TypeBridge
         }
 
         return false;
+    }
+
+    private function requiresAccessShimTypeErasure(string $cppType): bool
+    {
+        $castType = $this->cppCastType($cppType);
+
+        return str_contains($castType, '::') || str_starts_with($castType, 'QFlags<');
     }
 
     private function normalizedSignalType(string $cppType): string

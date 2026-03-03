@@ -57,4 +57,28 @@ final class QtClassInspectorTest extends TestCase
         self::assertTrue($methods['valueChanged']['is_signal']);
         self::assertFalse($methods['valueChanged']['is_slot']);
     }
+
+    public function testInspectDetectsFinalMethodViaCursorKind404(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $includeRoot = $fixtureRoot . '/include';
+        $header = $includeRoot . '/QtCore/qfinalvirtualthing.h';
+
+        $inspector = new QtClassInspector(new ClangArgumentBuilder([
+            $includeRoot,
+            $includeRoot . '/QtCore',
+        ]));
+
+        $classData = $inspector->inspect($header, 'QFinalVirtualThing');
+        self::assertNotNull($classData);
+
+        $methods = [];
+        foreach ($classData['methods'] as $method) {
+            $methods[$method['name']] = $method;
+        }
+
+        self::assertArrayHasKey('value', $methods);
+        self::assertTrue($methods['value']['is_virtual']);
+        self::assertTrue($methods['value']['is_final']);
+    }
 }

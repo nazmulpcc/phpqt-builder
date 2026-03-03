@@ -270,7 +270,7 @@ class QtClassInspector
     }
 
     /**
-     * @return array{name: string, declaring_class: string, return_type: string, access: string, parameters: list<array<string, mixed>>, is_static: bool, is_const: bool, is_virtual: bool, is_pure_virtual: bool, is_override: bool, is_signal: bool, is_slot: bool}
+     * @return array{name: string, declaring_class: string, return_type: string, access: string, parameters: list<array<string, mixed>>, is_static: bool, is_const: bool, is_virtual: bool, is_pure_virtual: bool, is_override: bool, is_final: bool, is_signal: bool, is_slot: bool}
      */
     public function extractMethod(MethodCursor $method): array
     {
@@ -292,6 +292,7 @@ class QtClassInspector
             'is_virtual' => $method->isVirtual(),
             'is_pure_virtual' => $method->isPureVirtual(),
             'is_override' => $method->isOverride(),
+            'is_final' => $this->methodHasFinalAttr($method),
             'is_signal' => \in_array('qt_signal', $annotations, true),
             'is_slot' => \in_array('qt_slot', $annotations, true),
         ];
@@ -316,7 +317,7 @@ class QtClassInspector
      * Constructors are CXXConstructor cursors that must be fetched via getChildren().
      * We deduplicate by display name since Qt headers may produce duplicate entries.
      *
-     * @return list<array{name: string, declaring_class: string, return_type: string, access: string, parameters: list<array<string, mixed>>, is_static: bool, is_const: bool, is_virtual: bool, is_pure_virtual: bool, is_override: bool, is_signal: bool, is_slot: bool}>
+     * @return list<array{name: string, declaring_class: string, return_type: string, access: string, parameters: list<array<string, mixed>>, is_static: bool, is_const: bool, is_virtual: bool, is_pure_virtual: bool, is_override: bool, is_final: bool, is_signal: bool, is_slot: bool}>
      */
     private function extractConstructors(ClassCursor $class): array
     {
@@ -351,6 +352,7 @@ class QtClassInspector
                 'is_virtual' => false,
                 'is_pure_virtual' => false,
                 'is_override' => false,
+                'is_final' => false,
                 'is_signal' => false,
                 'is_slot' => false,
             ];
@@ -372,6 +374,18 @@ class QtClassInspector
         $annotations = $method->getAnnotations();
 
         return $annotations;
+    }
+
+    private function methodHasFinalAttr(MethodCursor $method): bool
+    {
+        foreach ($method->getChildren() as $child) {
+            // 404 is libclang's CXCursor_CXXFinalAttr.
+            if ($child->getKind() === 404) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public static function accessLabel(?int $access): string

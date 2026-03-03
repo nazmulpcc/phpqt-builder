@@ -285,7 +285,7 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertFileExists($outputDir . '/classes/qt_qtree.cpp');
     }
 
-    public function testGenerateBuildModeGeneratesAbstractClassesAndSkipsPureVirtualMethods(): void
+    public function testGenerateBuildModeGeneratesAbstractClassesAndRetainsPureVirtualMethods(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
@@ -309,8 +309,6 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertSame('ok', $payload['status']);
         self::assertContains('QAbstractThing', array_column($payload['skipped_methods'], 'name'));
         self::assertContains('abstract_constructor', array_column($payload['skipped_methods'], 'reason_code'));
-        self::assertContains('size', array_column($payload['skipped_methods'], 'name'));
-        self::assertContains('pure_virtual_method', array_column($payload['skipped_methods'], 'reason_code'));
         self::assertFileExists($outputDir . '/classes/qt_qabstractthing.cpp');
 
         $stub = (string) file_get_contents($outputDir . '/classes/qt_qabstractthing.stub.php');
@@ -318,11 +316,13 @@ final class GenerateCommandBuildModeTest extends TestCase
 
         self::assertStringContainsString('abstract class QAbstractThing', $stub);
         self::assertStringNotContainsString('public function __construct()', $stub);
-        self::assertStringNotContainsString('function size', $stub);
+        self::assertStringContainsString('public function size(): int {}', $stub);
+        self::assertStringContainsString('class qt_php_QAbstractThing : public QAbstractThing', $cpp);
+        self::assertStringContainsString('if (!qt_method_is_overridden(this->php_object, qt_ce_QAbstractThing, "size"))', $cpp);
         self::assertStringContainsString('ce_flags |= ZEND_ACC_ABSTRACT;', $cpp);
     }
 
-    public function testGenerateBuildModeGeneratesEmptyAbstractShellClasses(): void
+    public function testGenerateBuildModeGeneratesAbstractShellClassesWithSupportedPureVirtuals(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/abstract-qt';
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
@@ -344,8 +344,6 @@ final class GenerateCommandBuildModeTest extends TestCase
 
         $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
         self::assertSame('ok', $payload['status']);
-        self::assertContains('size', array_column($payload['skipped_methods'], 'name'));
-        self::assertContains('pure_virtual_method', array_column($payload['skipped_methods'], 'reason_code'));
         self::assertFileExists($outputDir . '/classes/qt_qabstractshell.cpp');
 
         $stub = (string) file_get_contents($outputDir . '/classes/qt_qabstractshell.stub.php');
@@ -353,8 +351,8 @@ final class GenerateCommandBuildModeTest extends TestCase
 
         self::assertStringContainsString('abstract class QAbstractShell', $stub);
         self::assertStringNotContainsString('function __construct', $stub);
-        self::assertStringNotContainsString('function size', $stub);
-        self::assertStringContainsString('ZEND_FE_END', $cpp);
+        self::assertStringContainsString('public function size(): int {}', $stub);
+        self::assertStringContainsString('class qt_php_QAbstractShell : public QAbstractShell', $cpp);
     }
 
     public function testGenerateBuildModeAllowsConcreteChildrenOfAbstractParents(): void
@@ -385,7 +383,7 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringContainsString('class QConcreteChildThing extends QAbstractParentThing', $stub);
     }
 
-    public function testGenerateBuildModeSkipsProtectedMethods(): void
+    public function testGenerateBuildModeGeneratesProtectedMethodsThroughAccessShims(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
@@ -407,14 +405,216 @@ final class GenerateCommandBuildModeTest extends TestCase
 
         $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
         self::assertSame('ok', $payload['status']);
-        self::assertContains('tweak', array_column($payload['skipped_methods'], 'name'));
-        self::assertContains('non_public_method', array_column($payload['skipped_methods'], 'reason_code'));
+        self::assertNotContains('tweak', array_column($payload['skipped_methods'], 'name'));
 
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qprotectedthing.stub.php');
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qprotectedthing.cpp');
-        self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QProtectedThing, tweak)', $cpp);
+
+        self::assertStringContainsString('protected function tweak(): void {}', $stub);
+        self::assertStringContainsString('class qt_access_QProtectedThing : public QProtectedThing', $cpp);
+        self::assertStringContainsString('intern->native_ptr = new qt_access_QProtectedThing()', $cpp);
+        self::assertStringContainsString('static_cast<qt_access_QProtectedThing *>(intern->native_ptr)->qt_access_tweak_0()', $cpp);
     }
 
-    public function testGenerateBuildModeGeneratesSignalApisAndSkipsProtectedSlots(): void
+    public function testGenerateBuildModeGeneratesProtectedVirtualMethodsWithNativeTrampolines(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qprotectedvirtualthing.h',
+            'class' => 'QProtectedVirtualThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QProtectedVirtualThing',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertNotContains('value', array_column($payload['skipped_methods'], 'name'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qprotectedvirtualthing.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qprotectedvirtualthing.cpp');
+
+        self::assertStringContainsString('protected function value(): int {}', $stub);
+        self::assertStringContainsString('class qt_access_QProtectedVirtualThing : public QProtectedVirtualThing', $cpp);
+        self::assertStringContainsString('class qt_php_QProtectedVirtualThing : public qt_access_QProtectedVirtualThing', $cpp);
+        self::assertStringContainsString('int value() const override', $cpp);
+        self::assertStringContainsString('QProtectedVirtualThing::value()', $cpp);
+        self::assertStringContainsString('zend_hash_str_find_ptr_lc(&ce->function_table, function_name, strlen(function_name))', $cpp);
+        self::assertStringContainsString('zend_call_known_function(method, object, object->ce, retval, param_count, params, NULL);', $cpp);
+    }
+
+    public function testGenerateBuildModeGeneratesStaticProtectedAccessHelpers(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qprotectedstaticthing.h',
+            'class' => 'QProtectedStaticThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QProtectedStaticThing',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qprotectedstaticthing.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qprotectedstaticthing.cpp');
+
+        self::assertStringContainsString('protected static function doThing(int $value): void {}', $stub);
+        self::assertStringContainsString('static inline void qt_access_doThing_0(int _qt_p0)', $cpp);
+        self::assertStringContainsString('qt_access_QProtectedStaticThing::qt_access_doThing_0((int)value);', $cpp);
+    }
+
+    public function testGenerateBuildModeMarshalsConstCharPointerVirtualArgsToPhpStrings(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qprotectedstringvirtualthing.h',
+            'class' => 'QProtectedStringVirtualThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QProtectedStringVirtualThing',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qprotectedstringvirtualthing.cpp');
+
+        self::assertStringContainsString('if (_qt_p0 != NULL) {', $cpp);
+        self::assertStringContainsString('ZVAL_STRING(&_qt_params[0], _qt_p0);', $cpp);
+        self::assertStringContainsString('ZVAL_NULL(&_qt_params[0]);', $cpp);
+    }
+
+    public function testGenerateBuildModeErasesProtectedNestedEnumTypesAtShimBoundary(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qprotectedenumthing.h',
+            'class' => 'QProtectedEnumThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QProtectedEnumThing',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qprotectedenumthing.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qprotectedenumthing.cpp');
+
+        self::assertStringContainsString('protected function supportsExtension(int $extension): bool {}', $stub);
+        self::assertStringContainsString('protected function setExtension(int $extension): void {}', $stub);
+        self::assertStringContainsString('inline bool qt_access_supportsExtension_0(zend_long _qt_p0) const', $cpp);
+        self::assertStringContainsString('inline void qt_access_setExtension_0(zend_long _qt_p0)', $cpp);
+        self::assertStringContainsString('QProtectedEnumThing::supportsExtension((QProtectedEnumThing::Extension)((int)(_qt_p0)))', $cpp);
+        self::assertStringContainsString('QProtectedEnumThing::setExtension((QProtectedEnumThing::Extension)((int)(_qt_p0)))', $cpp);
+        self::assertStringNotContainsString('qt_access_supportsExtension_0((QProtectedEnumThing::Extension)', $cpp);
+        self::assertStringNotContainsString('qt_access_setExtension_0((QProtectedEnumThing::Extension)', $cpp);
+    }
+
+    public function testGenerateBuildModeDoesNotGenerateTrampolinesForFinalVirtualMethods(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qfinalvirtualthing.h',
+            'class' => 'QFinalVirtualThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QFinalVirtualThing,QFinalVirtualBase',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qfinalvirtualthing.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qfinalvirtualthing.cpp');
+
+        self::assertStringContainsString('public function value(): int {}', $stub);
+        self::assertStringNotContainsString('class qt_php_QFinalVirtualThing', $cpp);
+        self::assertStringContainsString('RETURN_LONG((zend_long)(intern->native_ptr->value()));', $cpp);
+    }
+
+    public function testGenerateBuildModeUsesShimOnlyForProtectedOverloadBranch(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qmixedaccessoverloadthing.h',
+            'class' => 'QMixedAccessOverloadThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QMixedAccessOverloadThing',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qmixedaccessoverloadthing.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qmixedaccessoverloadthing.cpp');
+
+        self::assertStringContainsString('public function addItem(int $value, int $row = 0): void {}', $stub);
+        self::assertStringContainsString('class qt_access_QMixedAccessOverloadThing : public QMixedAccessOverloadThing', $cpp);
+        self::assertStringContainsString('inline void qt_access_addItem_1(int _qt_p0)', $cpp);
+        self::assertStringContainsString('intern->native_ptr->addItem((int)value, (int)row);', $cpp);
+        self::assertStringContainsString('static_cast<qt_access_QMixedAccessOverloadThing *>(intern->native_ptr)->qt_access_addItem_1((int)value);', $cpp);
+        self::assertStringNotContainsString('intern->native_ptr->QMixedAccessOverloadThing::addItem((int)value);', $cpp);
+    }
+
+    public function testGenerateBuildModeGeneratesSignalApisAndRetainsProtectedSlots(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/signals-qt';
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-signals-' . bin2hex(random_bytes(4));
@@ -440,8 +640,7 @@ final class GenerateCommandBuildModeTest extends TestCase
 
         $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
         self::assertSame('ok', $payload['status']);
-        self::assertContains('resetValue', array_column($payload['skipped_methods'], 'name'));
-        self::assertContains('non_public_method', array_column($payload['skipped_methods'], 'reason_code'));
+        self::assertNotContains('resetValue', array_column($payload['skipped_methods'], 'name'));
 
         $stub = (string) file_get_contents($outputDir . '/classes/qt_qsignalfixture.stub.php');
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qsignalfixture.cpp');
@@ -449,13 +648,15 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertFileExists($outputDir . '/classes/qt_qmetaobjectconnection.cpp');
         self::assertFileExists($outputDir . '/classes/qt_qmetaobjectconnection.stub.php');
 
-        self::assertStringNotContainsString('protected function resetValue(): void {}', $stub);
+        self::assertStringContainsString('protected function resetValue(): void {}', $stub);
         self::assertStringContainsString('public function connect(string $signalSignature, callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
         self::assertStringContainsString('public function disconnect(\Qt\Core\QMetaObjectConnection $connection): bool {}', $stub);
         self::assertStringContainsString('public function onTriggered(callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
         self::assertStringContainsString('public function onValueChanged(callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
         self::assertStringNotContainsString('function triggered(): void {}', $stub);
         self::assertStringNotContainsString('function valueChanged(int $value): void {}', $stub);
+        self::assertStringContainsString('class qt_access_QSignalFixture : public QSignalFixture', $cpp);
+        self::assertStringContainsString('qt_access_resetValue_0', $cpp);
 
         self::assertStringContainsString('ZEND_METHOD(Qt_Core_QSignalFixture, connect)', $cpp);
         self::assertStringContainsString('ZEND_METHOD(Qt_Core_QSignalFixture, disconnect)', $cpp);
@@ -467,7 +668,7 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringContainsString('static_cast<void (QSignalFixture::*)(int)>(&QSignalFixture::valueChanged)', $cpp);
         self::assertStringContainsString('ZEND_ME(Qt_Core_QSignalFixture, onTriggered,', $cpp);
         self::assertStringContainsString('qt_qmetaobjectconnection_wrap(return_value, _qt_connection);', $cpp);
-        self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QSignalFixture, resetValue)', $cpp);
+        self::assertStringContainsString('ZEND_METHOD(Qt_Core_QSignalFixture, resetValue)', $cpp);
         self::assertStringNotContainsString('zend_fcall_info_args_clear(&callback->fci, true);', $cpp);
         self::assertStringContainsString('callback->fci.params = previousParams;', $cpp);
         self::assertStringContainsString('callback->fci.param_count = previousParamCount;', $cpp);

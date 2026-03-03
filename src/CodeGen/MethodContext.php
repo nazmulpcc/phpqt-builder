@@ -44,6 +44,15 @@ class MethodContext
     /** Whether this method is a Qt slot */
     public readonly bool $isSlot;
 
+    /** Whether any overload is virtual */
+    public readonly bool $hasVirtualOverloads;
+
+    /** Whether any overload is pure virtual */
+    public readonly bool $hasPureVirtualOverloads;
+
+    /** Whether any overload is a callable protected base implementation */
+    public readonly bool $hasCallableProtectedOverloads;
+
     /** Whether this method has multiple C++ overloads */
     public readonly bool $isOverloaded;
 
@@ -160,6 +169,39 @@ class MethodContext
             $overloads[] = new OverloadContext($overload, $classCtx, $typeBridge);
         }
         $this->overloads = $overloads;
+        $hasVirtualOverloads = false;
+        $hasPureVirtualOverloads = false;
+        $hasCallableProtectedOverloads = false;
+        foreach ($overloads as $overload) {
+            if ($overload->isVirtual || $overload->isPureVirtual) {
+                $hasVirtualOverloads = true;
+            }
+            if ($overload->isPureVirtual) {
+                $hasPureVirtualOverloads = true;
+            }
+            if ($overload->access === 'protected' && !$overload->isPureVirtual) {
+                $hasCallableProtectedOverloads = true;
+            }
+        }
+        $this->hasVirtualOverloads = $hasVirtualOverloads;
+        $this->hasPureVirtualOverloads = $hasPureVirtualOverloads;
+        $this->hasCallableProtectedOverloads = $hasCallableProtectedOverloads;
+    }
+
+    public function accessShimHelperName(int $overloadIndex = 0): string
+    {
+        return sprintf('qt_access_%s_%d', $this->name, $overloadIndex);
+    }
+
+    public function hasInstanceProtectedCallPath(): bool
+    {
+        foreach ($this->overloads as $overload) {
+            if ($overload->access === 'protected' && !$overload->isStatic && !$overload->isPureVirtual) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function overloadMatchCondition(OverloadContext $overload, string $argcVar = '_argc'): string
@@ -222,6 +264,9 @@ class MethodContext
             $sourceIsZval = $mergedParam?->isParsedAsZval ?? false;
             $nullable = $param->hasDefault;
             $pairedCountVarName = null;
+            $targetCppType = $overload->access === 'protected' && !$this->isConstructor
+                ? $classCtx->typeBridge->accessShimBoundaryType($param->phpType, $param->cppType)
+                : $param->cppType;
 
             if (
                 $param->isCharPointerArray
@@ -235,7 +280,7 @@ class MethodContext
 
             $setup = $classCtx->typeBridge->nativeArgumentSetup(
                 phpType: $param->phpType,
-                cppType: $param->cppType,
+                cppType: $targetCppType,
                 sourceVarName: $sourceVarName,
                 nativeVarName: sprintf('_qt_arg_%d', $i),
                 sourceIsZval: $sourceIsZval,

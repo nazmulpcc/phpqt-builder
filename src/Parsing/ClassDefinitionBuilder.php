@@ -199,6 +199,7 @@ class ClassDefinitionBuilder
             declaringClass: (string) ($variant['declaring_class'] ?? ''),
             returnType: $variant['return_type'],
             parameters: $params,
+            access: (string) ($variant['access'] ?? 'public'),
             isConst: $variant['is_const'],
             isStatic: $variant['is_static'],
             isVirtual: $variant['is_virtual'],

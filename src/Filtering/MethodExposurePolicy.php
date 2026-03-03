@@ -228,11 +228,11 @@ class MethodExposurePolicy
     {
         $access = (string) ($variant['access'] ?? 'unknown');
         $isConstructor = $this->isConstructor($className, $variant);
-        if ($access !== 'public') {
-            if ($isConstructor) {
-                return ['code' => 'non_public_constructor', 'message' => sprintf('Constructors with %s access are not exposed.', $access)];
-            }
+        if ($isConstructor && $access !== 'public') {
+            return ['code' => 'non_public_constructor', 'message' => sprintf('Constructors with %s access are not exposed.', $access)];
+        }
 
+        if ($access === 'private' || $access === 'unknown') {
             return ['code' => 'non_public_method', 'message' => sprintf('Methods with %s access are not exposed.', $access)];
         }
 
@@ -264,10 +264,6 @@ class MethodExposurePolicy
 
         if (!$isCopyConstructible && $this->isCopyConstructor($className, $variant)) {
             return ['code' => 'noncopyable_copy_constructor', 'message' => 'Copy constructor is disabled by the native class definition.'];
-        }
-
-        if (($variant['is_pure_virtual'] ?? false) === true) {
-            return ['code' => 'pure_virtual_method', 'message' => 'Pure virtual methods are not exposed.'];
         }
 
         $returnType = (string) $variant['return_type'];

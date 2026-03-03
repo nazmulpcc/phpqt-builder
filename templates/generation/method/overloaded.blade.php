@@ -61,7 +61,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
     switch (_qt_overload_index) {
 @foreach($method->overloads as $index => $ol)
         case {!! $index !!}: {
-@include('generation.method.overload_call', ['ctx' => $ctx, 'method' => $method, 'overload' => $ol, 'indent' => '            '])
+@include('generation.method.overload_call', ['ctx' => $ctx, 'method' => $method, 'overload' => $ol, 'indent' => '            ', 'index' => $index])
             break;
         }
 @endforeach

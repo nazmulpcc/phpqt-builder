@@ -66,16 +66,21 @@ class ClassGenerationService
             $includePaths,
             $classHeaders,
         );
+        $virtualFilter = $this->filterVirtualOverrideMethods(
+            $signalFilter['selected_methods'],
+            $includePaths,
+            $classHeaders,
+        );
         $classData['signals'] = $this->collectSignalVariants(
             $className,
             $headerPath,
             $includePaths,
             $allowedClasses,
             $classHeaders,
-            $signalFilter['selected_methods'],
+            $virtualFilter['selected_methods'],
         );
         $classData['methods'] = array_values(array_filter(
-            $filtered['selected_methods'],
+            $virtualFilter['selected_methods'],
             static fn(array $method): bool => ($method['is_signal'] ?? false) !== true,
         ));
 
@@ -88,7 +93,7 @@ class ClassGenerationService
             $classHeaders,
         );
         $phpClass = $inheritanceFiltered['class'];
-        $skippedMethods = [...$filtered['skipped_methods'], ...$signalFilter['skipped_methods'], ...$inheritanceFiltered['skipped_methods']];
+        $skippedMethods = [...$filtered['skipped_methods'], ...$signalFilter['skipped_methods'], ...$virtualFilter['skipped_methods'], ...$inheritanceFiltered['skipped_methods']];
 
         if (count($phpClass->methods) === 0 && count($phpClass->signals) === 0 && !$phpClass->isAbstract) {
             return ClassGenerationResult::skipped(
@@ -202,15 +207,21 @@ class ClassGenerationService
             [],
             $preparedClassDataByClass,
         );
+        $virtualFilter = $this->filterVirtualOverrideMethods(
+            $signalFilter['selected_methods'],
+            [],
+            [],
+            $preparedClassDataByClass,
+        );
         $classData['signals'] = $this->collectSignalVariantsFromPrepared(
             $classData,
             $headerPath,
             $allowedClasses,
             $preparedClassDataByClass,
-            $signalFilter['selected_methods'],
+            $virtualFilter['selected_methods'],
         );
         $classData['methods'] = array_values(array_filter(
-            $filtered['selected_methods'],
+            $virtualFilter['selected_methods'],
             static fn(array $method): bool => ($method['is_signal'] ?? false) !== true,
         ));
 
@@ -222,7 +233,7 @@ class ClassGenerationService
             $preparedClassDataByClass,
         );
         $phpClass = $inheritanceFiltered['class'];
-        $skippedMethods = [...$filtered['skipped_methods'], ...$signalFilter['skipped_methods'], ...$inheritanceFiltered['skipped_methods']];
+        $skippedMethods = [...$filtered['skipped_methods'], ...$signalFilter['skipped_methods'], ...$virtualFilter['skipped_methods'], ...$inheritanceFiltered['skipped_methods']];
 
         if (count($phpClass->methods) === 0 && count($phpClass->signals) === 0 && !$phpClass->isAbstract) {
             return ClassGenerationResult::skipped(
@@ -597,6 +608,62 @@ class ClassGenerationService
     }
 
     /**
+     * @param list<array<string, mixed>> $selectedMethods
+     * @param list<string> $includePaths
+     * @param array<string, string> $classHeaders
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @return array{selected_methods: list<array<string, mixed>>, skipped_methods: list<array<string, string>>}
+     */
+    private function filterVirtualOverrideMethods(
+        array $selectedMethods,
+        array $includePaths = [],
+        array $classHeaders = [],
+        array $preparedClassDataByClass = [],
+    ): array {
+        $keptMethods = [];
+        $skippedMethods = [];
+        /** @var array<string, array<string, mixed>|null> $parameterClassFactsCache */
+        $parameterClassFactsCache = [];
+
+        foreach ($selectedMethods as $method) {
+            if (($method['is_final'] ?? false) === true) {
+                $method['is_virtual'] = false;
+                $method['is_pure_virtual'] = false;
+                $keptMethods[] = $method;
+                continue;
+            }
+
+            if (($method['is_virtual'] ?? false) !== true && ($method['is_pure_virtual'] ?? false) !== true) {
+                $keptMethods[] = $method;
+                continue;
+            }
+
+            $unsupportedReason = $this->unsupportedVirtualOverrideReason(
+                $method,
+                $includePaths,
+                $classHeaders,
+                $preparedClassDataByClass,
+                $parameterClassFactsCache,
+            );
+            if ($unsupportedReason !== null) {
+                $skippedMethods[] = [
+                    'name' => (string) ($method['name'] ?? ''),
+                    'reason_code' => $unsupportedReason['code'],
+                    'reason_message' => $unsupportedReason['message'],
+                ];
+                continue;
+            }
+
+            $keptMethods[] = $method;
+        }
+
+        return [
+            'selected_methods' => $keptMethods,
+            'skipped_methods' => $skippedMethods,
+        ];
+    }
+
+    /**
      * @param array<string, mixed> $method
      * @param list<string> $includePaths
      * @param array<string, string> $classHeaders
@@ -660,6 +727,96 @@ class ClassGenerationService
                 return [
                     'code' => 'unsupported_signal_callback_parameter',
                     'message' => sprintf('Signal %s() uses callback parameter type %s which does not have a public destructor.', (string) ($method['name'] ?? ''), $cppType),
+                ];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param array<string, mixed> $method
+     * @param list<string> $includePaths
+     * @param array<string, string> $classHeaders
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @param array<string, array<string, mixed>|null> $parameterClassFactsCache
+     * @return array{code: string, message: string}|null
+     */
+    private function unsupportedVirtualOverrideReason(
+        array $method,
+        array $includePaths,
+        array $classHeaders,
+        array $preparedClassDataByClass,
+        array &$parameterClassFactsCache,
+    ): ?array {
+        $methodName = (string) ($method['name'] ?? '');
+        $returnType = is_string($method['return_type'] ?? null) ? $method['return_type'] : 'void';
+        $mappedReturnType = $this->typeMapper->map($returnType);
+        $returnStrategy = $this->typeBridge->returnStrategyForCpp($mappedReturnType, $returnType);
+        $isPureVirtual = ($method['is_pure_virtual'] ?? false) === true;
+
+        if (!$this->isSupportedVirtualReturnStrategy($returnStrategy, $isPureVirtual)) {
+            return [
+                'code' => 'unsupported_virtual_override_signature',
+                'message' => sprintf('Virtual method %s() return type %s is not supported for PHP overrides.', $methodName, $returnType),
+            ];
+        }
+
+        $parameters = is_array($method['parameters'] ?? null) ? $method['parameters'] : [];
+        foreach ($parameters as $parameter) {
+            $cppType = is_string($parameter['type'] ?? null) ? $parameter['type'] : '';
+            if ($cppType === '') {
+                return [
+                    'code' => 'unsupported_virtual_override_signature',
+                    'message' => sprintf('Virtual method %s() has a parameter with an unknown native type.', $methodName),
+                ];
+            }
+
+            if ($this->isWritableReferenceType($cppType)) {
+                return [
+                    'code' => 'unsupported_virtual_override_signature',
+                    'message' => sprintf('Virtual method %s() uses writable reference parameter type %s which is not supported for PHP overrides.', $methodName, $cppType),
+                ];
+            }
+
+            $phpType = $this->typeMapper->map($cppType);
+            $strategy = $this->typeBridge->returnStrategyForCpp($phpType, $cppType);
+            if (!in_array($strategy, ['scalar', 'string', 'value_object', 'qobject_pointer'], true)) {
+                return [
+                    'code' => 'unsupported_virtual_override_signature',
+                    'message' => sprintf('Virtual method %s() uses parameter type %s which is not supported for PHP overrides.', $methodName, $cppType),
+                ];
+            }
+
+            if ($strategy !== 'value_object') {
+                continue;
+            }
+
+            $classFacts = $this->signalParameterClassFacts(
+                $phpType,
+                $includePaths,
+                $classHeaders,
+                $preparedClassDataByClass,
+                $parameterClassFactsCache,
+            );
+            if ($classFacts === null) {
+                return [
+                    'code' => 'unsupported_virtual_override_signature',
+                    'message' => sprintf('Virtual method %s() uses parameter type %s which cannot be prepared safely.', $methodName, $cppType),
+                ];
+            }
+
+            if (!$this->isSignalParameterCopyable($classFacts, $phpType)) {
+                return [
+                    'code' => 'unsupported_virtual_override_signature',
+                    'message' => sprintf('Virtual method %s() uses parameter type %s which is not copy-constructible.', $methodName, $cppType),
+                ];
+            }
+
+            if (!(bool) ($classFacts['has_public_destructor'] ?? false)) {
+                return [
+                    'code' => 'unsupported_virtual_override_signature',
+                    'message' => sprintf('Virtual method %s() uses parameter type %s which does not have a public destructor.', $methodName, $cppType),
                 ];
             }
         }
@@ -745,6 +902,22 @@ class ClassGenerationService
         }
 
         return true;
+    }
+
+    private function isSupportedVirtualReturnStrategy(string $strategy, bool $isPureVirtual): bool
+    {
+        if ($isPureVirtual) {
+            return in_array($strategy, ['void', 'scalar', 'string', 'qobject_pointer'], true);
+        }
+
+        return in_array($strategy, ['void', 'scalar', 'string', 'value_object', 'qobject_pointer'], true);
+    }
+
+    private function isWritableReferenceType(string $cppType): bool
+    {
+        $trimmed = trim($cppType);
+
+        return str_contains($trimmed, '&') && preg_match('/^\s*const\b/', $trimmed) !== 1;
     }
 
     private function normalizeSignalParameterClassName(string $cppType): string
