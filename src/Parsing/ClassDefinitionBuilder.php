@@ -269,12 +269,21 @@ class ClassDefinitionBuilder
     private function mergeParameters(array $variants): array
     {
         $maxParams = 0;
-        $minParams = PHP_INT_MAX;
+        $minRequiredCount = PHP_INT_MAX;
 
         foreach ($variants as $v) {
-            $count = \count($this->normalizeWritableParameterDefaults($v['parameters']));
+            $params = $this->normalizeWritableParameterDefaults($v['parameters']);
+            $count = \count($params);
             $maxParams = max($maxParams, $count);
-            $minParams = min($minParams, $count);
+
+            $requiredCount = 0;
+            foreach ($params as $param) {
+                if (($param['has_default'] ?? false) !== true) {
+                    $requiredCount++;
+                }
+            }
+
+            $minRequiredCount = min($minRequiredCount, $requiredCount);
         }
 
         if ($maxParams === 0) {
@@ -310,7 +319,7 @@ class ClassDefinitionBuilder
                 }
             }
 
-            $hasDefault = $someVariantsShorter || $allHaveDefault;
+            $hasDefault = $i >= $minRequiredCount || $someVariantsShorter || $allHaveDefault;
 
             // Pick a unique name. Try names from the variants first, then fallback.
             $name = $this->pickUniqueName($names, $i, $usedNames);
