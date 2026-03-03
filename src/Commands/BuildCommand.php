@@ -158,6 +158,7 @@ class BuildCommand extends Command
             $generatedClasses,
             $generatedClassParents,
             $generation['generated_class_dependencies'],
+            (bool) ($generation['requires_signal_connection_support'] ?? false),
         );
         $scaffoldFiles = $scaffolder->finalize($context);
 
@@ -312,7 +313,8 @@ class BuildCommand extends Command
      *   skipped_methods: list<array<string, string>>,
      *   errors: list<array<string, string|null>>,
      *   classmap: list<array{class: string, header: string, files: list<string>}>,
-     *   passes: int
+     *   passes: int,
+     *   requires_signal_connection_support: bool
      * }
      */
     private function stabilizeGeneratedCandidates(
@@ -508,6 +510,14 @@ class BuildCommand extends Command
             }
         }
 
+        $requiresSignalConnectionSupport = false;
+        foreach ($generatedPhpClasses as $phpClass) {
+            if ($phpClass->signals !== []) {
+                $requiresSignalConnectionSupport = true;
+                break;
+            }
+        }
+
         return [
             'accepted_candidates' => $currentCandidates,
             'generated_classes' => $generatedClasses,
@@ -518,6 +528,7 @@ class BuildCommand extends Command
             'errors' => array_values($errorsByClass),
             'classmap' => $classmap,
             'passes' => $passes,
+            'requires_signal_connection_support' => $requiresSignalConnectionSupport,
         ];
     }
 

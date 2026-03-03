@@ -1,6 +1,6 @@
 @php
 /**
- * Shared signal-binding body used by connectSignal() and generated onFoo() sugar.
+ * Shared signal-binding body used by connect() and generated onFoo() sugar.
  *
  * @var \QtBuilder\CodeGen\ClassContext $ctx
  * @var \QtBuilder\CodeGen\SignalOverloadContext $signal
@@ -30,7 +30,7 @@ foreach ($signal->params as $index => $param) {
         RETURN_THROWS();
     }
 
-    QObject::connect(
+    QMetaObject::Connection _qt_connection = QObject::connect(
         intern->native_ptr,
         {!! $signal->memberPointerExpr !!},
         [_qt_callback]({!! implode(', ', $lambdaParams) !!}) {
@@ -51,4 +51,5 @@ foreach ($signal->params as $index => $param) {
         }
     );
 
-    RETURN_NULL();
+    qt_qmetaobjectconnection_wrap(return_value, _qt_connection);
+    return;

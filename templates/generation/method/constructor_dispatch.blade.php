@@ -40,6 +40,7 @@
 @endforeach
             intern->native_ptr = new {!! $ctx->nativeCppType !!}({!! implode(', ', $callPlan['args']) !!});
 @if($ctx->hasPreventDestroy)
+            qt_track_native_instance(intern->native_ptr);
 @foreach($method->params as $param)
 @if($param->isObject && !$param->isUnion)
             if ({!! $param->cVarName !!} != NULL) {

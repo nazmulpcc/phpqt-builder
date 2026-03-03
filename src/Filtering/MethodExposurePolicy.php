@@ -11,6 +11,8 @@ class MethodExposurePolicy
 {
     /** @var list<string> */
     private const array NAME_SKIP = [
+        'connect',
+        'disconnect',
         'metaObject',
         'qt_metacall',
         'qt_metacast',

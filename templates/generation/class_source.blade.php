@@ -13,14 +13,20 @@
 #include <chrono>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <string>
+#include <type_traits>
+#include <unordered_set>
 #include <QString>
 #include <QByteArray>
+@if($ctx->hasPreventDestroy || $ctx->hasSignals())
+#include <QObject>
+@endif
 @if($ctx->hasSignals())
+#include "qt_qmetaobjectconnection.h"
 #include <QCoreApplication>
 #include <QMetaObject>
-#include <QObject>
 #include <QThread>
 @endif
 @if($ctx->parentCeVarName)
@@ -156,6 +162,81 @@ static inline void qt_signal_dispatch(InvokeCallback invoke)
 
 @endif
 
+@if($ctx->hasPreventDestroy)
+/* ------------------------------------------------------------------ */
+/* Ownership helpers                                                   */
+/* ------------------------------------------------------------------ */
+
+template <typename T>
+static inline typename std::enable_if<std::is_base_of<QObject, T>::value, bool>::type
+qt_should_delete_native(T *ptr, bool prevent_destroy);
+
+template <typename T>
+static inline std::unordered_set<void *> &qt_native_registry()
+{
+    static std::unordered_set<void *> registry;
+    return registry;
+}
+
+template <typename T>
+static inline std::mutex &qt_native_registry_mutex()
+{
+    static std::mutex registryMutex;
+    return registryMutex;
+}
+
+template <typename T>
+static inline typename std::enable_if<std::is_base_of<QObject, T>::value, void>::type
+qt_track_native_instance(T *ptr)
+{
+    if (ptr == NULL) {
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(qt_native_registry_mutex<T>());
+        qt_native_registry<T>().insert(static_cast<void *>(ptr));
+    }
+
+    QObject::connect(ptr, &QObject::destroyed, [ptr]() {
+        std::lock_guard<std::mutex> lock(qt_native_registry_mutex<T>());
+        qt_native_registry<T>().erase(static_cast<void *>(ptr));
+    });
+}
+
+template <typename T>
+static inline typename std::enable_if<!std::is_base_of<QObject, T>::value, void>::type
+qt_track_native_instance(T *ptr)
+{
+    (void) ptr;
+}
+
+template <typename T>
+static inline typename std::enable_if<std::is_base_of<QObject, T>::value, bool>::type
+qt_should_delete_native(T *ptr, bool prevent_destroy)
+{
+    if (ptr == NULL || prevent_destroy) {
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(qt_native_registry_mutex<T>());
+        if (qt_native_registry<T>().find(static_cast<void *>(ptr)) == qt_native_registry<T>().end()) {
+            return false;
+        }
+    }
+
+    return static_cast<QObject *>(ptr)->parent() == NULL;
+}
+
+template <typename T>
+static inline typename std::enable_if<!std::is_base_of<QObject, T>::value, bool>::type
+qt_should_delete_native(T *ptr, bool prevent_destroy)
+{
+    return ptr != NULL && !prevent_destroy;
+}
+
+@endif
 /* ------------------------------------------------------------------ */
 /* create_object                                                       */
 /* ------------------------------------------------------------------ */
@@ -190,7 +271,7 @@ static void {!! $ctx->filePrefix !!}_free_object(zend_object *object)
 
 @if($ctx->hasPreventDestroy)
 @if($ctx->hasPublicDestructor)
-    if (intern->native_ptr && !intern->prevent_destroy) {
+    if (qt_should_delete_native(intern->native_ptr, intern->prevent_destroy)) {
         delete intern->native_ptr;
     }
 @endif
@@ -264,6 +345,7 @@ void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativeCppType !!
     object_init_ex(return_value, ce);
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(return_value);
     intern->native_ptr = native;
+    qt_track_native_instance(intern->native_ptr);
     intern->prevent_destroy = prevent_destroy;
 }
 
@@ -283,8 +365,8 @@ void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativeCppType !!
 @endforeach
 @if($ctx->hasSignals())
 
-/* connectSignal */
-ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connectSignal)
+/* connect */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connect)
 {
     zend_string *signalSignature;
     zval *callback;
@@ -306,8 +388,36 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connectSignal)
     }
 @endforeach
 
-    zend_throw_error(NULL, "Unknown signal signature for {!! $ctx->phpClassName !!}::connectSignal().");
+    zend_throw_error(NULL, "Unknown signal signature for {!! $ctx->phpClassName !!}::connect().");
     RETURN_THROWS();
+}
+
+/* disconnect */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, disconnect)
+{
+    zval *connection;
+
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_OBJECT_OF_CLASS(connection, qt_ce_QMetaObjectConnection)
+    ZEND_PARSE_PARAMETERS_END();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (intern->native_ptr == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+    qt_qmetaobjectconnection_object *connection_intern = qt_qmetaobjectconnection_from_obj(Z_OBJ_P(connection));
+    if (connection_intern->native_ptr == NULL) {
+        RETURN_FALSE;
+    }
+
+    bool disconnected = QObject::disconnect(*connection_intern->native_ptr);
+    if (disconnected) {
+        *connection_intern->native_ptr = QMetaObject::Connection();
+    }
+
+    RETURN_BOOL(disconnected);
 }
 
 @foreach($ctx->signalOverloads as $signal)
@@ -341,7 +451,8 @@ static const zend_function_entry {!! $ctx->filePrefix !!}_methods[] = {
     ZEND_ME({!! $ctx->zendClassSymbol !!}, {!! $method->name !!}, {!! $method->arginfoName !!}, {!! $method->accessFlags !!})
 @endforeach
 @if($ctx->hasSignals())
-    ZEND_ME({!! $ctx->zendClassSymbol !!}, connectSignal, {!! $ctx->connectSignalArginfoName !!}, ZEND_ACC_PUBLIC)
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, connect, {!! $ctx->signalConnectArginfoName !!}, ZEND_ACC_PUBLIC)
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, disconnect, {!! $ctx->signalDisconnectArginfoName !!}, ZEND_ACC_PUBLIC)
 @foreach($ctx->signalOverloads as $signal)
     ZEND_ME({!! $ctx->zendClassSymbol !!}, {!! $signal->phpMethodName !!}, {!! $signal->arginfoName !!}, ZEND_ACC_PUBLIC)
 @endforeach

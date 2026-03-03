@@ -125,8 +125,10 @@ class ClassContext
     /** Fully-qualified parent class name for stub generation or null */
     public readonly ?string $stubParentClassName;
 
-    /** Arginfo symbol for connectSignal() */
-    public readonly string $connectSignalArginfoName;
+    /** Arginfo symbol for generated signal connect() */
+    public readonly string $signalConnectArginfoName;
+    /** Arginfo symbol for generated signal disconnect() */
+    public readonly string $signalDisconnectArginfoName;
 
     public function __construct(
         PhpClass $phpClass,
@@ -193,10 +195,15 @@ class ClassContext
         }
         $this->signals = $signals;
         $this->signalOverloads = $this->buildSignalOverloads($signals, $typeBridge);
-        $this->connectSignalArginfoName = $typeBridge->arginfoName(
+        $this->signalConnectArginfoName = $typeBridge->arginfoName(
             $this->phpNamespace,
             $this->phpClassName,
-            'connectSignal',
+            'connect',
+        );
+        $this->signalDisconnectArginfoName = $typeBridge->arginfoName(
+            $this->phpNamespace,
+            $this->phpClassName,
+            'disconnect',
         );
         $this->needsArgvStorage = $this->computeNeedsArgvStorage($methods);
         $this->argvStorageStructName = $this->needsArgvStorage

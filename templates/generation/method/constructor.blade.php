@@ -37,6 +37,9 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
 
 @if($method->hasNoParams())
     intern->native_ptr = new {!! $ctx->nativeCppType !!}();
+@if($ctx->hasPreventDestroy)
+    qt_track_native_instance(intern->native_ptr);
+@endif
 @elseif($method->isOverloaded)
 @include('generation.method.constructor_dispatch', ['ctx' => $ctx, 'method' => $method])
 @else
@@ -52,6 +55,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
 @endforeach
     intern->native_ptr = new {!! $ctx->nativeCppType !!}({!! implode(', ', $callPlan['args']) !!});
 @if($ctx->hasPreventDestroy)
+    qt_track_native_instance(intern->native_ptr);
 @foreach($method->params as $param)
 @if($param->isObject && !$param->isUnion)
 

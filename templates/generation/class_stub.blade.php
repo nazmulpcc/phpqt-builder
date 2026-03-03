@@ -35,10 +35,11 @@ namespace {!! $ctx->phpNamespace !!};
 @endforeach
 @if($ctx->hasSignals())
 
-    public function connectSignal(string $signalSignature, callable $callback): void {}
+    public function connect(string $signalSignature, callable $callback): \Qt\Core\QMetaObjectConnection {}
+    public function disconnect(\Qt\Core\QMetaObjectConnection $connection): bool {}
 @foreach($ctx->signalOverloads as $signal)
 
-    public function {!! $signal->phpMethodName !!}(callable $callback): void {}
+    public function {!! $signal->phpMethodName !!}(callable $callback): \Qt\Core\QMetaObjectConnection {}
 @endforeach
 @endif
 }

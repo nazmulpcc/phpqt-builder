@@ -79,6 +79,10 @@ class ExtensionGenerator
         file_put_contents($stubFile, $this->cleanOutput($stubContent));
         $files[] = $stubFile;
 
+        if ($ctx->hasSignals()) {
+            $files = [...$files, ...$this->generateSignalConnectionSupport($outputDir)];
+        }
+
         return $files;
     }
 
@@ -113,5 +117,37 @@ class ExtensionGenerator
         $content = rtrim($content) . "\n";
 
         return $content;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function generateSignalConnectionSupport(string $outputDir): array
+    {
+        $files = [];
+
+        $headerFile = $outputDir . '/qt_qmetaobjectconnection.h';
+        $sourceFile = $outputDir . '/qt_qmetaobjectconnection.cpp';
+        $stubFile = $outputDir . '/qt_qmetaobjectconnection.stub.php';
+
+        file_put_contents(
+            $headerFile,
+            $this->cleanOutput($this->blade->run('generation.support.qmetaobjectconnection_header', [])),
+        );
+        $files[] = $headerFile;
+
+        file_put_contents(
+            $sourceFile,
+            $this->cleanOutput($this->blade->run('generation.support.qmetaobjectconnection_source', [])),
+        );
+        $files[] = $sourceFile;
+
+        file_put_contents(
+            $stubFile,
+            $this->cleanOutput($this->blade->run('generation.support.qmetaobjectconnection_stub', [])),
+        );
+        $files[] = $stubFile;
+
+        return $files;
     }
 }

@@ -24,12 +24,14 @@ readonly class ExtensionBuildContext
         public array $generatedClasses = [],
         public array $generatedClassParents = [],
         public array $generatedClassDependencies = [],
+        public bool $includeSignalConnectionSupport = false,
     ) {}
 
     public function withGeneratedClasses(
         array $generatedClasses,
         array $generatedClassParents = [],
         array $generatedClassDependencies = [],
+        bool $includeSignalConnectionSupport = false,
     ): self
     {
         return new self(
@@ -41,6 +43,7 @@ readonly class ExtensionBuildContext
             $generatedClasses,
             $generatedClassParents,
             $generatedClassDependencies,
+            $includeSignalConnectionSupport,
         );
     }
 
@@ -114,7 +117,10 @@ readonly class ExtensionBuildContext
      */
     private function orderedGeneratedClasses(): array
     {
-        $classes = array_values(array_unique($this->generatedClasses));
+        $classes = array_values(array_unique([
+            ...$this->generatedClasses,
+            ...($this->includeSignalConnectionSupport ? ['QMetaObjectConnection'] : []),
+        ]));
         if ($classes === []) {
             return [];
         }

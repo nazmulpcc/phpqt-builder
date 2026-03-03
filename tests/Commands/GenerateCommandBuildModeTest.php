@@ -445,18 +445,28 @@ final class GenerateCommandBuildModeTest extends TestCase
 
         $stub = (string) file_get_contents($outputDir . '/classes/qt_qsignalfixture.stub.php');
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qsignalfixture.cpp');
+        self::assertFileExists($outputDir . '/classes/qt_qmetaobjectconnection.h');
+        self::assertFileExists($outputDir . '/classes/qt_qmetaobjectconnection.cpp');
+        self::assertFileExists($outputDir . '/classes/qt_qmetaobjectconnection.stub.php');
 
         self::assertStringNotContainsString('protected function resetValue(): void {}', $stub);
-        self::assertStringContainsString('public function connectSignal(string $signalSignature, callable $callback): void {}', $stub);
-        self::assertStringContainsString('public function onTriggered(callable $callback): void {}', $stub);
-        self::assertStringContainsString('public function onValueChanged(callable $callback): void {}', $stub);
+        self::assertStringContainsString('public function connect(string $signalSignature, callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
+        self::assertStringContainsString('public function disconnect(\Qt\Core\QMetaObjectConnection $connection): bool {}', $stub);
+        self::assertStringContainsString('public function onTriggered(callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
+        self::assertStringContainsString('public function onValueChanged(callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
         self::assertStringNotContainsString('function triggered(): void {}', $stub);
         self::assertStringNotContainsString('function valueChanged(int $value): void {}', $stub);
 
-        self::assertStringContainsString('ZEND_METHOD(Qt_Core_QSignalFixture, connectSignal)', $cpp);
+        self::assertStringContainsString('ZEND_METHOD(Qt_Core_QSignalFixture, connect)', $cpp);
+        self::assertStringContainsString('ZEND_METHOD(Qt_Core_QSignalFixture, disconnect)', $cpp);
+        self::assertStringContainsString('#include "qt_qmetaobjectconnection.h"', $cpp);
+        self::assertStringContainsString('qt_track_native_instance(intern->native_ptr);', $cpp);
+        self::assertStringContainsString('qt_should_delete_native', $cpp);
+        self::assertStringContainsString('if (qt_should_delete_native(intern->native_ptr, intern->prevent_destroy)) {', $cpp);
         self::assertStringContainsString('zend_string_equals_literal(signalSignature, "triggered()")', $cpp);
         self::assertStringContainsString('static_cast<void (QSignalFixture::*)(int)>(&QSignalFixture::valueChanged)', $cpp);
         self::assertStringContainsString('ZEND_ME(Qt_Core_QSignalFixture, onTriggered,', $cpp);
+        self::assertStringContainsString('qt_qmetaobjectconnection_wrap(return_value, _qt_connection);', $cpp);
         self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QSignalFixture, resetValue)', $cpp);
         self::assertStringNotContainsString('zend_fcall_info_args_clear(&callback->fci, true);', $cpp);
         self::assertStringContainsString('callback->fci.params = previousParams;', $cpp);
@@ -493,8 +503,8 @@ final class GenerateCommandBuildModeTest extends TestCase
         $stub = (string) file_get_contents($outputDir . '/classes/qt_qoverloadedsignalfixture.stub.php');
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qoverloadedsignalfixture.cpp');
 
-        self::assertStringContainsString('public function onValueChangedInt(callable $callback): void {}', $stub);
-        self::assertStringContainsString('public function onValueChangedBool(callable $callback): void {}', $stub);
+        self::assertStringContainsString('public function onValueChangedInt(callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
+        self::assertStringContainsString('public function onValueChangedBool(callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
         self::assertStringContainsString('zend_string_equals_literal(signalSignature, "valueChanged(int)")', $cpp);
         self::assertStringContainsString('zend_string_equals_literal(signalSignature, "valueChanged(bool)")', $cpp);
     }
@@ -572,8 +582,8 @@ final class GenerateCommandBuildModeTest extends TestCase
         $stub = (string) file_get_contents($outputDir . '/classes/qt_qsignalnocopyfixture.stub.php');
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qsignalnocopyfixture.cpp');
 
-        self::assertStringNotContainsString('public function connectSignal(string $signalSignature, callable $callback): void {}', $stub);
-        self::assertStringNotContainsString('public function onBlocked(callable $callback): void {}', $stub);
+        self::assertStringNotContainsString('public function connect(', $stub);
+        self::assertStringNotContainsString('public function onBlocked(', $stub);
         self::assertStringNotContainsString('zend_string_equals_literal(signalSignature, "blocked(QSignalNoCopyValue)")', $cpp);
         self::assertStringNotContainsString('new QSignalNoCopyValue(_qt_arg_0)', $cpp);
     }
@@ -616,8 +626,8 @@ final class GenerateCommandBuildModeTest extends TestCase
         $stub = (string) file_get_contents($outputDir . '/classes/qt_qsignalchildfixture.stub.php');
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qsignalchildfixture.cpp');
 
-        self::assertStringContainsString('public function onTriggered(callable $callback): void {}', $stub);
-        self::assertStringContainsString('public function onChanged(callable $callback): void {}', $stub);
+        self::assertStringContainsString('public function onTriggered(callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
+        self::assertStringContainsString('public function onChanged(callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
         self::assertStringContainsString('zend_string_equals_literal(signalSignature, "triggered()")', $cpp);
         self::assertStringContainsString('zend_string_equals_literal(signalSignature, "changed(int)")', $cpp);
         self::assertStringContainsString('static_cast<void (QSignalBaseFixture::*)()>(&QSignalBaseFixture::triggered)', $cpp);
@@ -653,8 +663,9 @@ final class GenerateCommandBuildModeTest extends TestCase
         $stub = (string) file_get_contents($outputDir . '/classes/qt_qsignalconstfixture.stub.php');
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qsignalconstfixture.cpp');
 
-        self::assertStringContainsString('public function connectSignal(string $signalSignature, callable $callback): void {}', $stub);
-        self::assertStringContainsString('public function onChanged(callable $callback): void {}', $stub);
+        self::assertStringContainsString('public function connect(string $signalSignature, callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
+        self::assertStringContainsString('public function disconnect(\Qt\Core\QMetaObjectConnection $connection): bool {}', $stub);
+        self::assertStringContainsString('public function onChanged(callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
         self::assertStringContainsString('static_cast<void (QSignalConstFixture::*)(int) const>(&QSignalConstFixture::changed)', $cpp);
     }
 
@@ -1366,7 +1377,7 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringNotContainsString('_result.toUtf8()', $cpp);
     }
 
-    public function testGenerateBuildModeSkipsQMetaObjectConnectionReturns(): void
+    public function testGenerateBuildModeFiltersConnectMethodsByName(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
@@ -1389,7 +1400,7 @@ final class GenerateCommandBuildModeTest extends TestCase
         $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
         self::assertSame('ok', $payload['status']);
         self::assertContains('connect', array_column($payload['skipped_methods'], 'name'));
-        self::assertContains('unsupported_return_type', array_column($payload['skipped_methods'], 'reason_code'));
+        self::assertContains('method_name_filtered', array_column($payload['skipped_methods'], 'reason_code'));
 
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qconnectionholder.cpp');
         self::assertStringContainsString('ZEND_METHOD(Qt_Core_QConnectionHolder, version)', $cpp);
