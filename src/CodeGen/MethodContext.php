@@ -303,6 +303,28 @@ class MethodContext
         ];
     }
 
+    /**
+     * @return list<string>
+     */
+    public function postCallLines(ClassContext $classCtx, ?OverloadContext $overload = null): array
+    {
+        if ($classCtx->phpClassName === 'QCoreApplication' && $this->name === 'postEvent') {
+            $eventParam = $this->params[1] ?? null;
+            if ($eventParam !== null) {
+                $eventStruct = $classCtx->typeBridge->objectStructName('QEvent');
+                $fromObj = $classCtx->typeBridge->fromObjFuncName('QEvent');
+
+                return [
+                    sprintf('%s *_qt_posted_event = %s(Z_OBJ_P(%s));', $eventStruct, $fromObj, $eventParam->cVarName),
+                    '_qt_posted_event->prevent_destroy = true;',
+                    '_qt_posted_event->native_ptr = NULL;',
+                ];
+            }
+        }
+
+        return [];
+    }
+
     private function overloadParamMatchCondition(int $position, OverloadParamContext $param): string
     {
         $mergedParam = $this->params[$position] ?? null;

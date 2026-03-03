@@ -8,6 +8,7 @@
  * @var string $indent
  */
 $callPlan = $method->callPlan($ctx, $overload);
+$postCallLines = $method->postCallLines($ctx, $overload);
 $declaringClass = $overload->declaringClass !== '' ? $overload->declaringClass : $ctx->nativeCppType;
 $callExpr = null;
 if (!$overload->isPureVirtual) {
@@ -38,6 +39,9 @@ if (!$overload->isPureVirtual) {
 {!! $indent !!}RETURN_THROWS();
 @elseif($overload->returnStrategy === 'void')
 {!! $indent !!}{!! $callExpr !!};
+@foreach($postCallLines as $line)
+{!! $indent !!}{!! $line !!}
+@endforeach
 @elseif($overload->returnStrategy === 'scalar')
 @php
     $macro = $ctx->typeBridge->returnMacro($overload->phpReturnType);

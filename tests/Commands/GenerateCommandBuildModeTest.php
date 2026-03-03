@@ -614,6 +614,37 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringNotContainsString('intern->native_ptr->QMixedAccessOverloadThing::addItem((int)value);', $cpp);
     }
 
+    public function testGenerateBuildModeTransfersQEventOwnershipForPostEvent(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qcoreapplicationmini.h',
+            'class' => 'QCoreApplication',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QCoreApplication,QObject,QEvent',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qcoreapplication.cpp');
+
+        self::assertStringContainsString('QCoreApplication::postEvent(qt_qobject_from_obj(Z_OBJ_P(receiver))->native_ptr, qt_qevent_from_obj(Z_OBJ_P(event))->native_ptr, (int)priority);', $cpp);
+        self::assertStringContainsString('qt_qevent_object *_qt_posted_event = qt_qevent_from_obj(Z_OBJ_P(event));', $cpp);
+        self::assertStringContainsString('_qt_posted_event->prevent_destroy = true;', $cpp);
+        self::assertStringContainsString('_qt_posted_event->native_ptr = NULL;', $cpp);
+    }
+
     public function testGenerateBuildModeGeneratesSignalApisAndRetainsProtectedSlots(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/signals-qt';
