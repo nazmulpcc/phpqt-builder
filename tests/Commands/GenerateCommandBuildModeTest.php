@@ -287,6 +287,102 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringContainsString('_qt_owned_arg_0->prevent_destroy = true;', $widgetCpp);
     }
 
+    public function testGenerateBuildModeUsesAutomaticQObjectOwnershipProbe(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/ownership-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-object-ownership-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qobjectownership.h',
+            'class' => 'QObjectOwner',
+            '--qt-path' => '/definitely/not/a/qt/root',
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+            ],
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QObject,QObjectOwner',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qobjectowner.cpp');
+        self::assertStringContainsString('static zend_always_inline bool qt_native_has_qobject_parent(T *ptr)', $cpp);
+        self::assertStringContainsString('if (qt_native_has_qobject_parent(_qt_owned_arg_0->native_ptr)) {', $cpp);
+        self::assertStringContainsString('_qt_owned_arg_0->prevent_destroy = true;', $cpp);
+    }
+
+    public function testGenerateBuildModeUsesAutomaticStandardItemOwnershipProbe(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/ownership-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-standarditem-ownership-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtGui/qstandarditemownership.h',
+            'class' => 'QStandardItemModel',
+            '--qt-path' => '/definitely/not/a/qt/root',
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+                $fixtureRoot . '/include/QtGui',
+            ],
+            '--module' => 'QtGui',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QObject,QStandardItem,QStandardItemModel',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qstandarditemmodel.cpp');
+        self::assertStringContainsString('qt_qstandarditem_object *_qt_owned_arg_2 = qt_qstandarditem_from_obj(Z_OBJ_P(item));', $cpp);
+        self::assertStringContainsString('(_qt_owned_arg_2->native_ptr != NULL && (_qt_owned_arg_2->native_ptr->model() != NULL || _qt_owned_arg_2->native_ptr->parent() != NULL))', $cpp);
+        self::assertStringContainsString('qt_qstandarditem_object *_qt_owned_arg_1 = qt_qstandarditem_from_obj(Z_OBJ_P(item));', $cpp);
+        self::assertStringContainsString('_qt_owned_arg_1->prevent_destroy = true;', $cpp);
+    }
+
+    public function testGenerateBuildModeUsesAutomaticTableWidgetItemOwnershipProbe(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/ownership-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-tablewidgetitem-ownership-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtWidgets/qtablewidgetownership.h',
+            'class' => 'QTableWidget',
+            '--qt-path' => '/definitely/not/a/qt/root',
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+                $fixtureRoot . '/include/QtWidgets',
+            ],
+            '--module' => 'QtWidgets',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QObject,QTableWidgetItem,QTableWidget',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qtablewidget.cpp');
+        self::assertStringContainsString('qt_qtablewidgetitem_object *_qt_owned_arg_2 = qt_qtablewidgetitem_from_obj(Z_OBJ_P(item));', $cpp);
+        self::assertStringContainsString('if ((_qt_owned_arg_2->native_ptr != NULL && _qt_owned_arg_2->native_ptr->tableWidget() != NULL)) {', $cpp);
+        self::assertStringContainsString('_qt_owned_arg_2->prevent_destroy = true;', $cpp);
+    }
+
     public function testGenerateBuildModeCastsConstObjectPointerReturnsForWrapping(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/const-pointer';
@@ -504,6 +600,11 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringContainsString('protected function value(): int {}', $stub);
         self::assertStringContainsString('class qt_access_QProtectedVirtualThing : public QProtectedVirtualThing', $cpp);
         self::assertStringContainsString('class qt_php_QProtectedVirtualThing : public qt_access_QProtectedVirtualThing', $cpp);
+        self::assertStringContainsString('bool _qt_use_trampoline = (Z_OBJCE_P(ZEND_THIS) != qt_ce_QProtectedVirtualThing);', $cpp);
+        self::assertStringContainsString('intern->native_ptr = new qt_access_QProtectedVirtualThing();', $cpp);
+        self::assertStringContainsString('intern->native_ptr = new qt_php_QProtectedVirtualThing();', $cpp);
+        self::assertStringContainsString('intern->native_is_virtual_trampoline = true;', $cpp);
+        self::assertStringContainsString('intern->native_is_virtual_trampoline = false;', $cpp);
         self::assertStringContainsString('int value() const override', $cpp);
         self::assertStringContainsString('QProtectedVirtualThing::value()', $cpp);
         self::assertStringContainsString('zend_hash_str_find_ptr_lc(&ce->function_table, function_name, strlen(function_name))', $cpp);

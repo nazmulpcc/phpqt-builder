@@ -323,49 +323,108 @@ class MethodContext
         }
 
         $overload ??= $this->overloads[0] ?? null;
-        if ($overload !== null) {
-            $ownershipTransfer = $this->ownershipTransferSpec($classCtx, $overload);
-            if ($ownershipTransfer !== null) {
-                [$paramIndex, $phpClassName] = $ownershipTransfer;
-                $ownedParam = $this->params[$paramIndex] ?? null;
-                if ($ownedParam !== null) {
-                    $objectStruct = $classCtx->typeBridge->objectStructName($phpClassName);
-                    $fromObj = $classCtx->typeBridge->fromObjFuncName($phpClassName);
+        if ($overload === null) {
+            return [];
+        }
 
-                    return [
-                        sprintf('%s *_qt_owned_arg_%d = %s(Z_OBJ_P(%s));', $objectStruct, $paramIndex, $fromObj, $ownedParam->cVarName),
-                        sprintf('_qt_owned_arg_%d->prevent_destroy = true;', $paramIndex),
-                    ];
-                }
+        $lines = [];
+        $handledParamIndexes = [];
+
+        foreach ($this->ownershipTransferSpecs($classCtx, $overload) as [$paramIndex, $phpClassName]) {
+            $ownedParam = $this->params[$paramIndex] ?? null;
+            if ($ownedParam === null) {
+                continue;
             }
+
+            $objectStruct = $classCtx->typeBridge->objectStructName($phpClassName);
+            $fromObj = $classCtx->typeBridge->fromObjFuncName($phpClassName);
+
+            $lines[] = sprintf('%s *_qt_owned_arg_%d = %s(Z_OBJ_P(%s));', $objectStruct, $paramIndex, $fromObj, $ownedParam->cVarName);
+            $lines[] = sprintf('_qt_owned_arg_%d->prevent_destroy = true;', $paramIndex);
+            $handledParamIndexes[$paramIndex] = true;
+        }
+
+        foreach ($overload->params as $paramIndex => $param) {
+            if (isset($handledParamIndexes[$paramIndex])) {
+                continue;
+            }
+
+            $ownershipProbe = $this->ownershipProbeSpec($classCtx, $paramIndex, $param);
+            if ($ownershipProbe === null) {
+                continue;
+            }
+
+            [$phpClassName, $probeExpr] = $ownershipProbe;
+            $ownedParam = $this->params[$paramIndex] ?? null;
+            if ($ownedParam === null) {
+                continue;
+            }
+
+            $objectStruct = $classCtx->typeBridge->objectStructName($phpClassName);
+            $fromObj = $classCtx->typeBridge->fromObjFuncName($phpClassName);
+
+            $lines[] = sprintf('%s *_qt_owned_arg_%d = %s(Z_OBJ_P(%s));', $objectStruct, $paramIndex, $fromObj, $ownedParam->cVarName);
+            $lines[] = sprintf('if (%s) {', $probeExpr);
+            $lines[] = sprintf('    _qt_owned_arg_%d->prevent_destroy = true;', $paramIndex);
+            $lines[] = '}';
+        }
+
+        return $lines;
+    }
+
+    /**
+     * @return list<array{int, string}>
+     */
+    private function ownershipTransferSpecs(ClassContext $classCtx, OverloadContext $overload): array
+    {
+        $firstParam = $overload->params[0] ?? null;
+        if ($firstParam === null) {
+            return [];
+        }
+
+        if ($this->name === 'setLayout' && $classCtx->phpClassName === 'QWidget' && $firstParam->phpType === 'QLayout') {
+            return [[0, 'QLayout']];
+        }
+
+        if ($this->name === 'addWidget' && $firstParam->phpType === 'QWidget') {
+            return [[0, 'QWidget']];
+        }
+
+        if ($this->name === 'addLayout' && $firstParam->phpType === 'QLayout') {
+            return [[0, 'QLayout']];
         }
 
         return [];
     }
 
     /**
-     * @return array{int, string}|null
+     * @return array{string, string}|null
      */
-    private function ownershipTransferSpec(ClassContext $classCtx, OverloadContext $overload): ?array
+    private function ownershipProbeSpec(ClassContext $classCtx, int $paramIndex, OverloadParamContext $param): ?array
     {
-        $firstParam = $overload->params[0] ?? null;
-        if ($firstParam === null) {
+        if (!$classCtx->typeBridge->isObjectType($param->phpType) || $classCtx->typeBridge->isValueType($param->phpType)) {
             return null;
         }
 
-        if ($this->name === 'setLayout' && $classCtx->phpClassName === 'QWidget' && $firstParam->phpType === 'QLayout') {
-            return [0, 'QLayout'];
-        }
+        $probeVar = sprintf('_qt_owned_arg_%d', $paramIndex);
 
-        if ($this->name === 'addWidget' && $firstParam->phpType === 'QWidget') {
-            return [0, 'QWidget'];
-        }
-
-        if ($this->name === 'addLayout' && $firstParam->phpType === 'QLayout') {
-            return [0, 'QLayout'];
-        }
-
-        return null;
+        return match ($param->phpType) {
+            'QStandardItem' => [
+                'QStandardItem',
+                sprintf(
+                    '(_qt_owned_arg_%1$d->native_ptr != NULL && (_qt_owned_arg_%1$d->native_ptr->model() != NULL || _qt_owned_arg_%1$d->native_ptr->parent() != NULL))',
+                    $paramIndex,
+                ),
+            ],
+            'QTableWidgetItem' => [
+                'QTableWidgetItem',
+                sprintf('(_qt_owned_arg_%d->native_ptr != NULL && _qt_owned_arg_%d->native_ptr->tableWidget() != NULL)', $paramIndex, $paramIndex),
+            ],
+            default => [
+                $param->phpType,
+                sprintf('qt_native_has_qobject_parent(%s->native_ptr)', $probeVar),
+            ],
+        };
     }
 
     private function overloadParamMatchCondition(int $position, OverloadParamContext $param): string

@@ -95,8 +95,14 @@ class ClassContext
     /** Generated trampoline type name */
     public readonly string $trampolineTypeName;
 
-    /** Native C++ type used in constructor allocation paths */
+    /** Native C++ type used for plain internal-class constructor allocation */
+    public readonly string $plainNativeInstantiationType;
+
+    /** Native C++ type used for userland subclass constructor allocation */
     public readonly string $nativeInstantiationType;
+
+    /** Native C++ type used for protected-helper receiver casts */
+    public readonly string $protectedCallReceiverType;
 
     /** Helper struct name for argv-backed application wrappers */
     public readonly ?string $argvStorageStructName;
@@ -214,9 +220,15 @@ class ClassContext
         $this->tracksGeneratedNativeSubclass = $this->usesGeneratedNativeSubclass;
         $this->accessShimTypeName = 'qt_access_' . $phpClass->name;
         $this->trampolineTypeName = 'qt_php_' . $phpClass->name;
+        $this->plainNativeInstantiationType = $this->computeUsesGeneratedNativeSubclass($methods)
+            ? $this->accessShimTypeName
+            : $this->nativeCppType;
         $this->nativeInstantiationType = $this->requiresVirtualTrampoline
             ? $this->trampolineTypeName
-            : ($this->usesGeneratedNativeSubclass ? $this->accessShimTypeName : $this->nativeCppType);
+            : $this->plainNativeInstantiationType;
+        $this->protectedCallReceiverType = $this->requiresAccessShim
+            ? $this->accessShimTypeName
+            : $this->nativeCppType;
         $this->isCloneable = !$this->usesGeneratedNativeSubclass && $this->isValueType && $this->isCopyConstructible;
 
         $signals = [];
@@ -381,6 +393,28 @@ class ClassContext
     public function hasVirtualMethods(): bool
     {
         return $this->requiresVirtualTrampoline;
+    }
+
+    public function plainInstantiationUsesGeneratedType(): bool
+    {
+        return $this->plainNativeInstantiationType !== $this->nativeCppType;
+    }
+
+    public function hasPostCallOwnershipHandling(): bool
+    {
+        foreach ($this->methods as $method) {
+            if ($method->postCallLines($this) !== []) {
+                return true;
+            }
+
+            foreach ($method->overloads as $overload) {
+                if ($method->postCallLines($this, $overload) !== []) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /**

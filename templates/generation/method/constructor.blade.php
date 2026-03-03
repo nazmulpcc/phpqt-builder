@@ -35,13 +35,27 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
         RETURN_THROWS();
     }
 
-@if($method->hasNoParams())
-    intern->native_ptr = new {!! $ctx->nativeInstantiationType !!}();
 @if($ctx->requiresVirtualTrampoline)
-    static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr)->php_object = &intern->std;
+    bool _qt_use_trampoline = (Z_OBJCE_P(ZEND_THIS) != {!! $ctx->ceVarName !!});
 @endif
+
+@if($method->hasNoParams())
+@if($ctx->requiresVirtualTrampoline)
+    if (_qt_use_trampoline) {
+        intern->native_ptr = new {!! $ctx->nativeInstantiationType !!}();
+        static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr)->php_object = &intern->std;
+        intern->native_is_generated_subclass = true;
+        intern->native_is_virtual_trampoline = true;
+    } else {
+        intern->native_ptr = new {!! $ctx->plainNativeInstantiationType !!}();
+        intern->native_is_generated_subclass = {!! $ctx->plainInstantiationUsesGeneratedType() ? 'true' : 'false' !!};
+        intern->native_is_virtual_trampoline = false;
+    }
+@else
+    intern->native_ptr = new {!! $ctx->nativeInstantiationType !!}();
 @if($ctx->tracksGeneratedNativeSubclass)
     intern->native_is_generated_subclass = true;
+@endif
 @endif
 @if($ctx->hasPreventDestroy)
     qt_track_native_instance(intern->native_ptr);
@@ -59,12 +73,22 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
 @foreach($callPlan['setup_lines'] as $line)
     {!! $line !!}
 @endforeach
-    intern->native_ptr = new {!! $ctx->nativeInstantiationType !!}({!! implode(', ', $callPlan['args']) !!});
 @if($ctx->requiresVirtualTrampoline)
-    static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr)->php_object = &intern->std;
-@endif
+    if (_qt_use_trampoline) {
+        intern->native_ptr = new {!! $ctx->nativeInstantiationType !!}({!! implode(', ', $callPlan['args']) !!});
+        static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr)->php_object = &intern->std;
+        intern->native_is_generated_subclass = true;
+        intern->native_is_virtual_trampoline = true;
+    } else {
+        intern->native_ptr = new {!! $ctx->plainNativeInstantiationType !!}({!! implode(', ', $callPlan['args']) !!});
+        intern->native_is_generated_subclass = {!! $ctx->plainInstantiationUsesGeneratedType() ? 'true' : 'false' !!};
+        intern->native_is_virtual_trampoline = false;
+    }
+@else
+    intern->native_ptr = new {!! $ctx->nativeInstantiationType !!}({!! implode(', ', $callPlan['args']) !!});
 @if($ctx->tracksGeneratedNativeSubclass)
     intern->native_is_generated_subclass = true;
+@endif
 @endif
 @if($ctx->hasPreventDestroy)
     qt_track_native_instance(intern->native_ptr);

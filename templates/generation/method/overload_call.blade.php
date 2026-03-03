@@ -15,7 +15,7 @@ if (!$overload->isPureVirtual) {
     if ($overload->access === 'protected') {
         $callExpr = $overload->isStatic
             ? "{$ctx->accessShimTypeName}::{$method->accessShimHelperName($index)}(" . implode(', ', $callPlan['args']) . ')'
-            : "static_cast<{$ctx->nativeInstantiationType} *>(intern->native_ptr)->{$method->accessShimHelperName($index)}(" . implode(', ', $callPlan['args']) . ')';
+            : "static_cast<{$ctx->protectedCallReceiverType} *>(intern->native_ptr)->{$method->accessShimHelperName($index)}(" . implode(', ', $callPlan['args']) . ')';
     } elseif ($method->isStatic) {
         $callExpr = "{$ctx->nativeCppType}::{$method->cppName}(" . implode(', ', $callPlan['args']) . ')';
     } elseif ($overload->isVirtual || $overload->isPureVirtual) {

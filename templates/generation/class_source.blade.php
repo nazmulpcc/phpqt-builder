@@ -20,7 +20,7 @@
 #include <unordered_set>
 #include <QString>
 #include <QByteArray>
-@if($ctx->hasPreventDestroy || $ctx->hasSignals())
+@if($ctx->hasPreventDestroy || $ctx->hasSignals() || $ctx->hasPostCallOwnershipHandling())
 #include <QObject>
 @endif
 @if($ctx->hasSignals())
@@ -79,6 +79,23 @@ static zend_always_inline bool qt_call_php_method(zend_object *object, const cha
 
     return !EG(exception);
 }
+
+@if($ctx->hasPostCallOwnershipHandling())
+template <typename T>
+static zend_always_inline bool qt_native_has_qobject_parent(T *ptr)
+{
+    if (ptr == NULL) {
+        return false;
+    }
+
+    if constexpr (std::is_base_of_v<QObject, T>) {
+        return ptr->parent() != NULL;
+    }
+
+    return false;
+}
+
+@endif
 
 @if($ctx->hasSignals())
 /* ------------------------------------------------------------------ */
@@ -433,6 +450,9 @@ static zend_object *{!! $ctx->filePrefix !!}_create_object(zend_class_entry *ce)
     intern->native_ptr = NULL;
 @if($ctx->tracksGeneratedNativeSubclass)
     intern->native_is_generated_subclass = false;
+@if($ctx->requiresVirtualTrampoline)
+    intern->native_is_virtual_trampoline = false;
+@endif
 @endif
 @if($ctx->hasPreventDestroy)
     intern->prevent_destroy = false;
@@ -461,10 +481,25 @@ static void {!! $ctx->filePrefix !!}_free_object(zend_object *object)
     if (qt_should_delete_native(intern->native_ptr, intern->prevent_destroy)) {
 @if($ctx->tracksGeneratedNativeSubclass)
         if (intern->native_is_generated_subclass) {
-            delete static_cast<{!! $ctx->nativeInstantiationType !!} *>(intern->native_ptr);
+@if($ctx->requiresVirtualTrampoline)
+            if (intern->native_is_virtual_trampoline) {
+                delete static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr);
+            } else {
+@if($ctx->plainInstantiationUsesGeneratedType())
+                delete static_cast<{!! $ctx->plainNativeInstantiationType !!} *>(intern->native_ptr);
+@else
+                delete intern->native_ptr;
+@endif
+            }
         } else {
             delete intern->native_ptr;
         }
+@else
+            delete static_cast<{!! $ctx->plainNativeInstantiationType !!} *>(intern->native_ptr);
+        } else {
+            delete intern->native_ptr;
+        }
+@endif
 @else
         delete intern->native_ptr;
 @endif
@@ -475,10 +510,25 @@ static void {!! $ctx->filePrefix !!}_free_object(zend_object *object)
     if (intern->native_ptr) {
 @if($ctx->tracksGeneratedNativeSubclass)
         if (intern->native_is_generated_subclass) {
-            delete static_cast<{!! $ctx->nativeInstantiationType !!} *>(intern->native_ptr);
+@if($ctx->requiresVirtualTrampoline)
+            if (intern->native_is_virtual_trampoline) {
+                delete static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr);
+            } else {
+@if($ctx->plainInstantiationUsesGeneratedType())
+                delete static_cast<{!! $ctx->plainNativeInstantiationType !!} *>(intern->native_ptr);
+@else
+                delete intern->native_ptr;
+@endif
+            }
         } else {
             delete intern->native_ptr;
         }
+@else
+            delete static_cast<{!! $ctx->plainNativeInstantiationType !!} *>(intern->native_ptr);
+        } else {
+            delete intern->native_ptr;
+        }
+@endif
 @else
         delete intern->native_ptr;
 @endif
@@ -552,6 +602,9 @@ void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativeCppType !!
     intern->prevent_destroy = prevent_destroy;
 @if($ctx->tracksGeneratedNativeSubclass)
     intern->native_is_generated_subclass = false;
+@if($ctx->requiresVirtualTrampoline)
+    intern->native_is_virtual_trampoline = false;
+@endif
 @endif
 }
 
