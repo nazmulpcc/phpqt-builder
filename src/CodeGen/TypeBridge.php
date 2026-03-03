@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace QtBuilder\CodeGen;
 
+use QtBuilder\Definition\ContainerType;
+
 /**
  * Maps PHP type names (from the IR) to Zend C API constructs needed
  * in generated extension code.
@@ -17,6 +19,8 @@ namespace QtBuilder\CodeGen;
  */
 class TypeBridge
 {
+    private ?ContainerBridge $containerBridge = null;
+
     /**
      * PHP scalar types -> Zend IS_* constants (for arginfo declarations).
      *
@@ -139,6 +143,7 @@ class TypeBridge
         'QRegion',
         'QVariant',
         'QModelIndex',
+        'QPersistentModelIndex',
         'QDate', 'QTime', 'QDateTime',
     ];
 
@@ -168,6 +173,19 @@ class TypeBridge
     public function isValueType(string $className): bool
     {
         return \in_array($className, self::KNOWN_VALUE_TYPES, true);
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function containerClassRefs(string $cppType): array
+    {
+        return $this->containerBridge()->classRefs($cppType);
+    }
+
+    public function isSupportedContainerType(string $cppType): bool
+    {
+        return $this->containerBridge()->isSupported($cppType);
     }
 
     /**
@@ -565,6 +583,14 @@ class TypeBridge
             ];
         }
 
+        if ($phpType === 'array' && $this->isSupportedContainerType($cppType)) {
+            return [
+                'lines' => $this->phpArrayToNativeContainerLines($cppType, $sourceVarName, $nativeVarName),
+                'expr' => $nativeVarName,
+                'local_var' => $nativeVarName,
+            ];
+        }
+
         if ($this->isNonConstReferenceType($cppType) && $this->shouldMaterializeReferenceLocal($phpType, $cppType)) {
             $initExpr = $sourceIsZval
                 ? $this->zvalToNativeExpr($phpType, $cppType, $sourceVarName, $nullable)
@@ -840,6 +866,10 @@ class TypeBridge
     {
         $strategy = $this->returnStrategyForCpp($phpType, $cppType);
 
+        if ($strategy === 'array') {
+            return $this->nativeContainerToPhpZvalBlock($zvalVar, $cppType, $sourceExpr, $paramIndex);
+        }
+
         if ($strategy === 'scalar') {
             return match ($phpType) {
                 'int' => sprintf('ZVAL_LONG(%s, %s);', $zvalVar, $this->nativeScalarToPhpExpr($phpType, $cppType, $sourceExpr)),
@@ -978,6 +1008,15 @@ class TypeBridge
      */
     public function nativeReturnFromZvalSetup(string $phpType, string $cppType, string $zvalPtrExpr, string $tempPrefix = '_qt_ret'): array
     {
+        if ($phpType === 'array' && $this->isSupportedContainerType($cppType)) {
+            $failureExpr = sprintf('return %s;', $this->defaultNativeReturnExpr($phpType, $cppType));
+            return [
+                'lines' => $this->phpArrayToNativeContainerLines($cppType, $zvalPtrExpr, $tempPrefix, true, $failureExpr),
+                'expr' => $tempPrefix,
+                'cleanup_lines' => [],
+            ];
+        }
+
         if ($phpType === 'string') {
             $stringVar = $tempPrefix . '_string';
 
@@ -997,6 +1036,18 @@ class TypeBridge
             'expr' => $this->zvalToNativeReturnExpr($phpType, $cppType, $zvalPtrExpr),
             'cleanup_lines' => [],
         ];
+    }
+
+    public function nativeContainerToPhpZvalBlock(string $zvalPtrExpr, string $cppType, string $sourceExpr, ?int $suffix = null): string
+    {
+        $container = $this->containerSpec($cppType);
+        if ($container === null) {
+            return sprintf('ZVAL_NULL(%s);', $zvalPtrExpr);
+        }
+
+        return $container->isSequence()
+            ? $this->sequenceContainerToPhpBlock($zvalPtrExpr, $container, $sourceExpr, $suffix)
+            : $this->mapContainerToPhpBlock($zvalPtrExpr, $container, $sourceExpr, $suffix);
     }
 
     // ------------------------------------------------------------------
@@ -1258,6 +1309,16 @@ class TypeBridge
         return str_contains($cppType, '*');
     }
 
+    private function containerBridge(): ContainerBridge
+    {
+        return $this->containerBridge ??= new ContainerBridge();
+    }
+
+    private function containerSpec(string $cppType): ?ContainerType
+    {
+        return $this->containerBridge()->parse($cppType);
+    }
+
     private function isNonConstReferenceType(string $cppType): bool
     {
         $trimmed = trim($cppType);
@@ -1271,6 +1332,378 @@ class TypeBridge
         $normalized = trim(preg_replace('/\s+/', ' ', $normalized) ?? $normalized);
 
         return preg_match('/^char\s*\*\s*\*$/', $normalized) === 1;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function phpArrayToNativeContainerLines(
+        string $cppType,
+        string $sourceVarName,
+        string $nativeVarName,
+        bool $sourceIsZval = false,
+        string $failureStatement = 'RETURN_THROWS();',
+    ): array {
+        $container = $this->containerSpec($cppType);
+        if ($container === null) {
+            return [sprintf('%s %s;', $this->normalizeCppType($cppType), $nativeVarName)];
+        }
+
+        if ($container->isSequence()) {
+            return $this->phpArrayToSequenceLines($container, $sourceVarName, $nativeVarName, $sourceIsZval, $failureStatement);
+        }
+
+        return $this->phpArrayToMapLines($container, $sourceVarName, $nativeVarName, $sourceIsZval, $failureStatement);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function phpArrayToSequenceLines(ContainerType $container, string $sourceVarName, string $nativeVarName, bool $sourceIsZval, string $failureStatement): array
+    {
+        $containerType = $this->normalizeCppType($container->rawType);
+        $entryVar = $nativeVarName . '_entry';
+        $stringVar = $nativeVarName . '_str';
+        $valueVar = $nativeVarName . '_value';
+        $phpType = $this->containerBridge()->elementPhpType((string) $container->elementType);
+        $nullable = $this->isPointerType((string) $container->elementType);
+
+        $lines = [
+            sprintf('%s %s;', $containerType, $nativeVarName),
+            sprintf('if (%s != NULL) {', $sourceVarName),
+        ];
+        if ($sourceIsZval) {
+            $lines[] = sprintf('    if (Z_TYPE_P(%s) != IS_ARRAY) {', $sourceVarName);
+            $lines[] = '        zend_type_error("Expected PHP array for Qt container conversion.");';
+            $lines[] = '        ' . $failureStatement;
+            $lines[] = '    }';
+        }
+        $lines[] = sprintf('    HashTable *%s_ht = Z_ARRVAL_P(%s);', $nativeVarName, $sourceVarName);
+        $lines[] = sprintf('    zval *%s;', $entryVar);
+        $lines[] = sprintf('    ZEND_HASH_FOREACH_VAL(%s_ht, %s) {', $nativeVarName, $entryVar);
+
+        $lines = array_merge($lines, $this->sequenceInputValueLines($container, $phpType, $entryVar, $valueVar, $stringVar, $nullable, $failureStatement));
+        $lines[] = sprintf('        %s.append(%s);', $nativeVarName, $valueVar);
+        $lines[] = '    } ZEND_HASH_FOREACH_END();';
+        $lines[] = '}';
+
+        return $lines;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function sequenceInputValueLines(
+        ContainerType $container,
+        string $phpType,
+        string $entryVar,
+        string $valueVar,
+        string $stringVar,
+        bool $nullable,
+        string $failureStatement,
+    ): array {
+        $elementType = (string) $container->elementType;
+        $lines = [];
+
+        if ($elementType === 'QVariant') {
+            $lines[] = sprintf('        QVariant %s;', $valueVar);
+            $lines[] = sprintf('        if (!qt_zval_to_variant(%s, &%s)) {', $entryVar, $valueVar);
+            $lines[] = '            ' . $failureStatement;
+            $lines[] = '        }';
+
+            return $lines;
+        }
+
+        if ($phpType === 'string') {
+            $lines[] = sprintf('        if (Z_TYPE_P(%s) != IS_STRING) {', $entryVar);
+            $lines[] = '            zend_type_error("Expected array of strings.");';
+            $lines[] = '            ' . $failureStatement;
+            $lines[] = '        }';
+            $lines[] = sprintf('        zend_string *%s = zval_get_string(%s);', $stringVar, $entryVar);
+            $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($elementType), $valueVar, $this->phpStringToNativeExpr($elementType, $stringVar));
+            $lines[] = sprintf('        zend_string_release(%s);', $stringVar);
+
+            return $lines;
+        }
+
+        if (in_array($phpType, ['int', 'float', 'bool'], true)) {
+            $matchExpr = $this->zvalTypeMatchExpr($entryVar, $phpType);
+            $nativeExpr = $this->zvalToNativeExpr($phpType, $elementType, $entryVar, false);
+            $lines[] = sprintf('        if (!(%s)) {', $matchExpr);
+            $lines[] = sprintf('            zend_type_error("Expected array of %ss.");', $phpType);
+            $lines[] = '            ' . $failureStatement;
+            $lines[] = '        }';
+            $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($elementType), $valueVar, $nativeExpr);
+
+            return $lines;
+        }
+
+        $objectCheck = $nullable
+            ? sprintf('(Z_TYPE_P(%1$s) == IS_NULL || (Z_TYPE_P(%1$s) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s), %2$s)))', $entryVar, $this->ceVarName($phpType))
+            : sprintf('(Z_TYPE_P(%1$s) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s), %2$s))', $entryVar, $this->ceVarName($phpType));
+        $lines[] = sprintf('        if (!(%s)) {', $objectCheck);
+        $lines[] = sprintf('            zend_type_error("Expected array of %s objects.");', $phpType);
+        $lines[] = '            ' . $failureStatement;
+        $lines[] = '        }';
+        $nativeExpr = $nullable
+            ? sprintf('(Z_TYPE_P(%1$s) == IS_NULL ? NULL : %2$s(Z_OBJ_P(%1$s))->native_ptr)', $entryVar, $this->fromObjFuncName($phpType))
+            : $this->phpObjectToNativeExpr($phpType, $elementType, $entryVar, false);
+        $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($elementType), $valueVar, $nativeExpr);
+
+        return $lines;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function phpArrayToMapLines(ContainerType $container, string $sourceVarName, string $nativeVarName, bool $sourceIsZval, string $failureStatement): array
+    {
+        $containerType = $this->normalizeCppType($container->rawType);
+        $keyType = (string) $container->keyType;
+        $valueType = (string) $container->valueType;
+        $keyPhpType = $this->containerBridge()->elementPhpType($keyType);
+        $valuePhpType = $this->containerBridge()->elementPhpType($valueType);
+        $valueNullable = $this->isPointerType($valueType);
+        $keyVar = $nativeVarName . '_key';
+        $valueVar = $nativeVarName . '_value';
+        $stringVar = $nativeVarName . '_str';
+
+        $lines = [
+            sprintf('%s %s;', $containerType, $nativeVarName),
+            sprintf('if (%s != NULL) {', $sourceVarName),
+        ];
+        if ($sourceIsZval) {
+            $lines[] = sprintf('    if (Z_TYPE_P(%s) != IS_ARRAY) {', $sourceVarName);
+            $lines[] = '        zend_type_error("Expected PHP array for Qt container conversion.");';
+            $lines[] = '        ' . $failureStatement;
+            $lines[] = '    }';
+        }
+        $lines[] = sprintf('    HashTable *%s_ht = Z_ARRVAL_P(%s);', $nativeVarName, $sourceVarName);
+        $lines[] = sprintf('    zend_string *%s_key_str;', $nativeVarName);
+        $lines[] = sprintf('    zend_ulong %s_key_num;', $nativeVarName);
+        $lines[] = sprintf('    zval *%s_entry;', $nativeVarName);
+        $lines[] = sprintf('    ZEND_HASH_FOREACH_KEY_VAL(%s_ht, %s_key_num, %s_key_str, %s_entry) {', $nativeVarName, $nativeVarName, $nativeVarName, $nativeVarName);
+
+        if ($keyPhpType === 'int') {
+            $lines[] = sprintf('        %s %s;', $this->localContainerNativeType($keyType), $keyVar);
+            $lines[] = sprintf('        if (%1$s_key_str == NULL) { %2$s = %3$s; } else {', $nativeVarName, $keyVar, $this->phpIntToNativeExpr($keyType, sprintf('(zend_long)%s_key_num', $nativeVarName)));
+            $lines[] = '            zend_long _qt_key_long = 0;';
+            $lines[] = '            double _qt_key_double = 0;';
+            $lines[] = sprintf('            if (is_numeric_string(ZSTR_VAL(%1$s_key_str), ZSTR_LEN(%1$s_key_str), &_qt_key_long, &_qt_key_double, false) != IS_LONG) {', $nativeVarName);
+            $lines[] = '                zend_type_error("Expected integer array keys.");';
+            $lines[] = '                ' . $failureStatement;
+            $lines[] = '            }';
+            $lines[] = sprintf('            %s = %s;', $keyVar, $this->phpIntToNativeExpr($keyType, '_qt_key_long'));
+            $lines[] = '        }';
+        } else {
+            $lines[] = sprintf('        %s %s;', $this->localContainerNativeType($keyType), $keyVar);
+            $lines[] = sprintf('        if (%1$s_key_str != NULL) {', $nativeVarName);
+            $lines[] = sprintf('            %s = %s;', $keyVar, $this->phpStringToNativeExpr($keyType, sprintf('%s_key_str', $nativeVarName)));
+            $lines[] = '        } else {';
+            $lines[] = sprintf('            %s = %s;', $keyVar, $this->integerMapKeyToStringExpr($keyType, sprintf('%s_key_num', $nativeVarName)));
+            $lines[] = '        }';
+        }
+
+        if ($valueType === 'QVariant') {
+            $lines[] = sprintf('        QVariant %s;', $valueVar);
+            $lines[] = sprintf('        if (!qt_zval_to_variant(%s_entry, &%s)) {', $nativeVarName, $valueVar);
+            $lines[] = '            ' . $failureStatement;
+            $lines[] = '        }';
+        } elseif ($valuePhpType === 'string') {
+            $lines[] = sprintf('        if (Z_TYPE_P(%s_entry) != IS_STRING) {', $nativeVarName);
+            $lines[] = '            zend_type_error("Expected string map values.");';
+            $lines[] = '            ' . $failureStatement;
+            $lines[] = '        }';
+            $lines[] = sprintf('        zend_string *%s = zval_get_string(%s_entry);', $stringVar, $nativeVarName);
+            $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($valueType), $valueVar, $this->phpStringToNativeExpr($valueType, $stringVar));
+            $lines[] = sprintf('        zend_string_release(%s);', $stringVar);
+        } elseif (in_array($valuePhpType, ['int', 'float', 'bool'], true)) {
+            $lines[] = sprintf('        if (!(%s)) {', $this->zvalTypeMatchExpr(sprintf('%s_entry', $nativeVarName), $valuePhpType));
+            $lines[] = sprintf('            zend_type_error("Expected %s map values.");', $valuePhpType);
+            $lines[] = '            ' . $failureStatement;
+            $lines[] = '        }';
+            $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($valueType), $valueVar, $this->zvalToNativeExpr($valuePhpType, $valueType, sprintf('%s_entry', $nativeVarName), false));
+        } else {
+            $valueCheck = $valueNullable
+                ? sprintf('(Z_TYPE_P(%1$s_entry) == IS_NULL || (Z_TYPE_P(%1$s_entry) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s_entry), %2$s)))', $nativeVarName, $this->ceVarName($valuePhpType))
+                : sprintf('(Z_TYPE_P(%1$s_entry) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s_entry), %2$s))', $nativeVarName, $this->ceVarName($valuePhpType));
+            $lines[] = sprintf('        if (!(%s)) {', $valueCheck);
+            $lines[] = sprintf('            zend_type_error("Expected %s map values.");', $valuePhpType);
+            $lines[] = '            ' . $failureStatement;
+            $lines[] = '        }';
+            $nativeExpr = $valueNullable
+                ? sprintf('(Z_TYPE_P(%1$s_entry) == IS_NULL ? NULL : %2$s(Z_OBJ_P(%1$s_entry))->native_ptr)', $nativeVarName, $this->fromObjFuncName($valuePhpType))
+                : $this->phpObjectToNativeExpr($valuePhpType, $valueType, sprintf('%s_entry', $nativeVarName), false);
+            $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($valueType), $valueVar, $nativeExpr);
+        }
+
+        $lines[] = sprintf('        %s.insert(%s, %s);', $nativeVarName, $keyVar, $valueVar);
+        $lines[] = '    } ZEND_HASH_FOREACH_END();';
+        $lines[] = '}';
+
+        return $lines;
+    }
+
+    private function sequenceContainerToPhpBlock(string $zvalPtrExpr, ContainerType $container, string $sourceExpr, ?int $suffix): string
+    {
+        $itemVar = $suffix === null ? '_qt_item' : sprintf('_qt_item_%d', $suffix);
+        $valueVar = $suffix === null ? '_qt_value' : sprintf('_qt_value_%d', $suffix);
+        $lines = [
+            sprintf('array_init_size(%s, (uint32_t)%s.size());', $zvalPtrExpr, $sourceExpr),
+            sprintf('for (const auto &%s : %s) {', $itemVar, $sourceExpr),
+            sprintf('    zval %s;', $valueVar),
+            '    ZVAL_NULL(&' . $valueVar . ');',
+        ];
+        foreach ($this->nativeElementToZvalLines($container->elementType ?? '', $itemVar, '&' . $valueVar, $suffix) as $line) {
+            $lines[] = '    ' . $line;
+        }
+        $lines[] = sprintf('    add_next_index_zval(%s, &%s);', $zvalPtrExpr, $valueVar);
+        $lines[] = '}';
+
+        return implode("\n    ", $lines);
+    }
+
+    private function mapContainerToPhpBlock(string $zvalPtrExpr, ContainerType $container, string $sourceExpr, ?int $suffix): string
+    {
+        $itVar = $suffix === null ? '_qt_it' : sprintf('_qt_it_%d', $suffix);
+        $valueVar = $suffix === null ? '_qt_value' : sprintf('_qt_value_%d', $suffix);
+        $keyType = (string) $container->keyType;
+        $keyPhpType = $this->containerBridge()->elementPhpType($keyType);
+        $lines = [
+            sprintf('array_init_size(%s, (uint32_t)%s.size());', $zvalPtrExpr, $sourceExpr),
+            sprintf('for (auto %1$s = %2$s.cbegin(); %1$s != %2$s.cend(); ++%1$s) {', $itVar, $sourceExpr),
+            sprintf('    zval %s;', $valueVar),
+            '    ZVAL_NULL(&' . $valueVar . ');',
+        ];
+        foreach ($this->nativeElementToZvalLines($container->valueType ?? '', sprintf('%s.value()', $itVar), '&' . $valueVar, $suffix) as $line) {
+            $lines[] = '    ' . $line;
+        }
+        if ($keyPhpType === 'int') {
+            $lines[] = sprintf('    add_index_zval(%s, (zend_long)%s.key(), &%s);', $zvalPtrExpr, $itVar, $valueVar);
+        } else {
+            $keyStringVar = $suffix === null ? '_qt_key_utf8' : sprintf('_qt_key_utf8_%d', $suffix);
+            $lines[] = sprintf('    QByteArray %s = %s.key().toUtf8();', $keyStringVar, $itVar);
+            $lines[] = sprintf('    add_assoc_zval_ex(%s, %s.constData(), %s.size(), &%s);', $zvalPtrExpr, $keyStringVar, $keyStringVar, $valueVar);
+        }
+        $lines[] = '}';
+
+        return implode("\n    ", $lines);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function nativeElementToZvalLines(string $cppType, string $sourceExpr, string $zvalPtrExpr, ?int $suffix): array
+    {
+        $phpType = $this->containerBridge()->elementPhpType($cppType);
+        $strategy = $this->returnStrategyForCpp($phpType, $cppType);
+
+        if ($cppType === 'QVariant') {
+            return [sprintf('qt_variant_to_zval(%s, %s);', $zvalPtrExpr, $sourceExpr)];
+        }
+
+        if ($strategy === 'scalar') {
+            return [match ($phpType) {
+                'int' => sprintf('ZVAL_LONG(%s, %s);', $zvalPtrExpr, $this->nativeScalarToPhpExpr($phpType, $cppType, $sourceExpr)),
+                'float' => sprintf('ZVAL_DOUBLE(%s, %s);', $zvalPtrExpr, $this->nativeScalarToPhpExpr($phpType, $cppType, $sourceExpr)),
+                'bool' => sprintf('ZVAL_BOOL(%s, %s);', $zvalPtrExpr, $this->nativeScalarToPhpExpr($phpType, $cppType, $sourceExpr)),
+                default => sprintf('ZVAL_NULL(%s);', $zvalPtrExpr),
+            }];
+        }
+
+        if ($strategy === 'string') {
+            return $this->nativeStringToPhpZvalLines($zvalPtrExpr, $cppType, $sourceExpr, $suffix);
+        }
+
+        if ($strategy === 'value_object') {
+            return [
+                sprintf('object_init_ex(%s, %s);', $zvalPtrExpr, $this->ceVarName($phpType)),
+                sprintf('%s(%s)->native_ptr = new %s(%s);', $this->zMacroName($phpType), $zvalPtrExpr, $phpType, $sourceExpr),
+            ];
+        }
+
+        if ($strategy === 'qobject_pointer') {
+            if ($this->isValueType($phpType)) {
+                return [
+                    sprintf('if (%s != NULL) {', $sourceExpr),
+                    sprintf('    object_init_ex(%s, %s);', $zvalPtrExpr, $this->ceVarName($phpType)),
+                    sprintf('    %s(%s)->native_ptr = new %s(*%s);', $this->zMacroName($phpType), $zvalPtrExpr, $phpType, $sourceExpr),
+                    '} else {',
+                    sprintf('    ZVAL_NULL(%s);', $zvalPtrExpr),
+                    '}',
+                ];
+            }
+
+            return [sprintf('%s(%s, %s, %s, true);', $this->wrapNativeFuncName($phpType), $zvalPtrExpr, $this->writableObjectPointerExpr($cppType, $phpType, $sourceExpr), $this->ceVarName($phpType))];
+        }
+
+        return [sprintf('ZVAL_NULL(%s);', $zvalPtrExpr)];
+    }
+
+    private function integerMapKeyToStringExpr(string $cppType, string $sourceExpr): string
+    {
+        $base = $this->normalizeCppType($cppType);
+
+        return match ($base) {
+            'QByteArray' => sprintf('QByteArray::number((qlonglong)%s)', $sourceExpr),
+            default => sprintf('QString::number((qlonglong)%s)', $sourceExpr),
+        };
+    }
+
+    private function localContainerNativeType(string $cppType): string
+    {
+        $type = trim($cppType);
+        $type = preg_replace('/\bconst\b/', '', $type) ?? $type;
+        $type = trim(preg_replace('/\s+/', ' ', $type) ?? $type);
+        $type = rtrim($type, '& ');
+
+        return trim($type);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function nativeStringToPhpZvalLines(string $zvalPtrExpr, string $cppType, string $sourceExpr, ?int $suffix): array
+    {
+        $base = $this->normalizeCppType($cppType);
+
+        if ($base === 'QByteArray') {
+            return [sprintf('ZVAL_STRINGL(%s, %s.constData(), %s.size());', $zvalPtrExpr, $sourceExpr, $sourceExpr)];
+        }
+
+        if ($base === 'std::string' || $base === 'std::string_view') {
+            return [sprintf('ZVAL_STRINGL(%s, %s.data(), %s.size());', $zvalPtrExpr, $sourceExpr, $sourceExpr)];
+        }
+
+        if ($base === 'std::filesystem::path') {
+            $pathVar = $suffix === null ? '_qt_path' : sprintf('_qt_path_%d', $suffix);
+
+            return [
+                sprintf('std::string %s = %s.string();', $pathVar, $sourceExpr),
+                sprintf('ZVAL_STRINGL(%s, %s.data(), %s.size());', $zvalPtrExpr, $pathVar, $pathVar),
+            ];
+        }
+
+        if ($base === 'char') {
+            if ($this->isPointerType($cppType)) {
+                return [
+                    sprintf('if (%s != NULL) {', $sourceExpr),
+                    sprintf('    ZVAL_STRING(%s, %s);', $zvalPtrExpr, $sourceExpr),
+                    '} else {',
+                    sprintf('    ZVAL_NULL(%s);', $zvalPtrExpr),
+                    '}',
+                ];
+            }
+
+            return [sprintf('ZVAL_STRINGL(%s, &%s, 1);', $zvalPtrExpr, $sourceExpr)];
+        }
+
+        $utf8Var = $suffix === null ? '_qt_utf8' : sprintf('_qt_utf8_%d', $suffix);
+
+        return [
+            sprintf('QByteArray %s = %s.toUtf8();', $utf8Var, $sourceExpr),
+            sprintf('ZVAL_STRINGL(%s, %s.constData(), %s.size());', $zvalPtrExpr, $utf8Var, $utf8Var),
+        ];
     }
 
     private function shouldMaterializeReferenceLocal(string $phpType, string $cppType): bool

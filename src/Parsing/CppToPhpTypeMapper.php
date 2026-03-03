@@ -82,6 +82,7 @@ class CppToPhpTypeMapper
         'QStringList',
         'QVariantList',
         'QVariantMap',
+        'QModelIndexList',
         'QHash',
         'QMap',
         'QSet',

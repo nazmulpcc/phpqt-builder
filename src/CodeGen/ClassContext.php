@@ -327,11 +327,31 @@ class ClassContext
             foreach ($method->parameters as $param) {
                 $this->collectClassRefs($param->phpType, $typeBridge, $classes);
             }
+
+            foreach ($method->overloads as $overload) {
+                foreach ($typeBridge->containerClassRefs($overload->returnType) as $classRef) {
+                    $classes[$classRef] = true;
+                }
+
+                foreach ($overload->parameters as $param) {
+                    foreach ($typeBridge->containerClassRefs($param->cppType) as $classRef) {
+                        $classes[$classRef] = true;
+                    }
+                }
+            }
         }
 
         foreach ($phpClass->signals as $signal) {
             foreach ($signal->parameters as $param) {
                 $this->collectClassRefs($param->phpType, $typeBridge, $classes);
+            }
+
+            foreach ($signal->overloads as $overload) {
+                foreach ($overload->parameters as $param) {
+                    foreach ($typeBridge->containerClassRefs($param->cppType) as $classRef) {
+                        $classes[$classRef] = true;
+                    }
+                }
             }
         }
 

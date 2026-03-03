@@ -88,6 +88,10 @@ if (!$overload->isPureVirtual) {
 @else
 {!! $indent !!}{!! $wrapFunc !!}(return_value, {!! $writableResultExpr !!}, {!! $returnCe !!}, true);
 @endif
+@elseif($overload->returnStrategy === 'array')
+{!! $indent !!}auto _result = {!! $callExpr !!};
+{!! $indent !!}{!! $ctx->typeBridge->nativeContainerToPhpZvalBlock('return_value', $overload->cppReturnType, '_result', $index) !!}
+{!! $indent !!}return;
 @else
 {!! $indent !!}/* TODO: unsupported overload return strategy '{!! $overload->returnStrategy !!}' */
 @endif

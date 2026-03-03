@@ -137,15 +137,16 @@ final class GenerateCommandBuildModeTest extends TestCase
 
         $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
         self::assertSame('ok', $payload['status']);
-        self::assertContains('setPeer', array_column($payload['skipped_methods'], 'name'));
-        self::assertContains('peer', array_column($payload['skipped_methods'], 'name'));
-        self::assertContains('incompatible_inherited_method', array_column($payload['skipped_methods'], 'reason_code'));
+        self::assertNotContains('setPeer', array_column($payload['skipped_methods'], 'name'));
+        self::assertNotContains('peer', array_column($payload['skipped_methods'], 'name'));
 
         $stub = (string) file_get_contents($outputDir . '/classes/qt_qchildsetter.stub.php');
         self::assertStringContainsString('class QChildSetter extends QParentSetter', $stub);
         self::assertStringContainsString('public function childId(): int {}', $stub);
-        self::assertStringNotContainsString('public function setPeer', $stub);
-        self::assertStringNotContainsString('public function peer', $stub);
+        self::assertStringContainsString('public function setPeerChildSetter(QChildSetter|null $peer = null): void {}', $stub);
+        self::assertStringContainsString('public function peerAsChildSetter(): QChildSetter {}', $stub);
+        self::assertStringNotContainsString('public function setPeer(QChildSetter', $stub);
+        self::assertStringNotContainsString('public function peer(): QChildSetter', $stub);
     }
 
     public function testGenerateBuildModeUsesNullableUnionForOptionalValueObjectParameters(): void
@@ -1385,7 +1386,7 @@ final class GenerateCommandBuildModeTest extends TestCase
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qcstringholder.cpp');
         self::assertStringContainsString('auto _result = intern->native_ptr->bits();', $cpp);
         self::assertStringContainsString('RETURN_STRING(_result);', $cpp);
-        self::assertStringNotContainsString('toUtf8()', $cpp);
+        self::assertStringNotContainsString('QByteArray _utf8 = _result.toUtf8();', $cpp);
     }
 
     public function testGenerateBuildModeTreatsQBitArrayFactoryAsValueReturnAndSkipsBoolOutParameter(): void
@@ -2071,6 +2072,118 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringContainsString('object_init_ex(return_value, qt_ce_QVariant);', $cpp);
         self::assertStringContainsString('_ret_intern->native_ptr = new QVariant(*_result);', $cpp);
         self::assertStringNotContainsString('qt_qvariant_wrap_native', $cpp);
+    }
+
+    public function testGenerateBuildModeSupportsCommonQtContainerParametersAndReturns(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qcontainerbridgeholder.h',
+            'class' => 'QContainerBridgeHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QContainerBridgeHolder,QModelIndex,QPersistentModelIndex,QAction,QWidget,QVariant',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertNotContains('unsupported_parameter_type', array_column($payload['skipped_methods'], 'reason_code'));
+        self::assertNotContains('unsupported_return_type', array_column($payload['skipped_methods'], 'reason_code'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qcontainerbridgeholder.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qcontainerbridgeholder.cpp');
+
+        self::assertStringContainsString('function mimeTypes(): array {}', $stub);
+        self::assertStringContainsString('function setMimeTypes(array $types): void {}', $stub);
+        self::assertStringContainsString('function roles(): array {}', $stub);
+        self::assertStringContainsString('function selectedIndexes(): array {}', $stub);
+        self::assertStringContainsString('function roleNames(): array {}', $stub);
+        self::assertStringContainsString('function itemData(): array {}', $stub);
+        self::assertStringContainsString('function setItemData(array $roles): void {}', $stub);
+        self::assertStringContainsString('function actions(): array {}', $stub);
+
+        self::assertStringContainsString('HashTable *_qt_arg_0_ht = Z_ARRVAL_P(types);', $cpp);
+        self::assertStringContainsString('_qt_it.key().toUtf8();', $cpp);
+        self::assertStringContainsString('qt_variant_to_zval(&_qt_value, _qt_it.value());', $cpp);
+        self::assertStringContainsString('if (!qt_zval_to_variant(_qt_arg_0_entry, &_qt_arg_0_value)) {', $cpp);
+        self::assertStringContainsString('add_next_index_zval(return_value, &_qt_value);', $cpp);
+        self::assertStringContainsString('#include "qt_qaction.h"', $cpp);
+        self::assertStringContainsString('#include "qt_qmodelindex.h"', $cpp);
+    }
+
+    public function testGenerateBuildModeKeepsWritableContainerReferencesUnsupported(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+        mkdir($outputDir, 0777, true);
+
+        $header = $outputDir . '/qwritablecontainerholder.h';
+        file_put_contents($header, <<<'CPP'
+template <typename T> class QList {};
+class QWritableContainerHolder {
+public:
+    void update(QList<int> &roles);
+    void setRoles(const QList<int> &roles);
+};
+CPP);
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $header,
+            'class' => 'QWritableContainerHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QWritableContainerHolder',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertContains('update', array_column($payload['skipped_methods'], 'name'));
+        self::assertContains('unsupported_output_parameter', array_column($payload['skipped_methods'], 'reason_code'));
+
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qwritablecontainerholder.cpp');
+        self::assertStringContainsString('ZEND_METHOD(Qt_Core_QWritableContainerHolder, setRoles)', $cpp);
+        self::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QWritableContainerHolder, update)', $cpp);
+    }
+
+    public function testGenerateBuildModeSkipsNestedQualifiedContainerStructElements(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qunsupportedcontainerelements.h',
+            'class' => 'QUnsupportedContainerElements',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QUnsupportedContainerElements',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('skipped', $payload['status']);
+        self::assertSame('no_supported_methods', $payload['reason_code']);
     }
 
     public function testGenerateBuildModeSkipsComplexReturnsInsteadOfCastingToScalars(): void

@@ -20,6 +20,8 @@
 #include <unordered_set>
 #include <QString>
 #include <QByteArray>
+#include <QVariant>
+#include <QMetaType>
 @if($ctx->hasPreventDestroy || $ctx->hasSignals() || $ctx->hasPostCallOwnershipHandling())
 #include <QObject>
 @endif
@@ -96,6 +98,135 @@ static zend_always_inline bool qt_native_has_qobject_parent(T *ptr)
 }
 
 @endif
+
+/* ------------------------------------------------------------------ */
+/* QVariant <-> zval helpers                                           */
+/* ------------------------------------------------------------------ */
+
+static bool qt_zval_to_variant(zval *value, QVariant *out);
+
+static void qt_variant_to_zval(zval *target, const QVariant &value)
+{
+    if (!value.isValid() || value.isNull()) {
+        ZVAL_NULL(target);
+        return;
+    }
+
+    switch (value.metaType().id()) {
+        case QMetaType::Bool:
+            ZVAL_BOOL(target, value.toBool());
+            return;
+        case QMetaType::Int:
+        case QMetaType::UInt:
+        case QMetaType::LongLong:
+        case QMetaType::ULongLong:
+            ZVAL_LONG(target, (zend_long)value.toLongLong());
+            return;
+        case QMetaType::Float:
+        case QMetaType::Double:
+            ZVAL_DOUBLE(target, value.toDouble());
+            return;
+        case QMetaType::QString: {
+            QByteArray _qt_utf8 = value.toString().toUtf8();
+            ZVAL_STRINGL(target, _qt_utf8.constData(), _qt_utf8.size());
+            return;
+        }
+        case QMetaType::QByteArray: {
+            QByteArray _qt_bytes = value.toByteArray();
+            ZVAL_STRINGL(target, _qt_bytes.constData(), _qt_bytes.size());
+            return;
+        }
+        default:
+            break;
+    }
+
+    if (value.canConvert<QVariantList>()) {
+        QVariantList _qt_list = value.toList();
+        array_init_size(target, (uint32_t)_qt_list.size());
+        for (const QVariant &_qt_item : _qt_list) {
+            zval _qt_value;
+            ZVAL_NULL(&_qt_value);
+            qt_variant_to_zval(&_qt_value, _qt_item);
+            add_next_index_zval(target, &_qt_value);
+        }
+        return;
+    }
+
+    if (value.canConvert<QVariantMap>()) {
+        QVariantMap _qt_map = value.toMap();
+        array_init_size(target, (uint32_t)_qt_map.size());
+        for (auto _qt_it = _qt_map.cbegin(); _qt_it != _qt_map.cend(); ++_qt_it) {
+            QByteArray _qt_key = _qt_it.key().toUtf8();
+            zval _qt_value;
+            ZVAL_NULL(&_qt_value);
+            qt_variant_to_zval(&_qt_value, _qt_it.value());
+            add_assoc_zval_ex(target, _qt_key.constData(), _qt_key.size(), &_qt_value);
+        }
+        return;
+    }
+
+    QByteArray _qt_utf8 = value.toString().toUtf8();
+    ZVAL_STRINGL(target, _qt_utf8.constData(), _qt_utf8.size());
+}
+
+static bool qt_zval_to_variant(zval *value, QVariant *out)
+{
+    switch (Z_TYPE_P(value)) {
+        case IS_NULL:
+            *out = QVariant();
+            return true;
+        case IS_TRUE:
+        case IS_FALSE:
+            *out = QVariant((bool)zend_is_true(value));
+            return true;
+        case IS_LONG:
+            *out = QVariant::fromValue<qlonglong>((qlonglong)zval_get_long(value));
+            return true;
+        case IS_DOUBLE:
+            *out = QVariant(zval_get_double(value));
+            return true;
+        case IS_STRING:
+            *out = QVariant(QString::fromUtf8(Z_STRVAL_P(value), (int)Z_STRLEN_P(value)));
+            return true;
+        case IS_ARRAY: {
+            HashTable *_qt_ht = Z_ARRVAL_P(value);
+            if (zend_array_is_list(_qt_ht)) {
+                QVariantList _qt_list;
+                zval *_qt_entry;
+                ZEND_HASH_FOREACH_VAL(_qt_ht, _qt_entry) {
+                    QVariant _qt_item;
+                    if (!qt_zval_to_variant(_qt_entry, &_qt_item)) {
+                        return false;
+                    }
+                    _qt_list.append(_qt_item);
+                } ZEND_HASH_FOREACH_END();
+                *out = QVariant(_qt_list);
+                return true;
+            }
+
+            QVariantMap _qt_map;
+            zend_string *_qt_key_str;
+            zend_ulong _qt_key_num;
+            zval *_qt_entry;
+            ZEND_HASH_FOREACH_KEY_VAL(_qt_ht, _qt_key_num, _qt_key_str, _qt_entry) {
+                QVariant _qt_item;
+                if (!qt_zval_to_variant(_qt_entry, &_qt_item)) {
+                    return false;
+                }
+
+                QString _qt_key = _qt_key_str != NULL
+                    ? QString::fromUtf8(ZSTR_VAL(_qt_key_str), (int)ZSTR_LEN(_qt_key_str))
+                    : QString::number((qlonglong)_qt_key_num);
+                _qt_map.insert(_qt_key, _qt_item);
+            } ZEND_HASH_FOREACH_END();
+            *out = QVariant(_qt_map);
+            return true;
+        }
+        default:
+            zend_type_error("Unsupported QVariant conversion from PHP value.");
+            return false;
+    }
+}
 
 @if($ctx->hasSignals())
 /* ------------------------------------------------------------------ */

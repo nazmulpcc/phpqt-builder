@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace QtBuilder\Filtering;
 
+use QtBuilder\CodeGen\ContainerBridge;
 use QtBuilder\CodeGen\TypeBridge;
 use QtBuilder\Parsing\CppToPhpTypeMapper;
 
@@ -26,13 +27,16 @@ class MethodExposurePolicy
 
     private CppToPhpTypeMapper $typeMapper;
     private TypeBridge $typeBridge;
+    private ContainerBridge $containerBridge;
 
     public function __construct(
         ?CppToPhpTypeMapper $typeMapper = null,
         ?TypeBridge $typeBridge = null,
+        ?ContainerBridge $containerBridge = null,
     ) {
         $this->typeMapper = $typeMapper ?? new CppToPhpTypeMapper();
         $this->typeBridge = $typeBridge ?? new TypeBridge();
+        $this->containerBridge = $containerBridge ?? new ContainerBridge(typeMapper: $this->typeMapper);
     }
 
     /**
@@ -365,6 +369,10 @@ class MethodExposurePolicy
     private function isUnsupportedOutParameter(string $cppType, string $className, array $flagAliases = [], array $enumNames = []): bool
     {
         $trimmed = trim($cppType);
+        if ($this->containerBridge->isSupported($trimmed) && str_contains($trimmed, '&') && !str_starts_with($trimmed, 'const ')) {
+            return true;
+        }
+
         if (!str_contains($trimmed, '*') || str_starts_with($trimmed, 'const ')) {
             return false;
         }
@@ -443,7 +451,21 @@ class MethodExposurePolicy
         }
 
         if ($phpType === 'array') {
-            return $this->isSupportedArrayType($trimmed);
+            if ($this->isSupportedArrayType($trimmed)) {
+                return true;
+            }
+
+            if (!$this->containerBridge->isSupported($trimmed)) {
+                return false;
+            }
+
+            foreach ($this->containerBridge->classRefs($trimmed) as $classRef) {
+                if ($classRef !== $className && !in_array($classRef, $allowedClasses, true)) {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         if ($phpType === 'mixed') {
@@ -471,7 +493,9 @@ class MethodExposurePolicy
 
     private function isSupportedTemplateType(string $cppType): bool
     {
-        return str_starts_with(trim($cppType), 'QFlags<');
+        $trimmed = trim($cppType);
+
+        return str_starts_with($trimmed, 'QFlags<') || $this->containerBridge->isSupported($trimmed);
     }
 
     private function isEnumOrFlagType(string $cppType, string $className, array $flagAliases = [], array $enumNames = []): bool
