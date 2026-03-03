@@ -9,6 +9,7 @@ use QtBuilder\Qt\QtInstallation;
 use QtBuilder\Scanning\HeaderCandidate;
 use QtBuilder\Scanning\ModuleHeaderScanner;
 use Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\Console\Helper\ProgressBar;
 
 class BuildDiscoveryService
 {
@@ -259,6 +260,13 @@ class BuildDiscoveryService
                     ));
                 }
 
+                $progressBar = $this->createDiscoveryProgressBar(
+                    $output,
+                    $passes,
+                    count($viableCandidates),
+                );
+                $progressBar?->start();
+
                 $results = $this->workerPool->run(
                     $this->buildProbeTasks(
                         array_values($viableCandidates),
@@ -269,7 +277,18 @@ class BuildDiscoveryService
                         $extensionName,
                     ),
                     $jobs,
+                    static function (int $completed, int $total, GenerateResult $result) use ($progressBar): void {
+                        if ($progressBar === null) {
+                            return;
+                        }
+
+                        $progressBar->setProgress($completed);
+                    },
                 );
+                if ($progressBar !== null) {
+                    $progressBar->finish();
+                    $output->writeln('');
+                }
 
                 $nextViableCandidates = [];
                 foreach ($results as $result) {
@@ -319,6 +338,27 @@ class BuildDiscoveryService
             'passes' => $passes,
             'errors' => array_values($errorsByClass),
         ];
+    }
+
+    private function createDiscoveryProgressBar(OutputInterface $output, int $pass, int $total): ?ProgressBar
+    {
+        if ($total <= 0) {
+            return null;
+        }
+
+        ProgressBar::setFormatDefinition(
+            'qt_discovery',
+            'Discovery pass %message% %current%/%max% [%bar%] %percent:3s%% %elapsed:6s%',
+        );
+
+        $progressBar = new ProgressBar($output, $total);
+        $progressBar->setFormat('qt_discovery');
+        $progressBar->setMessage((string) $pass);
+        $progressBar->setRedrawFrequency(max(1, (int) ceil($total / 100)));
+        $progressBar->minSecondsBetweenRedraws(0.1);
+        $progressBar->maxSecondsBetweenRedraws(0.25);
+
+        return $progressBar;
     }
 
     /**
