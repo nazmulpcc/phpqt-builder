@@ -581,6 +581,150 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringNotContainsString('ZEND_ME(Qt_Core_QAbstractCtorChildThing, __construct,', $cpp);
     }
 
+    public function testGenerateBuildModeKeepsAbstractConstructorsWhenValueObjectPureVirtualsAreSupported(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/abstract-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qabstractmodelthing.h',
+            'class' => 'QAbstractModelThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QAbstractModelThing,QModelIndex,QVariant',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertNotContains('unsupported_abstract_subclass_constructor', array_column($payload['skipped_methods'], 'reason_code'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qabstractmodelthing.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qabstractmodelthing.cpp');
+
+        self::assertStringContainsString('abstract class QAbstractModelThing', $stub);
+        self::assertStringContainsString('protected function __construct() {}', $stub);
+        self::assertStringContainsString('abstract public function index(', $stub);
+        self::assertStringContainsString('): QModelIndex;', $stub);
+        self::assertStringContainsString('abstract public function parent(', $stub);
+        self::assertStringContainsString('abstract public function rowCount(', $stub);
+        self::assertStringContainsString('abstract public function columnCount(', $stub);
+        self::assertStringContainsString('abstract public function data(', $stub);
+        self::assertStringContainsString('): QVariant;', $stub);
+        self::assertStringContainsString('class qt_php_QAbstractModelThing : public QAbstractModelThing', $cpp);
+        self::assertStringContainsString('QModelIndex index(', $cpp);
+        self::assertStringContainsString('QModelIndex parent(', $cpp);
+        self::assertStringContainsString('QVariant data(', $cpp);
+        self::assertStringContainsString('ZEND_ME(Qt_Core_QAbstractModelThing, __construct,', $cpp);
+        self::assertStringContainsString('ZEND_RAW_FENTRY("index", NULL,', $cpp);
+        self::assertStringContainsString('ZEND_RAW_FENTRY("data", NULL,', $cpp);
+    }
+
+    public function testGenerateBuildModeDoesNotMakeInheritedConcreteMethodsAbstractInPhp(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/abstract-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qabstractoverridechildthing.h',
+            'class' => 'QAbstractOverrideThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QBaseConcreteThing,QAbstractOverrideThing',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qabstractoverridething.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qabstractoverridething.cpp');
+
+        self::assertStringContainsString('abstract class QAbstractOverrideThing extends QBaseConcreteThing', $stub);
+        self::assertStringContainsString('protected function act(): void {}', $stub);
+        self::assertStringNotContainsString('abstract protected function act(): void;', $stub);
+        self::assertStringContainsString('ZEND_ME(Qt_Core_QAbstractOverrideThing, act,', $cpp);
+        self::assertStringNotContainsString('ZEND_RAW_FENTRY("act", NULL,', $cpp);
+    }
+
+    public function testGenerateBuildModeRenamesInheritedConflictingMethodsDeterministically(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/abstract-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qconflictingparentthing.h',
+            'class' => 'QConflictingParentThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QObject,QModelIndex,QConflictingParentThing',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertNotContains('unsupported_abstract_subclass_constructor', array_column($payload['skipped_methods'], 'reason_code'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qconflictingparentthing.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qconflictingparentthing.cpp');
+
+        self::assertStringContainsString('protected function __construct() {}', $stub);
+        self::assertStringContainsString('abstract public function parentModelIndex(', $stub);
+        self::assertStringNotContainsString('abstract public function parent(', $stub);
+        self::assertStringContainsString('ZEND_RAW_FENTRY("parentModelIndex", NULL,', $cpp);
+        self::assertStringContainsString('QModelIndex parent(const QModelIndex & _qt_p0) const override', $cpp);
+        self::assertStringContainsString('qt_method_is_overridden(this->php_object, qt_ce_QConflictingParentThing, "parentModelIndex")', $cpp);
+        self::assertStringContainsString('qt_call_php_method(this->php_object, "parentModelIndex"', $cpp);
+    }
+
+    public function testGenerateBuildModeSupportsInheritedEnumTypesInOverrides(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qinheritedenumthing.h',
+            'class' => 'QInheritedEnumChildThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QInheritedEnumBaseThing,QInheritedEnumChildThing',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('ok', $payload['status']);
+        self::assertNotContains('unsupported_parameter_type', array_column($payload['skipped_methods'], 'reason_code'));
+        self::assertNotContains('unsupported_return_type', array_column($payload['skipped_methods'], 'reason_code'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qinheritedenumchildthing.stub.php');
+        self::assertStringContainsString('function currentMode(): int {}', $stub);
+        self::assertStringContainsString('function setMode(int $mode): void {}', $stub);
+    }
+
     public function testGenerateBuildModeAllowsConcreteChildrenOfAbstractParents(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/abstract-qt';

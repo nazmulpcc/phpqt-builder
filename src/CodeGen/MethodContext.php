@@ -103,7 +103,7 @@ class MethodContext
         $this->typeBridge = $typeBridge;
         $this->className = $classCtx->phpClassName;
         $this->name = $method->name;
-        $this->cppName = $method->name;
+        $this->cppName = $method->cppName ?? $method->name;
         $this->access = $method->access;
         $this->isConstructor = $method->name === '__construct';
         $this->isStatic = $method->isStatic;
@@ -189,14 +189,7 @@ class MethodContext
         $this->hasVirtualOverloads = $hasVirtualOverloads;
         $this->hasPureVirtualOverloads = $hasPureVirtualOverloads;
         $this->hasCallableProtectedOverloads = $hasCallableProtectedOverloads;
-        $allPureVirtualOverloads = $overloads !== [];
-        foreach ($overloads as $overload) {
-            if (!$overload->isPureVirtual) {
-                $allPureVirtualOverloads = false;
-                break;
-            }
-        }
-        $this->isAbstractMethod = !$this->isConstructor && $allPureVirtualOverloads;
+        $this->isAbstractMethod = $method->isAbstractMethod;
     }
 
     public function accessShimHelperName(int $overloadIndex = 0): string

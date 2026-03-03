@@ -239,6 +239,7 @@ final class ExtensionScaffolderTest extends TestCase
                     isStatic: false,
                     isSignal: false,
                     isSlot: false,
+                    isAbstractMethod: false,
                     returnType: 'string',
                     parameters: [],
                     overloads: [
@@ -284,6 +285,7 @@ final class ExtensionScaffolderTest extends TestCase
                     isStatic: true,
                     isSignal: false,
                     isSlot: false,
+                    isAbstractMethod: false,
                     returnType: 'QObject',
                     parameters: [],
                     overloads: [

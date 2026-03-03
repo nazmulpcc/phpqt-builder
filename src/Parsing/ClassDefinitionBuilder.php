@@ -166,9 +166,11 @@ class ClassDefinitionBuilder
             isStatic: $isStatic,
             isSignal: $this->allFlagged($variants, 'is_signal'),
             isSlot: $this->allFlagged($variants, 'is_slot'),
+            isAbstractMethod: $name !== '__construct' && $this->allFlagged($variants, 'is_pure_virtual'),
             returnType: $returnType,
             parameters: $parameters,
             overloads: $overloads,
+            cppName: $name,
         );
     }
 

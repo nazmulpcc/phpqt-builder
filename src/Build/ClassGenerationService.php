@@ -49,6 +49,17 @@ class ClassGenerationService
 
         /** @var array<string, mixed> $classData */
         $classData = $facts['class_data'];
+        $classData = $this->mergeInheritedTypeMetadata(
+            $classData,
+            function (string $baseClass) use ($headerPath, $includePaths, $classHeaders): ?array {
+                $baseHeaderPath = $classHeaders[$baseClass] ?? $headerPath;
+                $facts = $this->prepareDiscoveryFacts($baseHeaderPath, $baseClass, $includePaths);
+
+                return (($facts['status'] ?? 'error') === 'ok' && is_array($facts['class_data'] ?? null))
+                    ? $facts['class_data']
+                    : null;
+            },
+        );
         $sourceClassData = $classData;
 
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
@@ -220,6 +231,12 @@ class ClassGenerationService
                 'Prepared class data is missing the class name.',
             );
         }
+        $classData = $this->mergeInheritedTypeMetadata(
+            $classData,
+            static fn(string $baseClass): ?array => is_array($preparedClassDataByClass[$baseClass] ?? null)
+                ? $preparedClassDataByClass[$baseClass]
+                : null,
+        );
         $sourceClassData = $classData;
 
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
@@ -340,11 +357,25 @@ class ClassGenerationService
 
         $methods = [];
         $skippedMethods = [];
+        $usedMethodNames = [];
+
+        foreach ($parentMethods as $parentMethod) {
+            $usedMethodNames[$parentMethod->name] = true;
+        }
 
         foreach ($phpClass->methods as $method) {
             $parentMethod = $parentMethods[$method->name] ?? null;
             if ($parentMethod === null || $this->isCompatibleInheritedMethod($method, $parentMethod)) {
-                $methods[] = $method;
+                $normalizedMethod = $this->normalizeAbstractMethodAgainstParent($method, $parentMethod);
+                $methods[] = $normalizedMethod;
+                $usedMethodNames[$normalizedMethod->name] = true;
+                continue;
+            }
+
+            $renamedMethod = $this->renameConflictingInheritedMethod($method, $usedMethodNames);
+            if ($renamedMethod !== null) {
+                $methods[] = $renamedMethod;
+                $usedMethodNames[$renamedMethod->name] = true;
                 continue;
             }
 
@@ -814,9 +845,20 @@ class ClassGenerationService
         $returnType = is_string($method['return_type'] ?? null) ? $method['return_type'] : 'void';
         $mappedReturnType = $this->typeMapper->map($returnType);
         $returnStrategy = $this->typeBridge->returnStrategyForCpp($mappedReturnType, $returnType);
-        $isPureVirtual = ($method['is_pure_virtual'] ?? false) === true;
-
-        if (!$this->isSupportedVirtualReturnStrategy($returnStrategy, $isPureVirtual)) {
+        if ($returnStrategy === 'value_object') {
+            $unsupportedReturnReason = $this->unsupportedVirtualValueObjectReason(
+                $mappedReturnType,
+                $returnType,
+                $methodName,
+                $includePaths,
+                $classHeaders,
+                $preparedClassDataByClass,
+                $parameterClassFactsCache,
+            );
+            if ($unsupportedReturnReason !== null) {
+                return $unsupportedReturnReason;
+            }
+        } elseif (!$this->isSupportedVirtualReturnStrategy($returnStrategy)) {
             return [
                 'code' => 'unsupported_virtual_override_signature',
                 'message' => sprintf('Virtual method %s() return type %s is not supported for PHP overrides.', $methodName, $returnType),
@@ -853,32 +895,17 @@ class ClassGenerationService
                 continue;
             }
 
-            $classFacts = $this->signalParameterClassFacts(
+            $unsupportedParameterReason = $this->unsupportedVirtualValueObjectReason(
                 $phpType,
+                $cppType,
+                $methodName,
                 $includePaths,
                 $classHeaders,
                 $preparedClassDataByClass,
                 $parameterClassFactsCache,
             );
-            if ($classFacts === null) {
-                return [
-                    'code' => 'unsupported_virtual_override_signature',
-                    'message' => sprintf('Virtual method %s() uses parameter type %s which cannot be prepared safely.', $methodName, $cppType),
-                ];
-            }
-
-            if (!$this->isSignalParameterCopyable($classFacts, $phpType)) {
-                return [
-                    'code' => 'unsupported_virtual_override_signature',
-                    'message' => sprintf('Virtual method %s() uses parameter type %s which is not copy-constructible.', $methodName, $cppType),
-                ];
-            }
-
-            if (!(bool) ($classFacts['has_public_destructor'] ?? false)) {
-                return [
-                    'code' => 'unsupported_virtual_override_signature',
-                    'message' => sprintf('Virtual method %s() uses parameter type %s which does not have a public destructor.', $methodName, $cppType),
-                ];
+            if ($unsupportedParameterReason !== null) {
+                return $unsupportedParameterReason;
             }
         }
 
@@ -965,13 +992,54 @@ class ClassGenerationService
         return true;
     }
 
-    private function isSupportedVirtualReturnStrategy(string $strategy, bool $isPureVirtual): bool
-    {
-        if ($isPureVirtual) {
-            return in_array($strategy, ['void', 'scalar', 'string', 'qobject_pointer'], true);
+    private function unsupportedVirtualValueObjectReason(
+        string $phpType,
+        string $cppType,
+        string $methodName,
+        array $includePaths,
+        array $classHeaders,
+        array $preparedClassDataByClass,
+        array &$parameterClassFactsCache,
+    ): ?array {
+        $classFacts = $this->signalParameterClassFacts(
+            $phpType,
+            $includePaths,
+            $classHeaders,
+            $preparedClassDataByClass,
+            $parameterClassFactsCache,
+        );
+
+        if ($classFacts === null) {
+            if ($this->typeBridge->isValueType($phpType)) {
+                return null;
+            }
+
+            return [
+                'code' => 'unsupported_virtual_override_signature',
+                'message' => sprintf('Virtual method %s() uses %s type %s which cannot be prepared safely.', $methodName, str_contains($cppType, '&') || str_contains($cppType, '*') ? 'parameter' : 'return', $cppType),
+            ];
         }
 
-        return in_array($strategy, ['void', 'scalar', 'string', 'value_object', 'qobject_pointer'], true);
+        if (!$this->isSignalParameterCopyable($classFacts, $phpType)) {
+            return [
+                'code' => 'unsupported_virtual_override_signature',
+                'message' => sprintf('Virtual method %s() uses %s type %s which is not copy-constructible.', $methodName, str_contains($cppType, '&') || str_contains($cppType, '*') ? 'parameter' : 'return', $cppType),
+            ];
+        }
+
+        if (!(bool) ($classFacts['has_public_destructor'] ?? false)) {
+            return [
+                'code' => 'unsupported_virtual_override_signature',
+                'message' => sprintf('Virtual method %s() uses %s type %s which does not have a public destructor.', $methodName, str_contains($cppType, '&') || str_contains($cppType, '*') ? 'parameter' : 'return', $cppType),
+            ];
+        }
+
+        return null;
+    }
+
+    private function isSupportedVirtualReturnStrategy(string $strategy): bool
+    {
+        return in_array($strategy, ['void', 'scalar', 'string', 'qobject_pointer'], true);
     }
 
     private function isWritableReferenceType(string $cppType): bool
@@ -1036,6 +1104,17 @@ class ClassGenerationService
             $className,
             (bool) ($classData['is_struct'] ?? false),
         );
+        $classData = $this->mergeInheritedTypeMetadata(
+            $classData,
+            function (string $baseClass) use ($headerPath, $includePaths, $classHeaders): ?array {
+                $baseHeaderPath = $classHeaders[$baseClass] ?? $headerPath;
+                $facts = $this->prepareDiscoveryFacts($baseHeaderPath, $baseClass, $includePaths);
+
+                return (($facts['status'] ?? 'error') === 'ok' && is_array($facts['class_data'] ?? null))
+                    ? $facts['class_data']
+                    : null;
+            },
+        );
 
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
         if ($parentClass !== null && !in_array($parentClass, $allowedClasses, true)) {
@@ -1044,6 +1123,77 @@ class ClassGenerationService
 
         $filtered = $this->methodPolicy->filter($classData, $allowedClasses);
         $classData['selected_methods'] = $filtered['selected_methods'];
+
+        return $classData;
+    }
+
+    /**
+     * @param array<string, mixed> $classData
+     * @param callable(string): ?array<string, mixed> $baseClassLoader
+     * @param array<string, bool> $visited
+     * @return array<string, mixed>
+     */
+    private function mergeInheritedTypeMetadata(
+        array $classData,
+        callable $baseClassLoader,
+        array &$visited = [],
+    ): array {
+        $className = is_string($classData['name'] ?? null) ? $classData['name'] : '';
+        if ($className !== '') {
+            if (isset($visited[$className])) {
+                return $classData;
+            }
+
+            $visited[$className] = true;
+        }
+
+        /** @var list<string> $enumNames */
+        $enumNames = is_array($classData['enum_names'] ?? null)
+            ? array_values(array_filter(array_map(
+                static fn(mixed $value): string => is_string($value) ? trim($value) : '',
+                $classData['enum_names'],
+            ), static fn(string $value): bool => $value !== ''))
+            : [];
+        /** @var array<string, string> $flagAliases */
+        $flagAliases = is_array($classData['flag_aliases'] ?? null)
+            ? array_filter(
+                array_map(static fn(mixed $value): string => is_string($value) ? trim($value) : '', $classData['flag_aliases']),
+                static fn(string $value): bool => $value !== '',
+            )
+            : [];
+
+        foreach ((array) ($classData['bases'] ?? []) as $baseClass) {
+            if (!is_string($baseClass) || $baseClass === '' || $baseClass === $className) {
+                continue;
+            }
+
+            $baseClassData = $baseClassLoader($baseClass);
+            if (!is_array($baseClassData)) {
+                continue;
+            }
+
+            $baseVisited = $visited;
+            $baseClassData = $this->mergeInheritedTypeMetadata($baseClassData, $baseClassLoader, $baseVisited);
+
+            foreach ((array) ($baseClassData['enum_names'] ?? []) as $enumName) {
+                if (!is_string($enumName) || trim($enumName) === '') {
+                    continue;
+                }
+
+                $enumNames[] = trim($enumName);
+            }
+
+            foreach ((array) ($baseClassData['flag_aliases'] ?? []) as $flagName => $enumType) {
+                if (!is_string($flagName) || $flagName === '' || !is_string($enumType) || trim($enumType) === '') {
+                    continue;
+                }
+
+                $flagAliases[$flagName] ??= trim($enumType);
+            }
+        }
+
+        $classData['enum_names'] = array_values(array_unique($enumNames));
+        $classData['flag_aliases'] = $flagAliases;
 
         return $classData;
     }
@@ -1076,11 +1226,25 @@ class ClassGenerationService
 
         $methods = [];
         $skippedMethods = [];
+        $usedMethodNames = [];
+
+        foreach ($parentMethods as $parentMethod) {
+            $usedMethodNames[$parentMethod->name] = true;
+        }
 
         foreach ($phpClass->methods as $method) {
             $parentMethod = $parentMethods[$method->name] ?? null;
             if ($parentMethod === null || $this->isCompatibleInheritedMethod($method, $parentMethod)) {
-                $methods[] = $method;
+                $normalizedMethod = $this->normalizeAbstractMethodAgainstParent($method, $parentMethod);
+                $methods[] = $normalizedMethod;
+                $usedMethodNames[$normalizedMethod->name] = true;
+                continue;
+            }
+
+            $renamedMethod = $this->renameConflictingInheritedMethod($method, $usedMethodNames);
+            if ($renamedMethod !== null) {
+                $methods[] = $renamedMethod;
+                $usedMethodNames[$renamedMethod->name] = true;
                 continue;
             }
 
@@ -1212,6 +1376,130 @@ class ClassGenerationService
         return true;
     }
 
+    private function normalizeAbstractMethodAgainstParent(PhpMethod $method, ?PhpMethod $parentMethod): PhpMethod
+    {
+        if (!$method->isAbstractMethod || $parentMethod === null || $parentMethod->isAbstractMethod) {
+            return $method;
+        }
+
+        return new PhpMethod(
+            name: $method->name,
+            access: $method->access,
+            isStatic: $method->isStatic,
+            isSignal: $method->isSignal,
+            isSlot: $method->isSlot,
+            isAbstractMethod: false,
+            returnType: $method->returnType,
+            parameters: $method->parameters,
+            overloads: $method->overloads,
+            cppName: $method->cppName,
+        );
+    }
+
+    /**
+     * @param array<string, bool> $usedMethodNames
+     */
+    private function renameConflictingInheritedMethod(PhpMethod $method, array $usedMethodNames): ?PhpMethod
+    {
+        if ($method->name === '__construct') {
+            return null;
+        }
+
+        $baseName = $method->name . $this->methodSignatureSuffix($method);
+        if ($baseName === $method->name) {
+            $baseName .= 'As' . $this->typeSuffix($method->returnType);
+        }
+
+        $candidate = $baseName;
+        if (isset($usedMethodNames[$candidate])) {
+            $candidate .= 'As' . $this->typeSuffix($method->returnType);
+        }
+
+        $counter = 2;
+        while (isset($usedMethodNames[$candidate])) {
+            $candidate = $baseName . $counter;
+            $counter++;
+        }
+
+        if ($candidate === $method->name) {
+            return null;
+        }
+
+        return new PhpMethod(
+            name: $candidate,
+            access: $method->access,
+            isStatic: $method->isStatic,
+            isSignal: $method->isSignal,
+            isSlot: $method->isSlot,
+            isAbstractMethod: $method->isAbstractMethod,
+            returnType: $method->returnType,
+            parameters: $method->parameters,
+            overloads: $method->overloads,
+            cppName: $method->cppName,
+        );
+    }
+
+    private function methodSignatureSuffix(PhpMethod $method): string
+    {
+        $parts = [];
+        foreach ($method->parameters as $parameter) {
+            if ($parameter->phpType === '' || $parameter->phpType === 'null') {
+                continue;
+            }
+
+            $parts[] = $this->typeSuffix($parameter->phpType);
+        }
+
+        return implode('', array_values(array_filter($parts, static fn(string $part): bool => $part !== '')));
+    }
+
+    private function typeSuffix(string $phpType): string
+    {
+        $parts = array_values(array_filter(
+            explode('|', $phpType),
+            static fn(string $part): bool => $part !== '' && $part !== 'null',
+        ));
+
+        if ($parts === []) {
+            return 'Value';
+        }
+
+        $suffixes = array_map(
+            fn(string $part): string => $this->singleTypeSuffix($part),
+            $parts,
+        );
+
+        return implode('Or', array_values(array_filter($suffixes, static fn(string $part): bool => $part !== '')));
+    }
+
+    private function singleTypeSuffix(string $phpType): string
+    {
+        return match ($phpType) {
+            'int' => 'Int',
+            'float' => 'Float',
+            'bool' => 'Bool',
+            'string' => 'String',
+            'array' => 'Array',
+            'mixed' => 'Mixed',
+            default => $this->normalizedObjectTypeSuffix($phpType),
+        };
+    }
+
+    private function normalizedObjectTypeSuffix(string $phpType): string
+    {
+        $type = ltrim($phpType, '\\');
+        if (str_contains($type, '\\')) {
+            $parts = explode('\\', $type);
+            $type = (string) end($parts);
+        }
+
+        if (preg_match('/^Q[A-Z]/', $type) === 1) {
+            return substr($type, 1);
+        }
+
+        return ucfirst($type);
+    }
+
     /**
      * @param callable(): list<string> $inheritedPureVirtualCollector
      * @return array{class: PhpClass, skipped_methods: list<array<string, string>>}
@@ -1280,7 +1568,7 @@ class ClassGenerationService
                 continue;
             }
 
-            $generatedMethodsByName[$method->name] = $method;
+            $generatedMethodsByName[$method->cppName ?? $method->name] = $method;
         }
 
         $requiresPureVirtualCoverage = false;
