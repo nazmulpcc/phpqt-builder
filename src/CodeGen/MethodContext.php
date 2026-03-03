@@ -322,7 +322,50 @@ class MethodContext
             }
         }
 
+        $overload ??= $this->overloads[0] ?? null;
+        if ($overload !== null) {
+            $ownershipTransfer = $this->ownershipTransferSpec($classCtx, $overload);
+            if ($ownershipTransfer !== null) {
+                [$paramIndex, $phpClassName] = $ownershipTransfer;
+                $ownedParam = $this->params[$paramIndex] ?? null;
+                if ($ownedParam !== null) {
+                    $objectStruct = $classCtx->typeBridge->objectStructName($phpClassName);
+                    $fromObj = $classCtx->typeBridge->fromObjFuncName($phpClassName);
+
+                    return [
+                        sprintf('%s *_qt_owned_arg_%d = %s(Z_OBJ_P(%s));', $objectStruct, $paramIndex, $fromObj, $ownedParam->cVarName),
+                        sprintf('_qt_owned_arg_%d->prevent_destroy = true;', $paramIndex),
+                    ];
+                }
+            }
+        }
+
         return [];
+    }
+
+    /**
+     * @return array{int, string}|null
+     */
+    private function ownershipTransferSpec(ClassContext $classCtx, OverloadContext $overload): ?array
+    {
+        $firstParam = $overload->params[0] ?? null;
+        if ($firstParam === null) {
+            return null;
+        }
+
+        if ($this->name === 'setLayout' && $classCtx->phpClassName === 'QWidget' && $firstParam->phpType === 'QLayout') {
+            return [0, 'QLayout'];
+        }
+
+        if ($this->name === 'addWidget' && $firstParam->phpType === 'QWidget') {
+            return [0, 'QWidget'];
+        }
+
+        if ($this->name === 'addLayout' && $firstParam->phpType === 'QLayout') {
+            return [0, 'QLayout'];
+        }
+
+        return null;
     }
 
     private function overloadParamMatchCondition(int $position, OverloadParamContext $param): string

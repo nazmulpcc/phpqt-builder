@@ -229,6 +229,64 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringContainsString('(node != NULL ? qt_qnode_from_obj(Z_OBJ_P(node))->native_ptr : NULL)', $cpp);
     }
 
+    public function testGenerateBuildModeTransfersOwnershipForLayoutAttachmentMethods(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/layout-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-layout-ownership-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtWidgets/qlayoutownership.h',
+            'class' => 'QBoxLayout',
+            '--qt-path' => '/definitely/not/a/qt/root',
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+                $fixtureRoot . '/include/QtWidgets',
+            ],
+            '--module' => 'QtWidgets',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QObject,QWidget,QLayout,QBoxLayout,QGridLayout',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $boxLayoutCpp = (string) file_get_contents($outputDir . '/classes/qt_qboxlayout.cpp');
+        self::assertStringContainsString('intern->native_ptr->addWidget(qt_qwidget_from_obj(Z_OBJ_P(w))->native_ptr, (int)stretch);', $boxLayoutCpp);
+        self::assertStringContainsString('qt_qwidget_object *_qt_owned_arg_0 = qt_qwidget_from_obj(Z_OBJ_P(w));', $boxLayoutCpp);
+        self::assertStringContainsString('_qt_owned_arg_0->prevent_destroy = true;', $boxLayoutCpp);
+        self::assertStringContainsString('intern->native_ptr->addLayout(qt_qlayout_from_obj(Z_OBJ_P(layout))->native_ptr, (int)stretch);', $boxLayoutCpp);
+        self::assertStringContainsString('qt_qlayout_object *_qt_owned_arg_0 = qt_qlayout_from_obj(Z_OBJ_P(layout));', $boxLayoutCpp);
+
+        $tester = new CommandTester(new GenerateCommand(FakeSystemInformation::passing()));
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtWidgets/qlayoutownership.h',
+            'class' => 'QWidget',
+            '--qt-path' => '/definitely/not/a/qt/root',
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+                $fixtureRoot . '/include/QtWidgets',
+            ],
+            '--module' => 'QtWidgets',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QObject,QWidget,QLayout,QBoxLayout,QGridLayout',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $widgetCpp = (string) file_get_contents($outputDir . '/classes/qt_qwidget.cpp');
+        self::assertStringContainsString('intern->native_ptr->setLayout(qt_qlayout_from_obj(Z_OBJ_P(layout))->native_ptr);', $widgetCpp);
+        self::assertStringContainsString('qt_qlayout_object *_qt_owned_arg_0 = qt_qlayout_from_obj(Z_OBJ_P(layout));', $widgetCpp);
+        self::assertStringContainsString('_qt_owned_arg_0->prevent_destroy = true;', $widgetCpp);
+    }
+
     public function testGenerateBuildModeCastsConstObjectPointerReturnsForWrapping(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/const-pointer';
