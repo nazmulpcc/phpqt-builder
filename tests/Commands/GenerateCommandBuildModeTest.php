@@ -319,6 +319,85 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringContainsString('_qt_owned_arg_0->prevent_destroy = true;', $cpp);
     }
 
+    public function testGenerateBuildModeAddsQObjectPropertyApisAndHandlers(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/ownership-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-qobject-properties-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qobject.h',
+            'class' => 'QObject',
+            '--qt-path' => '/definitely/not/a/qt/root',
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+            ],
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QObject',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qobject.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qobject.cpp');
+
+        self::assertStringContainsString('public function property(string $name): mixed {}', $stub);
+        self::assertStringContainsString('public function setProperty(string $name, mixed $value): bool {}', $stub);
+        self::assertStringContainsString('public function hasProperty(string $name): bool {}', $stub);
+        self::assertStringContainsString('public function propertyNames(): array {}', $stub);
+        self::assertStringContainsString('public function propertyInfo(string $name): array {}', $stub);
+        self::assertStringContainsString('public function connectPropertyNotify(string $name, callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
+        self::assertStringContainsString('static zval *qt_qobject_read_property(', $cpp);
+        self::assertStringContainsString('static zval *qt_qobject_write_property(', $cpp);
+        self::assertStringContainsString('static zend_array *qt_qobject_get_properties_for(', $cpp);
+        self::assertStringContainsString('zend_declare_typed_property(', $cpp);
+        self::assertStringContainsString('ZEND_ACC_PUBLIC | ZEND_ACC_VIRTUAL', $cpp);
+        self::assertStringContainsString('qt_qobject_handlers.read_property = qt_qobject_read_property;', $cpp);
+        self::assertStringContainsString('qt_qobject_handlers.get_properties_for = qt_qobject_get_properties_for;', $cpp);
+        self::assertStringContainsString('object_init_ex(target, qt_ce_QVariant);', $cpp);
+    }
+
+    public function testGenerateBuildModeAddsQObjectPropertyHandlersToDerivedClasses(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/ownership-qt';
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-derived-qobject-properties-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qobjectownership.h',
+            'class' => 'QObjectOwner',
+            '--qt-path' => '/definitely/not/a/qt/root',
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+            ],
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QObject,QObjectOwner',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qobjectowner.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qobjectowner.cpp');
+
+        self::assertStringNotContainsString('function property(string $name): mixed {}', $stub);
+        self::assertStringContainsString('static zval *qt_qobjectowner_read_property(', $cpp);
+        self::assertStringContainsString('qt_qobjectowner_handlers.read_property = qt_qobjectowner_read_property;', $cpp);
+        self::assertStringContainsString('zend_declare_typed_property(', $cpp);
+        self::assertStringContainsString('const QMetaObject &_qt_meta = QObjectOwner::staticMetaObject;', $cpp);
+    }
+
     public function testGenerateBuildModeUsesAutomaticStandardItemOwnershipProbe(): void
     {
         $fixtureRoot = dirname(__DIR__) . '/Fixtures/ownership-qt';

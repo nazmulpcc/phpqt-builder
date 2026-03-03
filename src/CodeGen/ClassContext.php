@@ -77,6 +77,12 @@ class ClassContext
     /** Whether the generated object wrapper needs persistent argv backing storage */
     public readonly bool $needsArgvStorage;
 
+    /** Whether this class inherits QObject and participates in runtime property support */
+    public readonly bool $isQObjectDerived;
+
+    /** Whether this class is QObject itself */
+    public readonly bool $isQObjectClass;
+
     /** Whether this class needs an access shim for protected native calls */
     public readonly bool $requiresAccessShim;
 
@@ -156,6 +162,18 @@ class ClassContext
     public readonly string $signalConnectArginfoName;
     /** Arginfo symbol for generated signal disconnect() */
     public readonly string $signalDisconnectArginfoName;
+    /** Arginfo symbol for generated QObject::property() */
+    public readonly string $propertyArginfoName;
+    /** Arginfo symbol for generated QObject::setProperty() */
+    public readonly string $setPropertyArginfoName;
+    /** Arginfo symbol for generated QObject::hasProperty() */
+    public readonly string $hasPropertyArginfoName;
+    /** Arginfo symbol for generated QObject::propertyNames() */
+    public readonly string $propertyNamesArginfoName;
+    /** Arginfo symbol for generated QObject::propertyInfo() */
+    public readonly string $propertyInfoArginfoName;
+    /** Arginfo symbol for generated QObject::connectPropertyNotify() */
+    public readonly string $connectPropertyNotifyArginfoName;
 
     public function __construct(
         PhpClass $phpClass,
@@ -168,6 +186,8 @@ class ClassContext
         $this->classNamespaces = $classNamespaces;
         $this->phpClassName = $phpClass->name;
         $this->nativeCppType = $phpClass->name;
+        $this->isQObjectDerived = $phpClass->isQObjectDerived;
+        $this->isQObjectClass = $phpClass->name === 'QObject';
 
         // Naming
         $this->zendClassSymbol = $typeBridge->zendClassSymbol($namespace, $phpClass->name);
@@ -246,6 +266,36 @@ class ClassContext
             $this->phpNamespace,
             $this->phpClassName,
             'disconnect',
+        );
+        $this->propertyArginfoName = $typeBridge->arginfoName(
+            $this->phpNamespace,
+            $this->phpClassName,
+            'property',
+        );
+        $this->setPropertyArginfoName = $typeBridge->arginfoName(
+            $this->phpNamespace,
+            $this->phpClassName,
+            'setProperty',
+        );
+        $this->hasPropertyArginfoName = $typeBridge->arginfoName(
+            $this->phpNamespace,
+            $this->phpClassName,
+            'hasProperty',
+        );
+        $this->propertyNamesArginfoName = $typeBridge->arginfoName(
+            $this->phpNamespace,
+            $this->phpClassName,
+            'propertyNames',
+        );
+        $this->propertyInfoArginfoName = $typeBridge->arginfoName(
+            $this->phpNamespace,
+            $this->phpClassName,
+            'propertyInfo',
+        );
+        $this->connectPropertyNotifyArginfoName = $typeBridge->arginfoName(
+            $this->phpNamespace,
+            $this->phpClassName,
+            'connectPropertyNotify',
         );
         $this->needsArgvStorage = $this->computeNeedsArgvStorage($methods);
         $this->argvStorageStructName = $this->needsArgvStorage
@@ -408,6 +458,11 @@ class ClassContext
     public function hasSignals(): bool
     {
         return $this->signalOverloads !== [];
+    }
+
+    public function hasQObjectPropertySupport(): bool
+    {
+        return $this->isQObjectDerived;
     }
 
     public function hasVirtualMethods(): bool

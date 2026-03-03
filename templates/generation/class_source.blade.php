@@ -11,6 +11,7 @@
 #include "{!! $ctx->filePrefix !!}.h"
 #include "{!! $ctx->filePrefix !!}_arginfo.h"
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -22,6 +23,11 @@
 #include <QByteArray>
 #include <QVariant>
 #include <QMetaType>
+@if($ctx->hasQObjectPropertySupport())
+#include "qt_qvariant.h"
+#include <QMetaMethod>
+#include <QMetaProperty>
+@endif
 @if($ctx->hasPreventDestroy || $ctx->hasSignals() || $ctx->hasPostCallOwnershipHandling())
 #include <QObject>
 @endif
@@ -227,6 +233,456 @@ static bool qt_zval_to_variant(zval *value, QVariant *out)
             return false;
     }
 }
+
+@if($ctx->hasQObjectPropertySupport())
+/* ------------------------------------------------------------------ */
+/* QObject property helpers                                            */
+/* ------------------------------------------------------------------ */
+
+static zend_always_inline QObject *qt_native_qobject({!! $ctx->objectStructName !!} *intern)
+{
+    return intern->native_ptr != NULL
+        ? static_cast<QObject *>(intern->native_ptr)
+        : NULL;
+}
+
+static zend_always_inline int qt_qobject_meta_property_index(QObject *obj, zend_string *name)
+{
+    if (obj == NULL || name == NULL) {
+        return -1;
+    }
+
+    QByteArray _qt_name(ZSTR_VAL(name), (int) ZSTR_LEN(name));
+    return obj->metaObject()->indexOfProperty(_qt_name.constData());
+}
+
+static zend_always_inline bool qt_qobject_has_dynamic_property(QObject *obj, zend_string *name)
+{
+    if (obj == NULL || name == NULL) {
+        return false;
+    }
+
+    QByteArray _qt_name(ZSTR_VAL(name), (int) ZSTR_LEN(name));
+    const QList<QByteArray> _qt_names = obj->dynamicPropertyNames();
+    for (const QByteArray &_qt_dynamic_name : _qt_names) {
+        if (_qt_dynamic_name == _qt_name) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void qt_qobject_variant_to_property_zval(zval *target, const QVariant &value)
+{
+    if (!value.isValid() || value.isNull()) {
+        ZVAL_NULL(target);
+        return;
+    }
+
+    switch (value.metaType().id()) {
+        case QMetaType::Bool:
+            ZVAL_BOOL(target, value.toBool());
+            return;
+        case QMetaType::Int:
+        case QMetaType::UInt:
+        case QMetaType::LongLong:
+        case QMetaType::ULongLong:
+            ZVAL_LONG(target, (zend_long) value.toLongLong());
+            return;
+        case QMetaType::Float:
+        case QMetaType::Double:
+            ZVAL_DOUBLE(target, value.toDouble());
+            return;
+        case QMetaType::QString: {
+            QByteArray _qt_utf8 = value.toString().toUtf8();
+            ZVAL_STRINGL(target, _qt_utf8.constData(), _qt_utf8.size());
+            return;
+        }
+        case QMetaType::QByteArray: {
+            QByteArray _qt_bytes = value.toByteArray();
+            ZVAL_STRINGL(target, _qt_bytes.constData(), _qt_bytes.size());
+            return;
+        }
+        default:
+            break;
+    }
+
+    if (value.canConvert<QVariantList>()) {
+        QVariantList _qt_list = value.toList();
+        array_init_size(target, (uint32_t) _qt_list.size());
+        for (const QVariant &_qt_item : _qt_list) {
+            zval _qt_value;
+            ZVAL_NULL(&_qt_value);
+            qt_qobject_variant_to_property_zval(&_qt_value, _qt_item);
+            add_next_index_zval(target, &_qt_value);
+        }
+        return;
+    }
+
+    if (value.canConvert<QVariantMap>()) {
+        QVariantMap _qt_map = value.toMap();
+        array_init_size(target, (uint32_t) _qt_map.size());
+        for (auto _qt_it = _qt_map.cbegin(); _qt_it != _qt_map.cend(); ++_qt_it) {
+            QByteArray _qt_key = _qt_it.key().toUtf8();
+            zval _qt_value;
+            ZVAL_NULL(&_qt_value);
+            qt_qobject_variant_to_property_zval(&_qt_value, _qt_it.value());
+            add_assoc_zval_ex(target, _qt_key.constData(), _qt_key.size(), &_qt_value);
+        }
+        return;
+    }
+
+    object_init_ex(target, qt_ce_QVariant);
+    qt_qvariant_object *_qt_variant_intern = qt_qvariant_from_obj(Z_OBJ_P(target));
+    _qt_variant_intern->native_ptr = new QVariant(value);
+}
+
+static bool qt_qobject_zval_to_property_variant(zval *value, QVariant *out)
+{
+    if (Z_TYPE_P(value) == IS_OBJECT && qt_ce_QVariant != NULL && instanceof_function(Z_OBJCE_P(value), qt_ce_QVariant)) {
+        qt_qvariant_object *_qt_variant_intern = qt_qvariant_from_obj(Z_OBJ_P(value));
+        if (_qt_variant_intern->native_ptr == NULL) {
+            *out = QVariant();
+        } else {
+            *out = *_qt_variant_intern->native_ptr;
+        }
+        return true;
+    }
+
+    return qt_zval_to_variant(value, out);
+}
+
+static bool qt_qobject_read_property_mixed(QObject *obj, zend_string *name, zval *rv)
+{
+    if (obj == NULL || name == NULL) {
+        return false;
+    }
+
+    QByteArray _qt_name(ZSTR_VAL(name), (int) ZSTR_LEN(name));
+    const QVariant _qt_value = obj->property(_qt_name.constData());
+
+    if (!_qt_value.isValid() && qt_qobject_meta_property_index(obj, name) < 0 && !qt_qobject_has_dynamic_property(obj, name)) {
+        return false;
+    }
+
+    qt_qobject_variant_to_property_zval(rv, _qt_value);
+    return true;
+}
+
+static bool qt_qobject_write_property_mixed(QObject *obj, zend_string *name, zval *value, bool *result)
+{
+    if (obj == NULL || name == NULL || value == NULL) {
+        return false;
+    }
+
+    QVariant _qt_value;
+    if (!qt_qobject_zval_to_property_variant(value, &_qt_value)) {
+        return false;
+    }
+
+    QByteArray _qt_name(ZSTR_VAL(name), (int) ZSTR_LEN(name));
+    const int _qt_property_index = qt_qobject_meta_property_index(obj, name);
+    if (_qt_property_index >= 0) {
+        auto _qt_property = obj->metaObject()->property(_qt_property_index);
+        if (!_qt_property.isWritable()) {
+            zend_throw_error(NULL, "Property %s is not writable.", ZSTR_VAL(name));
+            return false;
+        }
+
+        const bool _qt_result = obj->setProperty(_qt_name.constData(), _qt_value);
+        if (result != NULL) {
+            *result = _qt_result;
+        }
+
+        return true;
+    }
+
+    obj->setProperty(_qt_name.constData(), _qt_value);
+    if (result != NULL) {
+        *result = qt_qobject_has_dynamic_property(obj, name);
+    }
+
+    return true;
+}
+
+static bool qt_qobject_has_property_name(QObject *obj, zend_string *name)
+{
+    return qt_qobject_meta_property_index(obj, name) >= 0
+        || qt_qobject_has_dynamic_property(obj, name);
+}
+
+static void qt_qobject_property_names(QObject *obj, zval *return_value)
+{
+    array_init(return_value);
+
+    if (obj == NULL) {
+        return;
+    }
+
+    std::unordered_set<std::string> _qt_seen;
+    const QMetaObject *_qt_meta = obj->metaObject();
+    const int _qt_meta_count = _qt_meta->propertyCount();
+    for (int _qt_i = 0; _qt_i < _qt_meta_count; ++_qt_i) {
+        auto _qt_property = _qt_meta->property(_qt_i);
+        const char *_qt_name = _qt_property.name();
+        if (_qt_name == NULL || *_qt_name == '\0') {
+            continue;
+        }
+
+        if (_qt_seen.insert(std::string(_qt_name)).second) {
+            add_next_index_string(return_value, _qt_name);
+        }
+    }
+
+    const QList<QByteArray> _qt_dynamic_names = obj->dynamicPropertyNames();
+    for (const QByteArray &_qt_name : _qt_dynamic_names) {
+        std::string _qt_key(_qt_name.constData(), (size_t) _qt_name.size());
+        if (_qt_seen.insert(_qt_key).second) {
+            add_next_index_stringl(return_value, _qt_name.constData(), _qt_name.size());
+        }
+    }
+}
+
+static bool qt_qobject_property_info(QObject *obj, zend_string *name, zval *return_value)
+{
+    if (obj == NULL || name == NULL) {
+        return false;
+    }
+
+    const int _qt_property_index = qt_qobject_meta_property_index(obj, name);
+    if (_qt_property_index >= 0) {
+        auto _qt_property = obj->metaObject()->property(_qt_property_index);
+        array_init(return_value);
+        add_assoc_stringl(return_value, "name", ZSTR_VAL(name), ZSTR_LEN(name));
+
+        const char *_qt_type_name = _qt_property.typeName();
+        if (_qt_type_name == NULL || *_qt_type_name == '\0') {
+            _qt_type_name = _qt_property.metaType().name();
+        }
+        if (_qt_type_name != NULL && *_qt_type_name != '\0') {
+            add_assoc_string(return_value, "type_name", const_cast<char *>(_qt_type_name));
+        } else {
+            add_assoc_string(return_value, "type_name", "QVariant");
+        }
+
+        add_assoc_bool(return_value, "readable", _qt_property.isReadable());
+        add_assoc_bool(return_value, "writable", _qt_property.isWritable());
+        add_assoc_bool(return_value, "resettable", _qt_property.isResettable());
+        add_assoc_bool(return_value, "constant", _qt_property.isConstant());
+        add_assoc_bool(return_value, "final", _qt_property.isFinal());
+        add_assoc_bool(return_value, "required", _qt_property.isRequired());
+    add_assoc_bool(return_value, "designable", _qt_property.isDesignable());
+    add_assoc_bool(return_value, "scriptable", _qt_property.isScriptable());
+    add_assoc_bool(return_value, "stored", _qt_property.isStored());
+    add_assoc_bool(return_value, "user", _qt_property.isUser());
+        add_assoc_bool(return_value, "enum", _qt_property.isEnumType());
+        add_assoc_bool(return_value, "flag", _qt_property.isFlagType());
+        add_assoc_bool(return_value, "dynamic", false);
+
+        auto _qt_notify = _qt_property.notifySignal();
+        if (_qt_notify.isValid()) {
+            QByteArray _qt_signature = _qt_notify.methodSignature();
+            add_assoc_bool(return_value, "has_notify", true);
+            add_assoc_stringl(return_value, "notify_signal", _qt_signature.constData(), _qt_signature.size());
+        } else {
+            add_assoc_bool(return_value, "has_notify", false);
+            add_assoc_null(return_value, "notify_signal");
+        }
+
+        return true;
+    }
+
+    if (!qt_qobject_has_dynamic_property(obj, name)) {
+        return false;
+    }
+
+    array_init(return_value);
+    add_assoc_stringl(return_value, "name", ZSTR_VAL(name), ZSTR_LEN(name));
+    QVariant _qt_value = obj->property(QByteArray(ZSTR_VAL(name), (int) ZSTR_LEN(name)).constData());
+    const char *_qt_type_name = _qt_value.metaType().name();
+    if (_qt_type_name != NULL && *_qt_type_name != '\0') {
+        add_assoc_string(return_value, "type_name", const_cast<char *>(_qt_type_name));
+    } else {
+        add_assoc_string(return_value, "type_name", "QVariant");
+    }
+    add_assoc_bool(return_value, "readable", true);
+    add_assoc_bool(return_value, "writable", true);
+    add_assoc_bool(return_value, "resettable", false);
+    add_assoc_bool(return_value, "constant", false);
+    add_assoc_bool(return_value, "final", false);
+    add_assoc_bool(return_value, "required", false);
+    add_assoc_bool(return_value, "designable", true);
+    add_assoc_bool(return_value, "scriptable", true);
+    add_assoc_bool(return_value, "stored", true);
+    add_assoc_bool(return_value, "user", false);
+    add_assoc_bool(return_value, "enum", false);
+    add_assoc_bool(return_value, "flag", false);
+    add_assoc_bool(return_value, "has_notify", false);
+    add_assoc_null(return_value, "notify_signal");
+    add_assoc_bool(return_value, "dynamic", true);
+
+    return true;
+}
+
+static bool qt_qobject_notify_signature(QObject *obj, zend_string *name, zend_string **out)
+{
+    if (obj == NULL || name == NULL || out == NULL) {
+        return false;
+    }
+
+    const int _qt_property_index = qt_qobject_meta_property_index(obj, name);
+    if (_qt_property_index < 0) {
+        return false;
+    }
+
+    auto _qt_property = obj->metaObject()->property(_qt_property_index);
+    auto _qt_notify = _qt_property.notifySignal();
+    if (!_qt_notify.isValid()) {
+        return false;
+    }
+
+    QByteArray _qt_signature = _qt_notify.methodSignature();
+    if (_qt_signature.isEmpty()) {
+        return false;
+    }
+
+    *out = zend_string_init(_qt_signature.constData(), _qt_signature.size(), 0);
+    return true;
+}
+
+static zval *{!! $ctx->filePrefix !!}_read_property(zend_object *object, zend_string *member, int type, void **cache_slot, zval *rv)
+{
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
+    QObject *_qt_obj = qt_native_qobject(intern);
+    if (_qt_obj == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        return &EG(uninitialized_zval);
+    }
+
+    if (qt_qobject_read_property_mixed(_qt_obj, member, rv)) {
+        return rv;
+    }
+
+    return zend_std_read_property(object, member, type, cache_slot, rv);
+}
+
+static zval *{!! $ctx->filePrefix !!}_write_property(zend_object *object, zend_string *member, zval *value, void **cache_slot)
+{
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
+    QObject *_qt_obj = qt_native_qobject(intern);
+    if (_qt_obj == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        return &EG(uninitialized_zval);
+    }
+
+    if (!qt_qobject_write_property_mixed(_qt_obj, member, value, NULL)) {
+        return &EG(uninitialized_zval);
+    }
+
+    return value;
+}
+
+static zval *{!! $ctx->filePrefix !!}_get_property_ptr_ptr(zend_object *object, zend_string *member, int type, void **cache_slot)
+{
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
+    QObject *_qt_obj = qt_native_qobject(intern);
+    if (_qt_obj != NULL && qt_qobject_has_property_name(_qt_obj, member)) {
+        return NULL;
+    }
+
+    return zend_std_get_property_ptr_ptr(object, member, type, cache_slot);
+}
+
+static int {!! $ctx->filePrefix !!}_has_property(zend_object *object, zend_string *member, int has_set_exists, void **cache_slot)
+{
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
+    QObject *_qt_obj = qt_native_qobject(intern);
+    if (_qt_obj == NULL) {
+        return zend_std_has_property(object, member, has_set_exists, cache_slot);
+    }
+
+    if (!qt_qobject_has_property_name(_qt_obj, member)) {
+        return zend_std_has_property(object, member, has_set_exists, cache_slot);
+    }
+
+    if (has_set_exists == ZEND_PROPERTY_EXISTS) {
+        return 1;
+    }
+
+    zval rv;
+    ZVAL_NULL(&rv);
+    if (!qt_qobject_read_property_mixed(_qt_obj, member, &rv)) {
+        return 0;
+    }
+
+    const int _qt_result = (has_set_exists == ZEND_PROPERTY_NOT_EMPTY)
+        ? zend_is_true(&rv)
+        : (Z_TYPE(rv) != IS_NULL);
+    zval_ptr_dtor(&rv);
+
+    return _qt_result;
+}
+
+static zend_array *{!! $ctx->filePrefix !!}_get_properties_for(zend_object *object, zend_prop_purpose purpose)
+{
+    (void) purpose;
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
+    QObject *_qt_obj = qt_native_qobject(intern);
+    if (_qt_obj == NULL) {
+        return zend_std_get_properties_for(object, purpose);
+    }
+
+    zend_array *_qt_props = zend_new_array(8);
+    std::unordered_set<std::string> _qt_seen;
+
+    const QMetaObject *_qt_meta = _qt_obj->metaObject();
+    const int _qt_meta_count = _qt_meta->propertyCount();
+    for (int _qt_i = 0; _qt_i < _qt_meta_count; ++_qt_i) {
+        auto _qt_property = _qt_meta->property(_qt_i);
+        const char *_qt_name = _qt_property.name();
+        if (_qt_name == NULL || *_qt_name == '\0') {
+            continue;
+        }
+
+        std::string _qt_key(_qt_name);
+        if (!_qt_seen.insert(_qt_key).second) {
+            continue;
+        }
+
+        zval _qt_value;
+        ZVAL_NULL(&_qt_value);
+        zend_string *_qt_member = zend_string_init(_qt_name, strlen(_qt_name), 0);
+        if (qt_qobject_read_property_mixed(_qt_obj, _qt_member, &_qt_value)) {
+            zend_hash_update(_qt_props, _qt_member, &_qt_value);
+        } else {
+            zval_ptr_dtor(&_qt_value);
+        }
+        zend_string_release(_qt_member);
+    }
+
+    const QList<QByteArray> _qt_dynamic_names = _qt_obj->dynamicPropertyNames();
+    for (const QByteArray &_qt_name : _qt_dynamic_names) {
+        std::string _qt_key(_qt_name.constData(), (size_t) _qt_name.size());
+        if (!_qt_seen.insert(_qt_key).second) {
+            continue;
+        }
+
+        zval _qt_value;
+        ZVAL_NULL(&_qt_value);
+        zend_string *_qt_member = zend_string_init(_qt_name.constData(), _qt_name.size(), 0);
+        if (qt_qobject_read_property_mixed(_qt_obj, _qt_member, &_qt_value)) {
+            zend_hash_update(_qt_props, _qt_member, &_qt_value);
+        } else {
+            zval_ptr_dtor(&_qt_value);
+        }
+        zend_string_release(_qt_member);
+    }
+
+    return _qt_props;
+}
+
+@endif
 
 @if($ctx->hasSignals())
 /* ------------------------------------------------------------------ */
@@ -754,6 +1210,173 @@ void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativeCppType !!
 @include('generation.method.simple', ['ctx' => $ctx, 'method' => $method])
 @endif
 @endforeach
+@if($ctx->isQObjectClass)
+
+/* property */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, property)
+{
+    zend_string *name;
+
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_STR(name)
+    ZEND_PARSE_PARAMETERS_END();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    QObject *_qt_obj = qt_native_qobject(intern);
+    if (_qt_obj == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+    if (!qt_qobject_read_property_mixed(_qt_obj, name, return_value)) {
+        RETURN_NULL();
+    }
+}
+
+/* setProperty */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, setProperty)
+{
+    zend_string *name;
+    zval *value;
+    bool _qt_result = false;
+
+    ZEND_PARSE_PARAMETERS_START(2, 2)
+        Z_PARAM_STR(name)
+        Z_PARAM_ZVAL(value)
+    ZEND_PARSE_PARAMETERS_END();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    QObject *_qt_obj = qt_native_qobject(intern);
+    if (_qt_obj == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+    if (!qt_qobject_write_property_mixed(_qt_obj, name, value, &_qt_result)) {
+        RETURN_THROWS();
+    }
+
+    RETURN_BOOL(_qt_result);
+}
+
+/* hasProperty */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, hasProperty)
+{
+    zend_string *name;
+
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_STR(name)
+    ZEND_PARSE_PARAMETERS_END();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    QObject *_qt_obj = qt_native_qobject(intern);
+    if (_qt_obj == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+    RETURN_BOOL(qt_qobject_has_property_name(_qt_obj, name));
+}
+
+/* propertyNames */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, propertyNames)
+{
+    ZEND_PARSE_PARAMETERS_NONE();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    QObject *_qt_obj = qt_native_qobject(intern);
+    if (_qt_obj == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+    qt_qobject_property_names(_qt_obj, return_value);
+}
+
+/* propertyInfo */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, propertyInfo)
+{
+    zend_string *name;
+
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_STR(name)
+    ZEND_PARSE_PARAMETERS_END();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    QObject *_qt_obj = qt_native_qobject(intern);
+    if (_qt_obj == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+    if (!qt_qobject_property_info(_qt_obj, name, return_value)) {
+        zend_value_error("Unknown property %s.", ZSTR_VAL(name));
+        RETURN_THROWS();
+    }
+}
+
+/* connectPropertyNotify */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connectPropertyNotify)
+{
+    zend_string *name;
+    zval *callback;
+
+    ZEND_PARSE_PARAMETERS_START(2, 2)
+        Z_PARAM_STR(name)
+        Z_PARAM_ZVAL(callback)
+    ZEND_PARSE_PARAMETERS_END();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    QObject *_qt_obj = qt_native_qobject(intern);
+    if (_qt_obj == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+    if (qt_qobject_meta_property_index(_qt_obj, name) < 0) {
+        if (qt_qobject_has_dynamic_property(_qt_obj, name)) {
+            zend_value_error("Dynamic property %s does not provide a NOTIFY signal.", ZSTR_VAL(name));
+        } else {
+            zend_value_error("Unknown property %s.", ZSTR_VAL(name));
+        }
+        RETURN_THROWS();
+    }
+
+    const int _qt_property_index = qt_qobject_meta_property_index(_qt_obj, name);
+    auto _qt_property = _qt_obj->metaObject()->property(_qt_property_index);
+    auto _qt_notify = _qt_property.notifySignal();
+    if (!_qt_notify.isValid()) {
+        zend_value_error("Property %s does not provide a NOTIFY signal.", ZSTR_VAL(name));
+        RETURN_THROWS();
+    }
+
+    auto _qt_callback = qt_signal_callback_create(_qt_obj, callback);
+    if (_qt_callback == nullptr) {
+        RETURN_THROWS();
+    }
+
+    struct _qt_property_notify_handler_t {
+        std::shared_ptr<qt_signal_callback_t> callback;
+
+        void operator()() const
+        {
+            auto _qt_callback_copy = callback;
+            qt_signal_dispatch([_qt_callback_copy]() mutable {
+                qt_signal_callback_invoke(_qt_callback_copy, 0, nullptr);
+            });
+        }
+    };
+
+    QMetaObject::Connection _qt_connection = QMetaObject::connect(
+        _qt_obj,
+        _qt_notify,
+        _qt_obj,
+        _qt_property_notify_handler_t{_qt_callback}
+    );
+
+    qt_qmetaobjectconnection_wrap(return_value, _qt_connection);
+}
+@endif
 @if($ctx->hasSignals())
 
 /* connect */
@@ -845,6 +1468,14 @@ static const zend_function_entry {!! $ctx->filePrefix !!}_methods[] = {
     ZEND_ME({!! $ctx->zendClassSymbol !!}, {!! $method->name !!}, {!! $method->arginfoName !!}, {!! $method->accessFlags !!})
 @endif
 @endforeach
+@if($ctx->isQObjectClass)
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, property, {!! $ctx->propertyArginfoName !!}, ZEND_ACC_PUBLIC)
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, setProperty, {!! $ctx->setPropertyArginfoName !!}, ZEND_ACC_PUBLIC)
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, hasProperty, {!! $ctx->hasPropertyArginfoName !!}, ZEND_ACC_PUBLIC)
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, propertyNames, {!! $ctx->propertyNamesArginfoName !!}, ZEND_ACC_PUBLIC)
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, propertyInfo, {!! $ctx->propertyInfoArginfoName !!}, ZEND_ACC_PUBLIC)
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, connectPropertyNotify, {!! $ctx->connectPropertyNotifyArginfoName !!}, ZEND_ACC_PUBLIC)
+@endif
 @if($ctx->hasSignals())
     ZEND_ME({!! $ctx->zendClassSymbol !!}, connect, {!! $ctx->signalConnectArginfoName !!}, ZEND_ACC_PUBLIC)
     ZEND_ME({!! $ctx->zendClassSymbol !!}, disconnect, {!! $ctx->signalDisconnectArginfoName !!}, ZEND_ACC_PUBLIC)
@@ -878,6 +1509,33 @@ PHP_MINIT_FUNCTION({!! $ctx->minitName !!})
 @if($ctx->isAbstract)
     {!! $ctx->ceVarName !!}->ce_flags |= ZEND_ACC_ABSTRACT;
 @endif
+@if($ctx->hasQObjectPropertySupport())
+    {
+        const QMetaObject &_qt_meta = {!! $ctx->nativeCppType !!}::staticMetaObject;
+        const int _qt_property_offset = _qt_meta.propertyOffset();
+        const int _qt_property_count = _qt_meta.propertyCount();
+        for (int _qt_i = _qt_property_offset; _qt_i < _qt_property_count; ++_qt_i) {
+            auto _qt_property = _qt_meta.property(_qt_i);
+            const char *_qt_property_name_cstr = _qt_property.name();
+            if (_qt_property_name_cstr == NULL || *_qt_property_name_cstr == '\0') {
+                continue;
+            }
+
+            zend_string *_qt_property_name = zend_string_init(_qt_property_name_cstr, strlen(_qt_property_name_cstr), 1);
+            zval _qt_property_default_value;
+            ZVAL_NULL(&_qt_property_default_value);
+            zend_declare_typed_property(
+                {!! $ctx->ceVarName !!},
+                _qt_property_name,
+                &_qt_property_default_value,
+                ZEND_ACC_PUBLIC | ZEND_ACC_VIRTUAL,
+                NULL,
+                (zend_type) ZEND_TYPE_INIT_MASK(MAY_BE_ANY)
+            );
+            zend_string_release_ex(_qt_property_name, 1);
+        }
+    }
+@endif
 
     memcpy(&{!! $ctx->handlersVarName !!}, &std_object_handlers, sizeof(zend_object_handlers));
     {!! $ctx->handlersVarName !!}.offset   = XtOffsetOf({!! $ctx->objectStructName !!}, std);
@@ -888,6 +1546,13 @@ PHP_MINIT_FUNCTION({!! $ctx->minitName !!})
     {!! $ctx->handlersVarName !!}.clone_obj = NULL;
 @endif
     {!! $ctx->handlersVarName !!}.get_gc   = {!! $ctx->filePrefix !!}_get_gc;
+@if($ctx->hasQObjectPropertySupport())
+    {!! $ctx->handlersVarName !!}.read_property = {!! $ctx->filePrefix !!}_read_property;
+    {!! $ctx->handlersVarName !!}.write_property = {!! $ctx->filePrefix !!}_write_property;
+    {!! $ctx->handlersVarName !!}.get_property_ptr_ptr = {!! $ctx->filePrefix !!}_get_property_ptr_ptr;
+    {!! $ctx->handlersVarName !!}.has_property = {!! $ctx->filePrefix !!}_has_property;
+    {!! $ctx->handlersVarName !!}.get_properties_for = {!! $ctx->filePrefix !!}_get_properties_for;
+@endif
     {!! $ctx->ceVarName !!}->default_object_handlers = &{!! $ctx->handlersVarName !!};
 
     return SUCCESS;

@@ -60,6 +60,17 @@ class ClassGenerationService
                     : null;
             },
         );
+        $classData['is_qobject_derived'] = $this->isQObjectDerivedClassData(
+            $classData,
+            function (string $baseClass) use ($headerPath, $includePaths, $classHeaders): ?array {
+                $baseHeaderPath = $classHeaders[$baseClass] ?? $headerPath;
+                $facts = $this->prepareDiscoveryFacts($baseHeaderPath, $baseClass, $includePaths);
+
+                return (($facts['status'] ?? 'error') === 'ok' && is_array($facts['class_data'] ?? null))
+                    ? $facts['class_data']
+                    : null;
+            },
+        );
         $sourceClassData = $classData;
 
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
@@ -136,6 +147,7 @@ class ClassGenerationService
         );
         $phpClass = $abstractConstructorAdjusted['class'];
         $skippedMethods = [...$skippedMethods, ...$abstractConstructorAdjusted['skipped_methods']];
+        $phpClass = $this->stripQObjectRuntimeMethods($phpClass);
 
         if (count($phpClass->methods) === 0 && count($phpClass->signals) === 0 && !$phpClass->isAbstract) {
             return ClassGenerationResult::skipped(
@@ -237,6 +249,12 @@ class ClassGenerationService
                 ? $preparedClassDataByClass[$baseClass]
                 : null,
         );
+        $classData['is_qobject_derived'] = $this->isQObjectDerivedClassData(
+            $classData,
+            static fn(string $baseClass): ?array => is_array($preparedClassDataByClass[$baseClass] ?? null)
+                ? $preparedClassDataByClass[$baseClass]
+                : null,
+        );
         $sourceClassData = $classData;
 
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
@@ -312,6 +330,7 @@ class ClassGenerationService
         );
         $phpClass = $abstractConstructorAdjusted['class'];
         $skippedMethods = [...$skippedMethods, ...$abstractConstructorAdjusted['skipped_methods']];
+        $phpClass = $this->stripQObjectRuntimeMethods($phpClass);
 
         if (count($phpClass->methods) === 0 && count($phpClass->signals) === 0 && !$phpClass->isAbstract) {
             return ClassGenerationResult::skipped(
@@ -397,6 +416,7 @@ class ClassGenerationService
                 isAbstract: $phpClass->isAbstract,
                 isCopyConstructible: $phpClass->isCopyConstructible,
                 hasPublicDestructor: $phpClass->hasPublicDestructor,
+                isQObjectDerived: $phpClass->isQObjectDerived,
                 properties: $phpClass->properties,
                 methods: $methods,
                 signals: $phpClass->signals,
@@ -1266,6 +1286,7 @@ class ClassGenerationService
                 isAbstract: $phpClass->isAbstract,
                 isCopyConstructible: $phpClass->isCopyConstructible,
                 hasPublicDestructor: $phpClass->hasPublicDestructor,
+                isQObjectDerived: $phpClass->isQObjectDerived,
                 properties: $phpClass->properties,
                 methods: $methods,
                 signals: $phpClass->signals,
@@ -1541,6 +1562,7 @@ class ClassGenerationService
                 isAbstract: $phpClass->isAbstract,
                 isCopyConstructible: $phpClass->isCopyConstructible,
                 hasPublicDestructor: $phpClass->hasPublicDestructor,
+                isQObjectDerived: $phpClass->isQObjectDerived,
                 properties: $phpClass->properties,
                 methods: $methods,
                 signals: $phpClass->signals,
@@ -2465,6 +2487,65 @@ class ClassGenerationService
         )));
 
         return $names;
+    }
+
+    /**
+     * @param array<string, mixed> $classData
+     * @param callable(string): ?array<string, mixed> $baseLoader
+     * @param array<string, bool> $visited
+     */
+    private function isQObjectDerivedClassData(array $classData, callable $baseLoader, array &$visited = []): bool
+    {
+        $className = is_string($classData['name'] ?? null) ? $classData['name'] : '';
+        if ($className === 'QObject') {
+            return true;
+        }
+
+        foreach ((array) ($classData['bases'] ?? []) as $baseClass) {
+            if (!is_string($baseClass) || $baseClass === '') {
+                continue;
+            }
+
+            if ($baseClass === 'QObject') {
+                return true;
+            }
+
+            if (isset($visited[$baseClass])) {
+                continue;
+            }
+            $visited[$baseClass] = true;
+
+            $baseClassData = $baseLoader($baseClass);
+            if (is_array($baseClassData) && $this->isQObjectDerivedClassData($baseClassData, $baseLoader, $visited)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function stripQObjectRuntimeMethods(PhpClass $phpClass): PhpClass
+    {
+        if ($phpClass->name !== 'QObject') {
+            return $phpClass;
+        }
+
+        $methods = array_values(array_filter(
+            $phpClass->methods,
+            static fn(PhpMethod $method): bool => !in_array($method->name, ['property', 'setProperty'], true),
+        ));
+
+        return new PhpClass(
+            name: $phpClass->name,
+            parent: $phpClass->parent,
+            isAbstract: $phpClass->isAbstract,
+            isCopyConstructible: $phpClass->isCopyConstructible,
+            hasPublicDestructor: $phpClass->hasPublicDestructor,
+            properties: $phpClass->properties,
+            methods: $methods,
+            signals: $phpClass->signals,
+            isQObjectDerived: $phpClass->isQObjectDerived,
+        );
     }
 
     private function introspectionContents(string $headerPath, ?string $className = null): string

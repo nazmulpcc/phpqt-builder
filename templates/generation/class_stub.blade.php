@@ -36,6 +36,15 @@ namespace {!! $ctx->phpNamespace !!};
 
 @endif
 @endforeach
+@if($ctx->isQObjectClass)
+
+    public function property(string $name): mixed {}
+    public function setProperty(string $name, mixed $value): bool {}
+    public function hasProperty(string $name): bool {}
+    public function propertyNames(): array {}
+    public function propertyInfo(string $name): array {}
+    public function connectPropertyNotify(string $name, callable $callback): \Qt\Core\QMetaObjectConnection {}
+@endif
 @if($ctx->hasSignals())
 
     public function connect(string $signalSignature, callable $callback): \Qt\Core\QMetaObjectConnection {}
