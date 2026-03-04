@@ -26,7 +26,9 @@ final class FakeExtensionBootstrapper implements ExtensionBootstrapper
             throw new \RuntimeException($this->failureMessage);
         }
 
-        @mkdir($context->outputDir . '/build', 0755, true);
+        if (!is_dir($context->outputDir . '/build')) {
+            mkdir($context->outputDir . '/build', 0755, true);
+        }
 
         file_put_contents($context->outputDir . '/build/gen_stub.php', "<?php\n");
         file_put_contents($context->outputDir . '/configure', "#!/bin/sh\n");
@@ -38,7 +40,9 @@ final class FakeExtensionBootstrapper implements ExtensionBootstrapper
         }
 
         $metadataDir = $context->metadataDir();
-        @mkdir($metadataDir, 0755, true);
+        if (!is_dir($metadataDir)) {
+            mkdir($metadataDir, 0755, true);
+        }
 
         $steps = [];
         foreach (['phpize', 'gen_stub', 'configure', 'make'] as $stepName) {

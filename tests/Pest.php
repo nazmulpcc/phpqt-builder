@@ -7,6 +7,26 @@ use Symfony\Component\Console\Tester\CommandTester;
 use QtBuilder\Tests\Runtime\Support\QtRuntimeProcessResult;
 use QtBuilder\Tests\Runtime\Support\QtRuntimeProcessRunner;
 
+uses()->group('build')->in('Build');
+uses()->group('commands')->in('Commands');
+uses()->group('filtering')->in('Filtering');
+uses()->group('parsing')->in('Parsing');
+uses()->group('runtime')->in('Runtime');
+
+expect()->extend('toBeSuccessfulCommandResult', function () {
+    expect($this->value)->toBeArray()->toHaveKeys(['exitCode', 'display']);
+    expect($this->value['exitCode'])->toBe(Command::SUCCESS, $this->value['display']);
+
+    return $this;
+});
+
+expect()->extend('toBeFailureCommandResult', function () {
+    expect($this->value)->toBeArray()->toHaveKeys(['exitCode', 'display']);
+    expect($this->value['exitCode'])->toBe(Command::FAILURE, $this->value['display']);
+
+    return $this;
+});
+
 function qt_fixture_path(string $relative): string
 {
     return __DIR__ . '/Fixtures/' . ltrim($relative, '/');
@@ -39,19 +59,7 @@ function qt_decode_json(string $json): array
 function qt_command_result(Command $command, array $input): array
 {
     $tester = new CommandTester($command);
-    set_error_handler(static function (int $severity, string $message, string $file, int $line): bool {
-        if ($severity === E_WARNING && str_contains($message, 'mkdir(): File exists')) {
-            return true;
-        }
-
-        return false;
-    });
-
-    try {
-        $exitCode = $tester->execute($input);
-    } finally {
-        restore_error_handler();
-    }
+    $exitCode = $tester->execute($input);
 
     return [
         'tester' => $tester,

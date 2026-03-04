@@ -34,9 +34,9 @@ class BuildDiscoveryService
         OutputInterface $output,
         string $extensionName = 'qt',
     ): BuildDiscoveryResult {
-        @mkdir(dirname($metadataDir), 0755, true);
-        @mkdir($metadataDir, 0755, true);
-        @mkdir($this->classCacheDir($metadataDir), 0755, true);
+        $this->ensureDirectory(dirname($metadataDir));
+        $this->ensureDirectory($metadataDir);
+        $this->ensureDirectory($this->classCacheDir($metadataDir));
 
         [$acceptedCandidates, $initialSkippedClasses, $candidateCount] = $this->scanCandidates($installation, $modules);
         $classStructures = $this->prepareClassStructures(
@@ -696,7 +696,7 @@ class BuildDiscoveryService
         $encoded = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
         $contents = $encoded !== false ? $encoded : $fallback;
         $directory = dirname($path);
-        @mkdir($directory, 0755, true);
+        $this->ensureDirectory($directory);
 
         $tempPath = tempnam($directory, 'tmp-');
         if ($tempPath === false) {
@@ -707,5 +707,16 @@ class BuildDiscoveryService
 
         file_put_contents($tempPath, $contents);
         rename($tempPath, $path);
+    }
+
+    private function ensureDirectory(string $directory): void
+    {
+        if (is_dir($directory)) {
+            return;
+        }
+
+        if (!mkdir($directory, 0755, true) && !is_dir($directory)) {
+            throw new \RuntimeException(sprintf('Could not create directory: %s', $directory));
+        }
     }
 }

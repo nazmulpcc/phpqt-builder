@@ -53,7 +53,7 @@ it('writes reusable build metadata during discovery', function (): void {
         ],
     );
 
-    expect($result['exitCode'])->toBe(Command::SUCCESS, $result['display']);
+    expect($result)->toBeSuccessfulCommandResult();
     expect($result['display'])->toContain(
         'Running 2 parallel discovery worker(s)...',
         'Class structure cache:',
@@ -94,7 +94,7 @@ it('reuses class structure cache after generated metadata is cleared', function 
             '--jobs' => '2',
         ],
     );
-    expect($firstRun['exitCode'])->toBe(Command::SUCCESS, $firstRun['display']);
+    expect($firstRun)->toBeSuccessfulCommandResult();
 
     expect(is_file($classCacheDir . '/QPoint.json'))->toBeTrue();
     $removeDir($metadataDir);
@@ -110,7 +110,7 @@ it('reuses class structure cache after generated metadata is cleared', function 
         ],
     );
 
-    expect($secondRun['exitCode'])->toBe(Command::SUCCESS, $secondRun['display']);
+    expect($secondRun)->toBeSuccessfulCommandResult();
     expect($secondRun['display'])->toContain('Class structure cache:', '5 hit(s), 0 miss(es)')
         ->not->toContain('Building cached class structures with 2 parallel worker(s)...');
     expect(is_file($metadataDir . '/discovery_cache.json'))->toBeTrue()
@@ -133,7 +133,7 @@ it('feeds discovery cache into the build command', function (): void {
             '--jobs' => '2',
         ],
     );
-    expect($discover['exitCode'])->toBe(Command::SUCCESS, $discover['display']);
+    expect($discover)->toBeSuccessfulCommandResult();
 
     $build = qt_command_result(
         new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
@@ -145,7 +145,7 @@ it('feeds discovery cache into the build command', function (): void {
         ],
     );
 
-    expect($build['exitCode'])->toBe(Command::SUCCESS, $build['display'])
+    expect($build)->toBeSuccessfulCommandResult()
         ->and($build['display'])->toContain('Using cached build metadata:')
         ->and($bootstrapper->contexts)->toHaveCount(1);
 });

@@ -13,7 +13,7 @@ it('returns failure and json when checks fail', function (): void {
 
     $result = qt_command_result(new DoctorCommand($system), ['--format' => 'json']);
 
-    expect($result['exitCode'])->toBe(Command::FAILURE);
+    expect($result)->toBeFailureCommandResult();
 
     $payload = qt_decode_json($result['display']);
     expect($payload['summary']['status'])->toBe('fail');
@@ -24,7 +24,7 @@ it('rejects unsupported formats', function (): void {
 
     $result = qt_command_result(new DoctorCommand($system), ['--format' => 'yaml']);
 
-    expect($result['exitCode'])->toBe(Command::FAILURE)
+    expect($result)->toBeFailureCommandResult()
         ->and($result['display'])->toContain('Unsupported format');
 });
 
@@ -41,7 +41,7 @@ it('marks qt check as failure when qt is not detected', function (): void {
     $result = qt_command_result(new DoctorCommand($system), ['--format' => 'json']);
     $payload = qt_decode_json($result['display']);
 
-    expect($result['exitCode'])->toBe(Command::FAILURE)
+    expect($result)->toBeFailureCommandResult()
         ->and($payload['summary']['status'])->toBe('fail');
 
     $qtCheck = null;

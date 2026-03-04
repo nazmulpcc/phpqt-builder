@@ -25,9 +25,9 @@ class ExtensionScaffolder
 
     public function prepare(ExtensionBuildContext $context): void
     {
-        @mkdir($context->outputDir, 0755, true);
-        @mkdir($context->outputDir . '/classes', 0755, true);
-        @mkdir($context->metadataDir(), 0755, true);
+        $this->ensureDirectory($context->outputDir);
+        $this->ensureDirectory($context->outputDir . '/classes');
+        $this->ensureDirectory($context->metadataDir());
 
         $this->clearTransientClassBuildArtifacts($context->outputDir . '/classes');
     }
@@ -90,6 +90,17 @@ class ExtensionScaffolder
                     @unlink($path);
                 }
             }
+        }
+    }
+
+    private function ensureDirectory(string $directory): void
+    {
+        if (is_dir($directory)) {
+            return;
+        }
+
+        if (!mkdir($directory, 0755, true) && !is_dir($directory)) {
+            throw new \RuntimeException(sprintf('Could not create directory: %s', $directory));
         }
     }
 }

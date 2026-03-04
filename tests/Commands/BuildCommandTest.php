@@ -26,7 +26,7 @@ it('generates the extension tree from a fixture qt root', function (): void {
         ],
     );
 
-    expect($result['exitCode'])->toBe(Command::SUCCESS, $result['display']);
+    expect($result)->toBeSuccessfulCommandResult();
     expect(is_file($outputDir . '/config.m4'))->toBeTrue()
         ->and(is_file($outputDir . '/php_qt.h'))->toBeTrue()
         ->and(is_file($outputDir . '/qt.cpp'))->toBeTrue()
@@ -85,7 +85,7 @@ it('reuses an existing discovery cache', function (): void {
             '--jobs' => '2',
         ],
     );
-    expect($initialRun['exitCode'])->toBe(Command::SUCCESS, $initialRun['display']);
+    expect($initialRun)->toBeSuccessfulCommandResult();
 
     $cache = qt_decode_json((string) file_get_contents($metadataDir . '/discovery_cache.json'));
     $cache['candidate_count'] = 1;
@@ -110,7 +110,7 @@ it('reuses an existing discovery cache', function (): void {
         ],
     );
 
-    expect($result['exitCode'])->toBe(Command::SUCCESS, $result['display']);
+    expect($result)->toBeSuccessfulCommandResult();
     expect($result['display'])->toContain(
         'Using cached build metadata:',
         'Bootstrapping extension build tree...',
@@ -144,7 +144,7 @@ it('generates abstract shells and concrete children', function (): void {
         ],
     );
 
-    expect($result['exitCode'])->toBe(Command::SUCCESS, $result['display']);
+    expect($result)->toBeSuccessfulCommandResult();
     expect(is_file($outputDir . '/classes/qt_qabstractshell.cpp'))->toBeTrue()
         ->and(is_file($outputDir . '/classes/qt_qabstractparentthing.cpp'))->toBeTrue()
         ->and(is_file($outputDir . '/classes/qt_qconcretechildthing.cpp'))->toBeTrue();
@@ -181,7 +181,7 @@ it('fails when a bootstrap step fails', function (): void {
         ],
     );
 
-    expect($result['exitCode'])->toBe(Command::FAILURE, $result['display'])
+    expect($result)->toBeFailureCommandResult()
         ->and($result['display'])->toContain('configure failed');
 
     $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
@@ -232,7 +232,7 @@ it('rewrites cached allow lists to actual generated classes', function (): void 
         ],
     );
 
-    expect($result['exitCode'])->toBe(Command::SUCCESS, $result['display']);
+    expect($result)->toBeSuccessfulCommandResult();
     expect($result['display'])->toContain('Using cached build metadata:', 'Re-evaluating generated dependency set');
 
     $allowedClasses = qt_decode_json((string) file_get_contents($metadataDir . '/allowed_classes.json'));

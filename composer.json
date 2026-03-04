@@ -28,9 +28,8 @@
         }
     },
     "scripts": {
-        "test": "./vendor/bin/pest",
-        "test:runtime": "sh -c 'PHPQT_RUNTIME_PROCESSES=${PHPQT_RUNTIME_PROCESSES:-4}; ./vendor/bin/pest --configuration=phpunit.runtime.xml --parallel --processes=${PHPQT_RUNTIME_PROCESSES}'",
-        "test:runtime:serial": "./vendor/bin/pest --configuration=phpunit.runtime.xml"
+        "test": "./vendor/bin/pest --parallel",
+        "test:runtime": "./vendor/bin/pest --configuration=phpunit.runtime.xml --parallel"
     },
     "authors": [
         {
