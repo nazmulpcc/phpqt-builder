@@ -521,8 +521,9 @@ class MethodExposurePolicy
                 return $this->looksLikeQualifiedEnumName($suffix);
             }
 
-            if ($prefix !== $className) {
-                return false;
+            if ($prefix === $className) {
+                return isset($flagAliases[$suffix])
+                    || in_array($suffix, $enumNames, true);
             }
 
             return isset($flagAliases[$suffix])

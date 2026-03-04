@@ -2,6 +2,7 @@
 
 namespace QtBuilder\Contracts;
 
+use QtBuilder\System\CommandResult;
 use QtBuilder\System\QtDetectionResult;
 
 interface SystemInformation
@@ -19,6 +20,11 @@ interface SystemInformation
     public function hasExtension(string $extension): bool;
 
     public function findExecutable(string $name): ?string;
+
+    /**
+     * @param list<string> $command
+     */
+    public function runCommand(array $command, float $timeoutSeconds = 5.0): CommandResult;
 
     public function detectQt(): QtDetectionResult;
 }

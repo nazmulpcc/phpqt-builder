@@ -13,7 +13,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class BuildDiscoveryService
 {
-    private const CLASS_CACHE_SCHEMA_VERSION = 2;
+    private const CLASS_CACHE_SCHEMA_VERSION = 3;
 
     public function __construct(
         private readonly GenerateWorkerPool $workerPool = new GenerateWorkerPool(__DIR__ . '/../..'),
@@ -100,6 +100,52 @@ class BuildDiscoveryService
         $this->writeJsonFile($metadataDir . '/discovery_cache.json', $payload, '{}');
         $this->writeJsonFile($metadataDir . '/accepted_candidates.json', $payload['accepted_candidates'], '[]');
         $this->writeAllowedClassesManifest($metadataDir, $result->allowedClasses);
+    }
+
+    /**
+     * @param list<string> $modules
+     * @param list<HeaderCandidate> $acceptedCandidates
+     * @param list<array<string, string|null>> $skippedClasses
+     * @return list<array{module: string, accepted: int, skipped: int, total: int, percent: float}>
+     */
+    public function moduleAcceptance(array $modules, array $acceptedCandidates, array $skippedClasses): array
+    {
+        /** @var array<string, array{accepted: int, skipped: int}> $stats */
+        $stats = [];
+        foreach ($modules as $module) {
+            $stats[$module] = ['accepted' => 0, 'skipped' => 0];
+        }
+
+        foreach ($acceptedCandidates as $candidate) {
+            $stats[$candidate->module] ??= ['accepted' => 0, 'skipped' => 0];
+            $stats[$candidate->module]['accepted']++;
+        }
+
+        foreach ($skippedClasses as $skippedClass) {
+            $module = is_string($skippedClass['module'] ?? null) ? $skippedClass['module'] : null;
+            if ($module === null || $module === '') {
+                continue;
+            }
+
+            $stats[$module] ??= ['accepted' => 0, 'skipped' => 0];
+            $stats[$module]['skipped']++;
+        }
+
+        $rows = [];
+        foreach ($modules as $module) {
+            $accepted = $stats[$module]['accepted'] ?? 0;
+            $skipped = $stats[$module]['skipped'] ?? 0;
+            $total = $accepted + $skipped;
+            $rows[] = [
+                'module' => $module,
+                'accepted' => $accepted,
+                'skipped' => $skipped,
+                'total' => $total,
+                'percent' => $total > 0 ? ($accepted / $total) * 100.0 : 0.0,
+            ];
+        }
+
+        return $rows;
     }
 
     /**
@@ -236,6 +282,7 @@ class BuildDiscoveryService
                 $decision = $this->classPolicy->decideCandidate($candidate);
                 if (!$decision->accepted) {
                     $skippedClasses[] = [
+                        'module' => $candidate->module,
                         'class' => $candidate->className,
                         'header' => $candidate->parseHeader,
                         'reason_code' => $decision->reasonCode,
@@ -272,9 +319,9 @@ class BuildDiscoveryService
     ): array {
         $preparedCandidates = [];
         $preparedClassDataByClass = [];
-        /** @var array<string, array{class: string, header: string, reason_code: string|null, reason_message: string|null}> $skippedByClass */
+        /** @var array<string, array{module: string|null, class: string, header: string, reason_code: string|null, reason_message: string|null}> $skippedByClass */
         $skippedByClass = [];
-        /** @var array<string, array{class: string, header: string, reason_code: string|null, reason_message: string|null}> $errorsByClass */
+        /** @var array<string, array{module: string|null, class: string, header: string, reason_code: string|null, reason_message: string|null}> $errorsByClass */
         $errorsByClass = [];
         $cacheHits = 0;
         $cacheMisses = [];
@@ -339,6 +386,7 @@ class BuildDiscoveryService
 
                 if ($result->status === 'error') {
                     $errorsByClass[$result->className] = [
+                        'module' => $candidate->module,
                         'class' => $result->className,
                         'header' => $result->headerPath,
                         'reason_code' => $result->reasonCode,
@@ -410,9 +458,9 @@ class BuildDiscoveryService
             $viableCandidates[$candidate->className] = $candidate;
         }
 
-        /** @var array<string, array{class: string, header: string, reason_code: string|null, reason_message: string|null}> $skippedByClass */
+        /** @var array<string, array{module: string|null, class: string, header: string, reason_code: string|null, reason_message: string|null}> $skippedByClass */
         $skippedByClass = [];
-        /** @var array<string, array{class: string, header: string, reason_code: string|null, reason_message: string|null}> $errorsByClass */
+        /** @var array<string, array{module: string|null, class: string, header: string, reason_code: string|null, reason_message: string|null}> $errorsByClass */
         $errorsByClass = [];
         $passes = 0;
 
@@ -442,6 +490,7 @@ class BuildDiscoveryService
                 $classData = $preparedClassDataByClass[$className] ?? null;
                 if (!is_array($classData)) {
                     $errorsByClass[$className] = [
+                        'module' => $candidate->module,
                         'class' => $className,
                         'header' => $candidate->parseHeader,
                         'reason_code' => 'missing_class_data',
@@ -466,6 +515,7 @@ class BuildDiscoveryService
                 }
 
                 $skippedByClass[$className] = [
+                    'module' => $candidate->module,
                     'class' => $result->className,
                     'header' => $result->headerPath,
                     'reason_code' => $result->reasonCode,
@@ -650,8 +700,8 @@ class BuildDiscoveryService
     /**
      * @param array<string, HeaderCandidate> $preparedCandidates
      * @param array<string, array<string, mixed>> $preparedClassDataByClass
-     * @param array<string, array{class: string, header: string, reason_code: string|null, reason_message: string|null}> $skippedByClass
-     * @param array<string, array{class: string, header: string, reason_code: string|null, reason_message: string|null}> $errorsByClass
+     * @param array<string, array{module: string|null, class: string, header: string, reason_code: string|null, reason_message: string|null}> $skippedByClass
+     * @param array<string, array{module: string|null, class: string, header: string, reason_code: string|null, reason_message: string|null}> $errorsByClass
      * @param array<string, mixed> $payload
      */
     private function recordClassStructurePayload(
@@ -673,6 +723,7 @@ class BuildDiscoveryService
 
         if ($status === 'skipped') {
             $skippedByClass[$candidate->className] = [
+                'module' => $candidate->module,
                 'class' => $candidate->className,
                 'header' => $candidate->parseHeader,
                 'reason_code' => is_string($payload['reason_code'] ?? null) ? $payload['reason_code'] : null,
@@ -684,6 +735,7 @@ class BuildDiscoveryService
         }
 
         $errorsByClass[$candidate->className] = [
+            'module' => $candidate->module,
             'class' => $candidate->className,
             'header' => $candidate->parseHeader,
             'reason_code' => 'class_structure_error',

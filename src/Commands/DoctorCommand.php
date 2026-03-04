@@ -1,11 +1,14 @@
 <?php
 
+declare(strict_types=1);
+
 namespace QtBuilder\Commands;
 
 use QtBuilder\Contracts\SystemInformation;
 use QtBuilder\Preflight\CheckResult;
 use QtBuilder\Preflight\CheckStatus;
 use QtBuilder\Preflight\PreflightReport;
+use QtBuilder\System\CommandResult;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -55,32 +58,43 @@ class DoctorCommand extends Command
             $this->checkQtDiscovery(),
             $this->checkCppCompiler(),
             $this->checkPhpize(),
-            $this->checkBuildTool(),
-            $this->checkCmake(),
+            $this->checkPhpConfig(),
+            $this->checkMake(),
+            $this->checkPkgConfig(),
         ]);
     }
 
     private function checkSupportedOs(): CheckResult
     {
         $osFamily = $this->systemInformation->getOsFamily();
-        $supported = ['Linux', 'Darwin'];
+        $meta = [
+            'os_family' => $osFamily,
+            'os_name' => $this->systemInformation->getOsName(),
+            'kernel' => $this->systemInformation->getKernelVersion(),
+            'arch' => $this->systemInformation->getArchitecture(),
+        ];
 
-        if (\in_array($osFamily, $supported, true)) {
+        if (\in_array($osFamily, ['Linux', 'Darwin'], true)) {
             return new CheckResult(
                 'supported_os',
                 'Supported OS',
                 CheckStatus::Pass,
                 sprintf(
-                    'Detected %s (%s, %s).',
-                    $this->systemInformation->getOsName(),
-                    $this->systemInformation->getKernelVersion(),
-                    $this->systemInformation->getArchitecture(),
+                    'Detected %s. The current bootstrap path uses phpize, configure, and make.',
+                    $osFamily,
                 ),
-                [
-                    'os_family' => $osFamily,
-                    'os_name' => $this->systemInformation->getOsName(),
-                    'kernel' => $this->systemInformation->getKernelVersion(),
-                    'arch' => $this->systemInformation->getArchitecture(),
+                $meta,
+            );
+        }
+
+        if ($osFamily === 'Windows') {
+            return new CheckResult(
+                'supported_os',
+                'Supported OS',
+                CheckStatus::Fail,
+                'Detected Windows. The current bootstrap path is Unix-oriented and expects phpize, configure, and make.',
+                $meta + [
+                    'hint' => 'Qt/header inspection may still work, but extension bootstrap is not implemented for Windows yet.',
                 ],
             );
         }
@@ -89,8 +103,8 @@ class DoctorCommand extends Command
             'supported_os',
             'Supported OS',
             CheckStatus::Fail,
-            sprintf('Detected unsupported OS family "%s". Supported families: Linux, Darwin.', $osFamily),
-            ['os_family' => $osFamily],
+            sprintf('Detected unsupported OS family "%s". The current bootstrap path is only implemented for Linux and macOS.', $osFamily),
+            $meta,
         );
     }
 
@@ -133,7 +147,8 @@ class DoctorCommand extends Command
             'php_ext_cparser',
             'PHP Extension cparser',
             CheckStatus::Fail,
-            'The ext-cparser extension is missing. Install or enable it before continuing.',
+            'The ext-cparser extension is missing. Parsing Qt headers will not work until it is installed and loaded.',
+            ['hint' => 'See cparser.stub.php for the extension API expected by this project.'],
         );
     }
 
@@ -152,15 +167,27 @@ class DoctorCommand extends Command
 
     private function checkCppCompiler(): CheckResult
     {
-        $compiler = $this->findFirstExecutable(['c++', 'g++', 'clang++']);
+        $candidates = ['c++', 'clang++', 'g++', 'cl'];
+        $compiler = $this->findFirstExecutable($candidates);
 
         if ($compiler !== null) {
+            $version = $this->commandSummary([$compiler, '--version']);
+            $details = [
+                'path' => $compiler,
+                'tool' => basename($compiler),
+                'candidates' => $this->candidateMap($candidates),
+            ];
+
+            if ($version !== null) {
+                $details['version'] = $version;
+            }
+
             return new CheckResult(
                 'cpp_compiler',
                 'C++ Compiler',
                 CheckStatus::Pass,
                 sprintf('Found compiler: %s.', basename($compiler)),
-                ['path' => $compiler],
+                $details,
             );
         }
 
@@ -168,7 +195,11 @@ class DoctorCommand extends Command
             'cpp_compiler',
             'C++ Compiler',
             CheckStatus::Fail,
-            'No C++ compiler found (c++, g++, or clang++).',
+            'No supported C++ compiler found. Install c++, clang++, g++, or cl.',
+            [
+                'candidates' => $this->candidateMap($candidates),
+                'hint' => 'Generated extensions are compiled as C++17 code.',
+            ],
         );
     }
 
@@ -177,12 +208,18 @@ class DoctorCommand extends Command
         $phpize = $this->systemInformation->findExecutable('phpize');
 
         if ($phpize !== null) {
+            $details = ['path' => $phpize];
+            $version = $this->commandSummary([$phpize, '--version']);
+            if ($version !== null) {
+                $details['version'] = $version;
+            }
+
             return new CheckResult(
                 'phpize',
                 'phpize',
                 CheckStatus::Pass,
                 'Found phpize.',
-                ['path' => $phpize],
+                $details,
             );
         }
 
@@ -190,51 +227,98 @@ class DoctorCommand extends Command
             'phpize',
             'phpize',
             CheckStatus::Fail,
-            'The phpize executable is required but was not found.',
+            'The phpize executable is required for extension bootstrap but was not found.',
+            ['hint' => 'Install the PHP development package that matches the PHP binary you are using.'],
         );
     }
 
-    private function checkBuildTool(): CheckResult
+    private function checkPhpConfig(): CheckResult
     {
-        $buildTool = $this->findFirstExecutable(['make', 'ninja']);
+        $phpConfig = $this->systemInformation->findExecutable('php-config');
 
-        if ($buildTool !== null) {
+        if ($phpConfig !== null) {
+            $details = ['path' => $phpConfig];
+            $version = $this->commandSummary([$phpConfig, '--version']);
+            if ($version !== null) {
+                $details['version'] = $version;
+            }
+
             return new CheckResult(
-                'build_tool',
-                'Build Tool',
+                'php_config',
+                'php-config',
                 CheckStatus::Pass,
-                sprintf('Found build tool: %s.', basename($buildTool)),
-                ['path' => $buildTool],
+                'Found php-config.',
+                $details,
             );
         }
 
         return new CheckResult(
-            'build_tool',
-            'Build Tool',
-            CheckStatus::Fail,
-            'No build tool found. Install make or ninja.',
-        );
-    }
-
-    private function checkCmake(): CheckResult
-    {
-        $cmake = $this->systemInformation->findExecutable('cmake');
-
-        if ($cmake !== null) {
-            return new CheckResult(
-                'cmake',
-                'CMake',
-                CheckStatus::Pass,
-                'Found CMake.',
-                ['path' => $cmake],
-            );
-        }
-
-        return new CheckResult(
-            'cmake',
-            'CMake',
+            'php_config',
+            'php-config',
             CheckStatus::Warn,
-            'CMake was not found. It is optional for now, but recommended.',
+            'php-config was not found. Configure may still work if PHP development files are installed, but explicit detection will be unavailable.',
+            ['hint' => 'Most package managers ship phpize and php-config together in the PHP development package.'],
+        );
+    }
+
+    private function checkMake(): CheckResult
+    {
+        $make = $this->systemInformation->findExecutable('make');
+
+        if ($make !== null) {
+            return new CheckResult(
+                'make',
+                'make',
+                CheckStatus::Pass,
+                'Found make.',
+                [
+                    'path' => $make,
+                    'version' => $this->commandSummary([$make, '--version']),
+                    'alternatives' => $this->candidateMap(['ninja', 'jom', 'nmake']),
+                ],
+            );
+        }
+
+        $alternatives = array_filter(
+            $this->candidateMap(['ninja', 'jom', 'nmake']),
+            static fn(string $path): bool => $path !== '',
+        );
+
+        return new CheckResult(
+            'make',
+            'make',
+            CheckStatus::Fail,
+            'The current bootstrap path invokes make directly, but make was not found.',
+            [
+                'alternatives' => $alternatives === [] ? (object) [] : $alternatives,
+                'hint' => 'ninja, jom, or nmake may be installed, but the current build bootstrap does not use them yet.',
+            ],
+        );
+    }
+
+    private function checkPkgConfig(): CheckResult
+    {
+        $pkgConfig = $this->systemInformation->findExecutable('pkg-config');
+
+        if ($pkgConfig !== null) {
+            return new CheckResult(
+                'pkg_config',
+                'pkg-config',
+                CheckStatus::Pass,
+                'Found pkg-config.',
+                [
+                    'path' => $pkgConfig,
+                    'version' => $this->commandSummary([$pkgConfig, '--version']),
+                ],
+            );
+        }
+
+        return new CheckResult(
+            'pkg_config',
+            'pkg-config',
+            CheckStatus::Warn,
+            'pkg-config was not found. Qt library flags may fall back to manual -L/-l resolution.',
+            ['hint' => 'Install pkg-config if you want automatic Qt6 module link flags from .pc files.'],
         );
     }
 
@@ -277,6 +361,10 @@ class DoctorCommand extends Command
                     $check->getMessage(),
                 ),
             );
+
+            foreach ($this->metaLines($check) as $line) {
+                $output->writeln(sprintf('  %s', $line));
+            }
         }
 
         $summary = sprintf(
@@ -339,5 +427,142 @@ class DoctorCommand extends Command
             CheckStatus::Warn => '<comment>[WARN]</comment>',
             CheckStatus::Fail => '<error>[FAIL]</error>',
         };
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function metaLines(CheckResult $check): array
+    {
+        $meta = $check->getMeta();
+        $lines = [];
+
+        if (isset($meta['os_name'], $meta['kernel'], $meta['arch'])) {
+            $lines[] = sprintf('system: %s, kernel %s, arch %s', $meta['os_name'], $meta['kernel'], $meta['arch']);
+        }
+
+        if (isset($meta['detected'], $meta['constraint'])) {
+            $lines[] = sprintf('requirement: %s, detected: %s', $meta['constraint'], $meta['detected']);
+        }
+
+        foreach (['path', 'tool', 'version', 'headers', 'libs', 'host_prefix', 'prefix', 'package', 'cflags'] as $key) {
+            if (!isset($meta[$key]) || !is_string($meta[$key]) || $meta[$key] === '') {
+                continue;
+            }
+
+            $label = str_replace('_', ' ', $key);
+            $lines[] = sprintf('%s: %s', $label, $meta[$key]);
+        }
+
+        if (isset($meta['headers_exists']) && is_bool($meta['headers_exists'])) {
+            $lines[] = sprintf('headers dir exists: %s', $meta['headers_exists'] ? 'yes' : 'no');
+        }
+
+        if (isset($meta['libs_exists']) && is_bool($meta['libs_exists'])) {
+            $lines[] = sprintf('libs dir exists: %s', $meta['libs_exists'] ? 'yes' : 'no');
+        }
+
+        if (isset($meta['hint']) && is_string($meta['hint']) && $meta['hint'] !== '') {
+            $lines[] = sprintf('hint: %s', $meta['hint']);
+        }
+
+        if (isset($meta['alternatives']) && is_array($meta['alternatives']) && $meta['alternatives'] !== []) {
+            $lines[] = sprintf('alternatives: %s', $this->formatNamedPaths($meta['alternatives']));
+        }
+
+        if (isset($meta['candidates']) && is_array($meta['candidates']) && $meta['candidates'] !== []) {
+            $lines[] = sprintf('searched: %s', $this->formatNamedPaths($meta['candidates']));
+        }
+
+        if (isset($meta['attempts']) && is_array($meta['attempts'])) {
+            foreach ($meta['attempts'] as $attempt) {
+                if (!is_array($attempt)) {
+                    continue;
+                }
+
+                $tool = is_string($attempt['tool'] ?? null) ? $attempt['tool'] : 'unknown';
+                $path = is_string($attempt['path'] ?? null) ? $attempt['path'] : 'not found';
+                $exitCode = (int) ($attempt['exit_code'] ?? -1);
+                $version = is_string($attempt['version'] ?? null) ? $attempt['version'] : null;
+
+                $line = sprintf('attempt: %s at %s exited %d', $tool, $path, $exitCode);
+                if ($version !== null && $version !== '') {
+                    $line .= sprintf(' (version %s)', $version);
+                }
+
+                $lines[] = $line;
+            }
+        }
+
+        return $lines;
+    }
+
+    /**
+     * @param list<string> $candidates
+     * @return array<string, string>
+     */
+    private function candidateMap(array $candidates): array
+    {
+        $resolved = [];
+
+        foreach ($candidates as $candidate) {
+            $path = $this->systemInformation->findExecutable($candidate);
+            if ($path !== null && $path !== '') {
+                $resolved[$candidate] = $path;
+            }
+        }
+
+        return $resolved;
+    }
+
+    /**
+     * @param array<string, string> $paths
+     */
+    private function formatNamedPaths(array $paths): string
+    {
+        $parts = [];
+
+        foreach ($paths as $name => $path) {
+            $parts[] = sprintf('%s=%s', $name, $path);
+        }
+
+        return implode(', ', $parts);
+    }
+
+    /**
+     * @param list<string> $command
+     */
+    private function commandSummary(array $command): ?string
+    {
+        $result = $this->systemInformation->runCommand($command);
+
+        if (!$result->isSuccessful()) {
+            return null;
+        }
+
+        return $this->firstMeaningfulLine($result);
+    }
+
+    private function firstMeaningfulLine(CommandResult $result): ?string
+    {
+        $combined = trim($result->getStdout() . "\n" . $result->getStderr());
+        if ($combined === '') {
+            return null;
+        }
+
+        $fallback = null;
+
+        foreach (preg_split('/\R+/', $combined) ?: [] as $line) {
+            $trimmed = trim($line);
+            if ($trimmed !== '') {
+                $fallback ??= $trimmed;
+
+                if (!str_ends_with($trimmed, ':') && preg_match('/\d/', $trimmed) === 1) {
+                    return $trimmed;
+                }
+            }
+        }
+
+        return $fallback;
     }
 }

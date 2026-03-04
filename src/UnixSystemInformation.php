@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace QtBuilder;
 
 use QtBuilder\Contracts\SystemInformation;
@@ -59,54 +61,155 @@ class UnixSystemInformation implements SystemInformation
 
         $qtpaths = $this->findFirstExecutable(['qtpaths6', 'qtpaths']);
         if ($qtpaths !== null) {
-            $result = $this->runCommand([$qtpaths, '--qt-version']);
-            $attempts[] = ['tool' => basename($qtpaths), 'path' => $qtpaths, 'exit_code' => $result->getExitCode()];
-            if ($result->isSuccessful()) {
+            $version = $this->runCommand([$qtpaths, '--qt-version']);
+            $headers = $this->runCommand([$qtpaths, '--query', 'QT_INSTALL_HEADERS']);
+            $libs = $this->runCommand([$qtpaths, '--query', 'QT_INSTALL_LIBS']);
+            $hostPrefix = $this->runCommand([$qtpaths, '--query', 'QT_HOST_PREFIX']);
+
+            $attempt = [
+                'tool' => basename($qtpaths),
+                'path' => $qtpaths,
+                'version_command' => '--qt-version',
+                'exit_code' => $version->getExitCode(),
+            ];
+
+            if ($version->isSuccessful()) {
+                $attempt['version'] = $this->trimOutput($version->getStdout());
+            }
+
+            $attempts[] = $attempt;
+
+            if ($version->isSuccessful() && $headers->isSuccessful()) {
+                $versionText = $this->trimOutput($version->getStdout());
+                $headersPath = $this->trimOutput($headers->getStdout());
+                $libsPath = $this->trimOutput($libs->getStdout());
+                $hostPrefixPath = $this->trimOutput($hostPrefix->getStdout());
+
                 return new QtDetectionResult(
                     true,
-                    sprintf('Qt discovered via %s.', basename($qtpaths)),
-                    ['tool' => basename($qtpaths), 'path' => $qtpaths],
+                    sprintf(
+                        'Qt%s discovered via %s.',
+                        $versionText !== null ? ' ' . $versionText : '',
+                        basename($qtpaths),
+                    ),
+                    [
+                        'tool' => basename($qtpaths),
+                        'path' => $qtpaths,
+                        'version' => $versionText,
+                        'headers' => $headersPath,
+                        'headers_exists' => $headersPath !== null ? is_dir($headersPath) : false,
+                        'libs' => $libsPath,
+                        'libs_exists' => $libsPath !== null ? is_dir($libsPath) : false,
+                        'host_prefix' => $hostPrefixPath,
+                    ],
                 );
             }
         }
 
         $qmake = $this->findFirstExecutable(['qmake6', 'qmake']);
         if ($qmake !== null) {
-            $result = $this->runCommand([$qmake, '-query', 'QT_VERSION']);
-            $attempts[] = ['tool' => basename($qmake), 'path' => $qmake, 'exit_code' => $result->getExitCode()];
-            if ($result->isSuccessful()) {
+            $version = $this->runCommand([$qmake, '-query', 'QT_VERSION']);
+            $headers = $this->runCommand([$qmake, '-query', 'QT_INSTALL_HEADERS']);
+            $libs = $this->runCommand([$qmake, '-query', 'QT_INSTALL_LIBS']);
+            $hostPrefix = $this->runCommand([$qmake, '-query', 'QT_HOST_PREFIX']);
+
+            $attempt = [
+                'tool' => basename($qmake),
+                'path' => $qmake,
+                'version_command' => '-query QT_VERSION',
+                'exit_code' => $version->getExitCode(),
+            ];
+
+            if ($version->isSuccessful()) {
+                $attempt['version'] = $this->trimOutput($version->getStdout());
+            }
+
+            $attempts[] = $attempt;
+
+            if ($version->isSuccessful() && $headers->isSuccessful()) {
+                $versionText = $this->trimOutput($version->getStdout());
+                $headersPath = $this->trimOutput($headers->getStdout());
+                $libsPath = $this->trimOutput($libs->getStdout());
+                $hostPrefixPath = $this->trimOutput($hostPrefix->getStdout());
+
                 return new QtDetectionResult(
                     true,
-                    sprintf('Qt discovered via %s.', basename($qmake)),
-                    ['tool' => basename($qmake), 'path' => $qmake],
+                    sprintf(
+                        'Qt%s discovered via %s.',
+                        $versionText !== null ? ' ' . $versionText : '',
+                        basename($qmake),
+                    ),
+                    [
+                        'tool' => basename($qmake),
+                        'path' => $qmake,
+                        'version' => $versionText,
+                        'headers' => $headersPath,
+                        'headers_exists' => $headersPath !== null ? is_dir($headersPath) : false,
+                        'libs' => $libsPath,
+                        'libs_exists' => $libsPath !== null ? is_dir($libsPath) : false,
+                        'host_prefix' => $hostPrefixPath,
+                    ],
                 );
             }
         }
 
         $pkgConfig = $this->findExecutable('pkg-config');
         if ($pkgConfig !== null) {
-            $result = $this->runCommand([$pkgConfig, '--exists', 'Qt6Core']);
-            $attempts[] = ['tool' => 'pkg-config', 'path' => $pkgConfig, 'exit_code' => $result->getExitCode()];
-            if ($result->isSuccessful()) {
+            $exists = $this->runCommand([$pkgConfig, '--exists', 'Qt6Core']);
+            $version = $this->runCommand([$pkgConfig, '--modversion', 'Qt6Core']);
+            $cflags = $this->runCommand([$pkgConfig, '--cflags', 'Qt6Core']);
+            $libs = $this->runCommand([$pkgConfig, '--libs', 'Qt6Core']);
+            $prefix = $this->runCommand([$pkgConfig, '--variable=prefix', 'Qt6Core']);
+
+            $attempt = [
+                'tool' => 'pkg-config',
+                'path' => $pkgConfig,
+                'package' => 'Qt6Core',
+                'exit_code' => $exists->getExitCode(),
+            ];
+
+            if ($version->isSuccessful()) {
+                $attempt['version'] = $this->trimOutput($version->getStdout());
+            }
+
+            $attempts[] = $attempt;
+
+            if ($exists->isSuccessful()) {
+                $versionText = $this->trimOutput($version->getStdout());
+
                 return new QtDetectionResult(
                     true,
-                    'Qt discovered via pkg-config (Qt6Core).',
-                    ['tool' => 'pkg-config', 'path' => $pkgConfig, 'package' => 'Qt6Core'],
+                    sprintf(
+                        'Qt%s discovered via pkg-config (Qt6Core).',
+                        $versionText !== null ? ' ' . $versionText : '',
+                    ),
+                    [
+                        'tool' => 'pkg-config',
+                        'path' => $pkgConfig,
+                        'package' => 'Qt6Core',
+                        'version' => $versionText,
+                        'cflags' => $this->trimOutput($cflags->getStdout()),
+                        'libs' => $this->trimOutput($libs->getStdout()),
+                        'prefix' => $this->trimOutput($prefix->getStdout()),
+                    ],
                 );
             }
         }
 
         return new QtDetectionResult(
             false,
-            'No working Qt discovery path found (qtpaths/qmake/pkg-config Qt6Core).',
-            ['attempts' => $attempts],
+            'No working Qt discovery path found. Install Qt 6 development tools or pass --qt-path to build commands.',
+            [
+                'hint' => 'Expected one of: qtpaths/qtpaths6, qmake/qmake6, or pkg-config with Qt6Core.',
+                'attempts' => $attempts,
+            ],
         );
     }
 
     /**
      * @param list<string> $command
      */
-    private function runCommand(array $command, float $timeoutSeconds = 5.0): CommandResult
+    public function runCommand(array $command, float $timeoutSeconds = 5.0): CommandResult
     {
         $process = new Process($command);
         $process->setTimeout($timeoutSeconds);
@@ -139,5 +242,12 @@ class UnixSystemInformation implements SystemInformation
         }
 
         return null;
+    }
+
+    private function trimOutput(string $output): ?string
+    {
+        $trimmed = trim($output);
+
+        return $trimmed === '' ? null : $trimmed;
     }
 }

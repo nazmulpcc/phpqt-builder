@@ -18,6 +18,11 @@ dataset('private lifecycle classes', [
         'QDefaultPrivateLifecycleThing',
         'RETURN_LONG((zend_long)(QDefaultPrivateLifecycleThing::version()));',
     ],
+    'protected ro5 lifecycle macro' => [
+        'qprotectedro5thing.h',
+        'QProtectedRo5Thing',
+        'RETURN_LONG((zend_long)(QProtectedRo5Thing::version()));',
+    ],
 ]);
 
 it('skips template classes', function (): void {

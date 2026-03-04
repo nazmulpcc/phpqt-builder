@@ -102,6 +102,7 @@ class BuildCommand extends Command
         }
 
         $output->writeln(sprintf('<info>Scanning complete.</info> %d candidates queued, %d filtered before generation.', count($acceptedCandidates), count($skippedClasses)));
+        $this->renderModuleAcceptance($output, $modules, $acceptedCandidates, $skippedClasses);
         $classStructures = $this->discoveryService->prepareClassStructures(
             $acceptedCandidates,
             $outputDir,
@@ -198,6 +199,7 @@ class BuildCommand extends Command
             $output->writeln(sprintf('  <comment>Wrote:</comment> %s', $file));
         }
         $output->writeln(sprintf('<info>Generated %d class wrapper(s); %d class(es) skipped; %d error(s).</info>', count($generatedClasses), count($skippedClasses), count($errors)));
+        $this->renderModuleAcceptance($output, $modules, $acceptedCandidates, $skippedClasses);
 
         if ($generatedClasses === [] || $errors !== [] || $bootstrapError !== null) {
             return self::FAILURE;
@@ -261,6 +263,26 @@ class BuildCommand extends Command
             ));
             $output->writeln(sprintf('    <comment>stdout:</comment> %s', $step->stdoutLogPath));
             $output->writeln(sprintf('    <comment>stderr:</comment> %s', $step->stderrLogPath));
+        }
+    }
+
+    /**
+     * @param list<string> $modules
+     * @param list<HeaderCandidate> $acceptedCandidates
+     * @param list<array<string, string|null>> $skippedClasses
+     */
+    private function renderModuleAcceptance(OutputInterface $output, array $modules, array $acceptedCandidates, array $skippedClasses): void
+    {
+        $output->writeln('<comment>Module acceptance:</comment>');
+
+        foreach ($this->discoveryService->moduleAcceptance($modules, $acceptedCandidates, $skippedClasses) as $row) {
+            $output->writeln(sprintf(
+                '  <comment>%s:</comment> %d/%d accepted (%s%%)',
+                $row['module'],
+                $row['accepted'],
+                $row['total'],
+                number_format($row['percent'], 1),
+            ));
         }
     }
 
@@ -358,6 +380,10 @@ class BuildCommand extends Command
         $generatedPhpClasses = [];
         $passes = 0;
         $classNamespaces = $this->classNamespaces($acceptedCandidates);
+        $candidateModules = [];
+        foreach ($acceptedCandidates as $candidate) {
+            $candidateModules[$candidate->className] = $candidate->module;
+        }
 
         do {
             $passes++;
@@ -384,6 +410,7 @@ class BuildCommand extends Command
                 $classData = $preparedClassDataByClass[$candidate->className] ?? null;
                 if (!is_array($classData)) {
                     $errorsByClass[$candidate->className] = [
+                        'module' => $candidate->module,
                         'class' => $candidate->className,
                         'header' => $candidate->parseHeader,
                         'reason_code' => 'missing_class_data',
@@ -418,6 +445,7 @@ class BuildCommand extends Command
                     unset($skippedByClass[$result->className]);
                 } elseif ($result->status === 'skipped') {
                     $skippedByClass[$result->className] = [
+                        'module' => $candidateModules[$result->className] ?? null,
                         'class' => $result->className,
                         'header' => $result->headerPath,
                         'reason_code' => $result->reasonCode,
@@ -425,6 +453,7 @@ class BuildCommand extends Command
                     ];
                 } else {
                     $errorsByClass[$candidate->className] = [
+                        'module' => $candidate->module,
                         'class' => $candidate->className,
                         'header' => $candidate->parseHeader,
                         'reason_code' => 'generation_failed',
@@ -474,6 +503,7 @@ class BuildCommand extends Command
                 $phpClass = $generatedPhpClasses[$className] ?? null;
                 if ($phpClass === null) {
                     $errorsByClass[$className] = [
+                        'module' => $candidateModules[$className] ?? null,
                         'class' => $className,
                         'header' => '',
                         'reason_code' => 'missing_php_class',

@@ -331,6 +331,70 @@ it('supports inherited enum types in overrides', function (): void {
         Assert::assertStringContainsString('function setMode(int $mode): void {}', $stub);
 });
 
+it('keeps enum-only base shells so inherited flag methods survive', function (): void {
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+        $classHeadersFile = $outputDir . '/class_headers.json';
+        mkdir($outputDir, 0755, true);
+        $baseHeader = $outputDir . '/qiodevicebase.h';
+        $childHeader = $outputDir . '/qdatastream.h';
+        file_put_contents($baseHeader, <<<'CPP'
+enum OpenModeFlag {
+    ReadOnly = 0x1,
+    WriteOnly = 0x2,
+};
+using OpenMode = int;
+
+class QIODeviceBase
+{
+public:
+    enum OpenModeFlag {
+        ReadOnly = 0x1,
+        WriteOnly = 0x2,
+    };
+    using OpenMode = int;
+};
+CPP);
+        file_put_contents($childHeader, <<<'CPP'
+#include "qiodevicebase.h"
+
+class QDataStream : public QIODeviceBase
+{
+public:
+    OpenMode status() const;
+    void setStatus(OpenMode status);
+};
+CPP);
+        file_put_contents($classHeadersFile, json_encode([
+            'QIODeviceBase' => $baseHeader,
+            'QDataStream' => $childHeader,
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $childHeader,
+            'class' => 'QDataStream',
+            '--include' => [
+                $outputDir,
+            ],
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QIODeviceBase,QDataStream',
+            '--class-headers-file' => $classHeadersFile,
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        Assert::assertSame('ok', $payload['status']);
+        Assert::assertNotContains('unsupported_parent_class', array_column($payload['skipped_methods'], 'reason_code'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qdatastream.stub.php');
+        Assert::assertStringContainsString('class QDataStream extends QIODeviceBase', $stub);
+});
+
 it('allows concrete children of abstract parents', function (): void {
         $fixtureRoot = qt_fixture_path('abstract-qt');
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));

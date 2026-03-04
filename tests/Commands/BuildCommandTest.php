@@ -51,6 +51,8 @@ it('generates the extension tree from a fixture qt root', function (): void {
             'Running 2 parallel discovery worker(s)...',
             'Class structure cache:',
             'Discovery pass 1',
+            'Module acceptance:',
+            'QtCore:',
         )
         ->and($bootstrapper->contexts)->toHaveCount(1);
 
@@ -117,6 +119,8 @@ it('reuses an existing discovery cache', function (): void {
         'discovery_cache.json',
         'accepted_candidates.json',
         'allowed_classes.json',
+        'Module acceptance:',
+        'QtCore:',
     )->not->toContain('Running 2 parallel discovery worker(s)...');
 
     $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
@@ -233,7 +237,7 @@ it('rewrites cached allow lists to actual generated classes', function (): void 
     );
 
     expect($result)->toBeSuccessfulCommandResult();
-    expect($result['display'])->toContain('Using cached build metadata:', 'Re-evaluating generated dependency set');
+    expect($result['display'])->toContain('Using cached build metadata:', 'Re-evaluating generated dependency set', 'Module acceptance:', 'QtCore:');
 
     $allowedClasses = qt_decode_json((string) file_get_contents($metadataDir . '/allowed_classes.json'));
     expect($allowedClasses)->toBe(['QCStringHolder']);

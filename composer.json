@@ -29,7 +29,9 @@
     },
     "scripts": {
         "test": "./vendor/bin/pest --parallel",
-        "test:runtime": "./vendor/bin/pest --configuration=phpunit.runtime.xml --parallel"
+        "test:profile": "./vendor/bin/pest --configuration=phpunit.xml --profile",
+        "test:runtime": "./vendor/bin/pest --configuration=phpunit.runtime.xml --parallel",
+        "test:runtime:profile": "./vendor/bin/pest --configuration=phpunit.runtime.xml --profile"
     },
     "authors": [
         {

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace QtBuilder\Tests\Support;
 
 use QtBuilder\Contracts\SystemInformation;
+use QtBuilder\System\CommandResult;
 use QtBuilder\System\QtDetectionResult;
 
 final class FakeSystemInformation implements SystemInformation
@@ -18,6 +19,11 @@ final class FakeSystemInformation implements SystemInformation
      * @var array<string, string>
      */
     private array $executables = [];
+
+    /**
+     * @var array<string, CommandResult>
+     */
+    private array $commandResults = [];
 
     private QtDetectionResult $qtDetectionResult;
 
@@ -44,7 +50,6 @@ final class FakeSystemInformation implements SystemInformation
         $instance->setExecutable('phpize', '/usr/bin/phpize');
         $instance->setExecutable('php-config', '/usr/bin/php-config');
         $instance->setExecutable('make', '/usr/bin/make');
-        $instance->setExecutable('cmake', '/usr/bin/cmake');
         $instance->setQtDetectionResult(
             new QtDetectionResult(
                 true,
@@ -87,6 +92,14 @@ final class FakeSystemInformation implements SystemInformation
         $this->qtDetectionResult = $qtDetectionResult;
     }
 
+    /**
+     * @param list<string> $command
+     */
+    public function setCommandResult(array $command, CommandResult $result): void
+    {
+        $this->commandResults[$this->commandKey($command)] = $result;
+    }
+
     public function getOsFamily(): string
     {
         return $this->osFamily;
@@ -122,8 +135,21 @@ final class FakeSystemInformation implements SystemInformation
         return $this->executables[$name] ?? null;
     }
 
+    public function runCommand(array $command, float $timeoutSeconds = 5.0): CommandResult
+    {
+        return $this->commandResults[$this->commandKey($command)] ?? new CommandResult(1, '', 'command not stubbed');
+    }
+
     public function detectQt(): QtDetectionResult
     {
         return $this->qtDetectionResult;
+    }
+
+    /**
+     * @param list<string> $command
+     */
+    private function commandKey(array $command): string
+    {
+        return implode("\0", $command);
     }
 }

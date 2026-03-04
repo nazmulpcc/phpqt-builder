@@ -149,7 +149,7 @@ class ClassGenerationService
         $skippedMethods = [...$skippedMethods, ...$abstractConstructorAdjusted['skipped_methods']];
         $phpClass = $this->stripQObjectRuntimeMethods($phpClass);
 
-        if (count($phpClass->methods) === 0 && count($phpClass->signals) === 0 && !$phpClass->isAbstract) {
+        if (!$this->shouldGenerateClassShell($phpClass, $classData)) {
             return ClassGenerationResult::skipped(
                 $className,
                 $headerPath,
@@ -332,7 +332,7 @@ class ClassGenerationService
         $skippedMethods = [...$skippedMethods, ...$abstractConstructorAdjusted['skipped_methods']];
         $phpClass = $this->stripQObjectRuntimeMethods($phpClass);
 
-        if (count($phpClass->methods) === 0 && count($phpClass->signals) === 0 && !$phpClass->isAbstract) {
+        if (!$this->shouldGenerateClassShell($phpClass, $classData)) {
             return ClassGenerationResult::skipped(
                 $className,
                 $headerPath,
@@ -343,6 +343,25 @@ class ClassGenerationService
         }
 
         return ClassGenerationResult::ok($className, $headerPath, $phpClass, $skippedMethods);
+    }
+
+    /**
+     * @param array<string, mixed> $classData
+     */
+    private function shouldGenerateClassShell(PhpClass $phpClass, array $classData): bool
+    {
+        if ($phpClass->isAbstract) {
+            return true;
+        }
+
+        if ($phpClass->methods !== [] || $phpClass->signals !== [] || $phpClass->properties !== []) {
+            return true;
+        }
+
+        $enumNames = is_array($classData['enum_names'] ?? null) ? $classData['enum_names'] : [];
+        $flagAliases = is_array($classData['flag_aliases'] ?? null) ? $classData['flag_aliases'] : [];
+
+        return $enumNames !== [] || $flagAliases !== [];
     }
 
     /**
@@ -865,7 +884,14 @@ class ClassGenerationService
         $returnType = is_string($method['return_type'] ?? null) ? $method['return_type'] : 'void';
         $mappedReturnType = $this->typeMapper->map($returnType);
         $returnStrategy = $this->typeBridge->returnStrategyForCpp($mappedReturnType, $returnType);
-        if ($returnStrategy === 'value_object') {
+        if ($returnStrategy === 'array') {
+            if (!$this->typeBridge->isSupportedContainerType($returnType)) {
+                return [
+                    'code' => 'unsupported_virtual_override_signature',
+                    'message' => sprintf('Virtual method %s() return type %s is not supported for PHP overrides.', $methodName, $returnType),
+                ];
+            }
+        } elseif ($returnStrategy === 'value_object') {
             $unsupportedReturnReason = $this->unsupportedVirtualValueObjectReason(
                 $mappedReturnType,
                 $returnType,
@@ -878,7 +904,7 @@ class ClassGenerationService
             if ($unsupportedReturnReason !== null) {
                 return $unsupportedReturnReason;
             }
-        } elseif (!$this->isSupportedVirtualReturnStrategy($returnStrategy)) {
+        } elseif (!$this->isSupportedVirtualReturnStrategy($returnStrategy, $returnType)) {
             return [
                 'code' => 'unsupported_virtual_override_signature',
                 'message' => sprintf('Virtual method %s() return type %s is not supported for PHP overrides.', $methodName, $returnType),
@@ -904,7 +930,18 @@ class ClassGenerationService
 
             $phpType = $this->typeMapper->map($cppType);
             $strategy = $this->typeBridge->returnStrategyForCpp($phpType, $cppType);
-            if (!in_array($strategy, ['scalar', 'string', 'value_object', 'qobject_pointer'], true)) {
+            if ($strategy === 'array') {
+                if (!$this->typeBridge->isSupportedContainerType($cppType)) {
+                    return [
+                        'code' => 'unsupported_virtual_override_signature',
+                        'message' => sprintf('Virtual method %s() uses parameter type %s which is not supported for PHP overrides.', $methodName, $cppType),
+                    ];
+                }
+
+                continue;
+            }
+
+            if (!$this->isSupportedVirtualParameterStrategy($strategy, $cppType)) {
                 return [
                     'code' => 'unsupported_virtual_override_signature',
                     'message' => sprintf('Virtual method %s() uses parameter type %s which is not supported for PHP overrides.', $methodName, $cppType),
@@ -1057,9 +1094,22 @@ class ClassGenerationService
         return null;
     }
 
-    private function isSupportedVirtualReturnStrategy(string $strategy): bool
+    private function isSupportedVirtualReturnStrategy(string $strategy, string $cppType): bool
     {
+        if ($strategy === 'array') {
+            return $this->typeBridge->isSupportedContainerType($cppType);
+        }
+
         return in_array($strategy, ['void', 'scalar', 'string', 'qobject_pointer'], true);
+    }
+
+    private function isSupportedVirtualParameterStrategy(string $strategy, string $cppType): bool
+    {
+        if ($strategy === 'array') {
+            return $this->typeBridge->isSupportedContainerType($cppType);
+        }
+
+        return in_array($strategy, ['scalar', 'string', 'value_object', 'qobject_pointer'], true);
     }
 
     private function isWritableReferenceType(string $cppType): bool
@@ -1825,7 +1875,8 @@ class ClassGenerationService
                 }
             }
 
-            if ($this->containsDestructorSignature($segment, $className)) {
+            if ($this->containsDestructorSignature($segment, $className)
+                || $this->containsDefaultedRo5LifecycleMacro($segment, $className)) {
                 $hasExplicitDestructor = true;
                 if ($access !== 'public') {
                     $hasPublicDestructor = false;
@@ -2365,6 +2416,14 @@ class ClassGenerationService
     private function containsDestructorSignature(string $segment, string $className): bool
     {
         return preg_match('/~\s*' . preg_quote($className, '/') . '\s*\(/', $segment) === 1;
+    }
+
+    private function containsDefaultedRo5LifecycleMacro(string $segment, string $className): bool
+    {
+        return preg_match(
+            '/\bQT_DECLARE_RO5_SMF_AS_DEFAULTED\s*\(\s*' . preg_quote($className, '/') . '\s*\)/',
+            $segment,
+        ) === 1;
     }
 
     private function isCopyConstructorSignature(string $signature, string $className): bool

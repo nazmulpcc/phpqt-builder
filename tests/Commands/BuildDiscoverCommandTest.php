@@ -59,6 +59,8 @@ it('writes reusable build metadata during discovery', function (): void {
         'Class structure cache:',
         '0 hit(s), 5 miss(es)',
         'Discovery pass 1',
+        'Module acceptance:',
+        'QtCore:',
     );
     expect(is_file($metadataDir . '/discovery_cache.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/accepted_candidates.json'))->toBeTrue()
@@ -112,6 +114,7 @@ it('reuses class structure cache after generated metadata is cleared', function 
 
     expect($secondRun)->toBeSuccessfulCommandResult();
     expect($secondRun['display'])->toContain('Class structure cache:', '5 hit(s), 0 miss(es)')
+        ->toContain('Module acceptance:', 'QtCore:')
         ->not->toContain('Building cached class structures with 2 parallel worker(s)...');
     expect(is_file($metadataDir . '/discovery_cache.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/accepted_candidates.json'))->toBeTrue()
@@ -146,6 +149,6 @@ it('feeds discovery cache into the build command', function (): void {
     );
 
     expect($build)->toBeSuccessfulCommandResult()
-        ->and($build['display'])->toContain('Using cached build metadata:')
+        ->and($build['display'])->toContain('Using cached build metadata:', 'Module acceptance:', 'QtCore:')
         ->and($bootstrapper->contexts)->toHaveCount(1);
 });

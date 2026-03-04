@@ -53,6 +53,51 @@ it('supports common qt container parameters and returns', function (): void {
         Assert::assertStringContainsString('#include "qt_qmodelindex.h"', $cpp);
 });
 
+it('supports common qt container signatures for virtual overrides', function (): void {
+        $fixtureRoot = qt_fixture_path('policy-qt');
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qvirtualcontainerholder.h',
+            'class' => 'QVirtualContainerHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QVirtualContainerHolder,QModelIndex,QPersistentModelIndex,QAccessibleInterface,QListWidgetItem,QVariant',
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        Assert::assertSame('ok', $payload['status']);
+        Assert::assertNotContains('unsupported_virtual_override_signature', array_column($payload['skipped_methods'], 'reason_code'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qvirtualcontainerholder.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qvirtualcontainerholder.cpp');
+
+        Assert::assertStringContainsString('abstract public function mimeTypes(): array;', $stub);
+        Assert::assertStringContainsString('abstract public function selectedIndexes(): array;', $stub);
+        Assert::assertStringContainsString('abstract public function roleNames(): array;', $stub);
+        Assert::assertStringContainsString('abstract public function itemData(): array;', $stub);
+        Assert::assertStringContainsString('abstract public function setItemData(array $roles): void;', $stub);
+        Assert::assertStringContainsString('abstract public function dataChanged(QModelIndex $topLeft, QModelIndex $bottomRight, array $roles): void;', $stub);
+        Assert::assertStringContainsString('abstract public function selectedItems(): array;', $stub);
+        Assert::assertStringContainsString('abstract public function convertFromMime(): array;', $stub);
+        Assert::assertStringContainsString('abstract public function convertToMime(array $formats): void;', $stub);
+        Assert::assertStringContainsString('abstract public function consumeWidgetItems(array $items): void;', $stub);
+
+        Assert::assertStringContainsString('ZEND_RAW_FENTRY("mimeTypes", NULL, arginfo_class_Qt_Core_QVirtualContainerHolder_mimeTypes, ZEND_ACC_PUBLIC | ZEND_ACC_ABSTRACT, NULL, NULL)', $cpp);
+        Assert::assertStringContainsString('HashTable *_qt_native_return_ht = Z_ARRVAL_P(&_qt_retval);', $cpp);
+        Assert::assertStringContainsString('qt_variant_to_zval(&_qt_value_0, _qt_it_0.value());', $cpp);
+        Assert::assertStringContainsString('Expected PHP array for Qt container conversion.', $cpp);
+        Assert::assertStringContainsString('QMap<int, QVariant>()', $cpp);
+        Assert::assertStringContainsString('QList<QByteArray>()', $cpp);
+});
+
 it('keeps writable container references unsupported', function (): void {
         $fixtureRoot = qt_fixture_path('policy-qt');
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));

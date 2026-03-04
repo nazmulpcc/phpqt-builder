@@ -848,6 +848,25 @@ class TypeBridge
     {
         $base = $this->normalizeCppType($cppType);
 
+        if ($this->isPointerType($cppType)) {
+            if ($base === 'QString') {
+                return sprintf(
+                    "if (%s != NULL) {\n    QByteArray _utf8 = %s->toUtf8();\n    RETURN_STRINGL(_utf8.constData(), _utf8.size());\n}\n    RETURN_EMPTY_STRING()",
+                    $varName,
+                    $varName,
+                );
+            }
+
+            if ($base === 'QByteArray') {
+                return sprintf(
+                    "if (%s != NULL) {\n    RETURN_STRINGL(%s->constData(), %s->size());\n}\n    RETURN_EMPTY_STRING()",
+                    $varName,
+                    $varName,
+                    $varName,
+                );
+            }
+        }
+
         if ($base === 'QByteArray') {
             return sprintf('RETURN_STRINGL(%s.constData(), %s.size())', $varName, $varName);
         }
@@ -968,6 +987,36 @@ class TypeBridge
         if ($strategy === 'string') {
             $base = $this->normalizeCppType($cppType);
 
+            if ($this->isPointerType($cppType)) {
+                if ($base === 'QString') {
+                    $utf8Var = $paramIndex === null
+                        ? '_qt_utf8'
+                        : sprintf('_qt_utf8_%d', $paramIndex);
+
+                    return sprintf(
+                        "if (%s != NULL) {\n    QByteArray %s = %s->toUtf8();\n    ZVAL_STRINGL(%s, %s.constData(), %s.size());\n} else {\n    ZVAL_NULL(%s);\n}",
+                        $sourceExpr,
+                        $utf8Var,
+                        $sourceExpr,
+                        $zvalVar,
+                        $utf8Var,
+                        $utf8Var,
+                        $zvalVar,
+                    );
+                }
+
+                if ($base === 'QByteArray') {
+                    return sprintf(
+                        "if (%s != NULL) {\n    ZVAL_STRINGL(%s, %s->constData(), %s->size());\n} else {\n    ZVAL_NULL(%s);\n}",
+                        $sourceExpr,
+                        $zvalVar,
+                        $sourceExpr,
+                        $sourceExpr,
+                        $zvalVar,
+                    );
+                }
+            }
+
             if ($base === 'QByteArray') {
                 return sprintf('ZVAL_STRINGL(%s, %s.constData(), %s.size());', $zvalVar, $sourceExpr, $sourceExpr);
             }
@@ -1084,6 +1133,7 @@ class TypeBridge
                 default => $this->phpIntToNativeExpr($cppType, '0'),
             },
             'string' => sprintf('%s()', $this->normalizeCppType($cppType)),
+            'array' => sprintf('%s()', $this->normalizeCppType($cppType)),
             'qobject_pointer' => 'NULL',
             default => '{}',
         };

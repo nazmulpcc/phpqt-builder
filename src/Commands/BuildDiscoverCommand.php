@@ -59,6 +59,7 @@ class BuildDiscoverCommand extends Command
             count($discovery->acceptedCandidates),
             count($discovery->skippedClasses),
         ));
+        $this->renderModuleAcceptance($output, $modules, $discovery->acceptedCandidates, $discovery->skippedClasses);
 
         if ($discovery->errors !== []) {
             foreach ($discovery->errors as $error) {
@@ -111,5 +112,25 @@ class BuildDiscoverCommand extends Command
         $detected = trim((string) shell_exec($command . ' 2>/dev/null'));
 
         return max(1, (int) $detected ?: 1);
+    }
+
+    /**
+     * @param list<string> $modules
+     * @param list<\QtBuilder\Scanning\HeaderCandidate> $acceptedCandidates
+     * @param list<array<string, string|null>> $skippedClasses
+     */
+    private function renderModuleAcceptance(OutputInterface $output, array $modules, array $acceptedCandidates, array $skippedClasses): void
+    {
+        $output->writeln('<comment>Module acceptance:</comment>');
+
+        foreach ($this->discoveryService->moduleAcceptance($modules, $acceptedCandidates, $skippedClasses) as $row) {
+            $output->writeln(sprintf(
+                '  <comment>%s:</comment> %d/%d accepted (%s%%)',
+                $row['module'],
+                $row['accepted'],
+                $row['total'],
+                number_format($row['percent'], 1),
+            ));
+        }
     }
 }
