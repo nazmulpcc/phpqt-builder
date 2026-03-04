@@ -237,18 +237,18 @@ $reloadList = static function () use ($controller, $list, $search): void {
             continue;
         }
         $item = new QListWidgetItem(str_replace('-', ' ', $label));
-        $item->setData(0, $file);
+        $item->setData(0, new \Qt\Core\QVariant($file));
         $list->addItem($item);
     }
 };
 
 $reloadList();
 
-$search->input()->connectSignal('textChanged(QString)', $reloadList);
-$title->connectSignal('textChanged(QString)', [$controller, 'markDirty']);
-$editor->connectSignal('textChanged()', [$controller, 'markDirty']);
+$search->input()->connect('textChanged(QString)', $reloadList);
+$title->connect('textChanged(QString)', [$controller, 'markDirty']);
+$editor->connect('textChanged()', [$controller, 'markDirty']);
 
-$list->connectSignal('currentRowChanged(int)', static function (int $row) use ($list, $controller, $banner): void {
+$list->connect('currentRowChanged(int)', static function (int $row) use ($list, $controller, $banner): void {
     $item = $list->item($row);
     if ($item === null) {
         return;

@@ -742,6 +742,35 @@ class TypeBridge
      */
     public function zvalToNativeExpr(string $phpType, string $cppType, string $varName, bool $nullable = false): string
     {
+        if ($nullable) {
+            return match ($phpType) {
+                'int' => sprintf(
+                    '(%1$s != NULL && Z_TYPE_P(%1$s) == IS_LONG ? %2$s : %3$s)',
+                    $varName,
+                    $this->phpIntToNativeExpr($cppType, sprintf('Z_LVAL_P(%s)', $varName)),
+                    $this->phpIntToNativeExpr($cppType, '0'),
+                ),
+                'float' => sprintf(
+                    '(%1$s != NULL && Z_TYPE_P(%1$s) == IS_DOUBLE ? (%2$s)Z_DVAL_P(%1$s) : (%2$s)0.0)',
+                    $varName,
+                    $this->cppCastType($cppType),
+                ),
+                'bool' => sprintf('(%1$s != NULL && Z_TYPE_P(%1$s) == IS_TRUE)', $varName),
+                'string' => sprintf(
+                    '(%1$s != NULL && Z_TYPE_P(%1$s) == IS_STRING ? %2$s : %3$s)',
+                    $varName,
+                    $this->phpStringToNativeExpr($cppType, sprintf('Z_STR_P(%s)', $varName)),
+                    $this->defaultNullableStringExpr($cppType),
+                ),
+                default => null,
+            } ?? match ($phpType) {
+                'array' => $varName,
+                default => $this->isObjectType($phpType)
+                    ? $this->phpObjectToNativeExpr($phpType, $cppType, $varName, true)
+                    : $varName,
+            };
+        }
+
         return match ($phpType) {
             'int' => $this->phpIntToNativeExpr($cppType, sprintf('Z_LVAL_P(%s)', $varName)),
             'float' => sprintf('(%s)Z_DVAL_P(%s)', $this->cppCastType($cppType), $varName),
@@ -755,6 +784,35 @@ class TypeBridge
 
     private function zvalToNativeRvalueExpr(string $phpType, string $cppType, string $varName, bool $nullable = false): string
     {
+        if ($nullable) {
+            return match ($phpType) {
+                'int' => sprintf(
+                    '(%1$s != NULL && Z_TYPE_P(%1$s) == IS_LONG ? %2$s : %3$s)',
+                    $varName,
+                    $this->phpIntToNativeExpr($cppType, sprintf('Z_LVAL_P(%s)', $varName)),
+                    $this->phpIntToNativeExpr($cppType, '0'),
+                ),
+                'float' => sprintf(
+                    '(%1$s != NULL && Z_TYPE_P(%1$s) == IS_DOUBLE ? (%2$s)Z_DVAL_P(%1$s) : (%2$s)0.0)',
+                    $varName,
+                    $this->cppCastType($cppType),
+                ),
+                'bool' => sprintf('(%1$s != NULL && Z_TYPE_P(%1$s) == IS_TRUE)', $varName),
+                'string' => sprintf(
+                    '(%1$s != NULL && Z_TYPE_P(%1$s) == IS_STRING ? %2$s : %3$s)',
+                    $varName,
+                    $this->phpStringToNativeExpr($cppType, sprintf('Z_STR_P(%s)', $varName)),
+                    $this->defaultNullableStringExpr($cppType),
+                ),
+                default => null,
+            } ?? match ($phpType) {
+                'array' => $varName,
+                default => $this->isObjectType($phpType)
+                    ? $this->phpObjectToNativeRvalueExpr($phpType, $cppType, $varName, true)
+                    : $varName,
+            };
+        }
+
         return match ($phpType) {
             'int' => $this->phpIntToNativeExpr($cppType, sprintf('Z_LVAL_P(%s)', $varName)),
             'float' => sprintf('(%s)Z_DVAL_P(%s)', $this->cppCastType($cppType), $varName),
@@ -809,7 +867,7 @@ class TypeBridge
         // If C++ expects a pointer, pass the pointer directly
         if (str_contains($cppType, '*') && !str_contains($cppType, '&')) {
             if ($nullable) {
-                return sprintf('(%s != NULL ? %s : NULL)', $varName, $baseExpr);
+                return sprintf('(%1$s != NULL && Z_TYPE_P(%1$s) == IS_OBJECT ? %2$s : NULL)', $varName, $baseExpr);
             }
 
             return $baseExpr;
@@ -817,7 +875,12 @@ class TypeBridge
 
         // Otherwise (const ref, value), dereference
         if ($nullable) {
-            return sprintf('(%s != NULL ? *%s : %s())', $varName, $baseExpr, $this->normalizeCppType($cppType));
+            return sprintf(
+                '(%1$s != NULL && Z_TYPE_P(%1$s) == IS_OBJECT ? *%2$s : %3$s())',
+                $varName,
+                $baseExpr,
+                $this->normalizeCppType($cppType),
+            );
         }
 
         return '*' . $baseExpr;
@@ -830,7 +893,12 @@ class TypeBridge
         $normalizedType = $this->normalizeCppType($cppType);
 
         if ($nullable) {
-            return sprintf('(%s != NULL ? %s : %s())', $varName, $this->nonNullableObjectRvalueExpr($normalizedType, $baseExpr), $normalizedType);
+            return sprintf(
+                '(%1$s != NULL && Z_TYPE_P(%1$s) == IS_OBJECT ? %2$s : %3$s())',
+                $varName,
+                $this->nonNullableObjectRvalueExpr($normalizedType, $baseExpr),
+                $normalizedType,
+            );
         }
 
         return $this->nonNullableObjectRvalueExpr($normalizedType, $baseExpr);
@@ -1438,6 +1506,15 @@ class TypeBridge
 
         // Default: QString
         return sprintf('QString::fromUtf8(ZSTR_VAL(%s), (int)ZSTR_LEN(%s))', $varName, $varName);
+    }
+
+    private function defaultNullableStringExpr(string $cppType): string
+    {
+        if ($this->isPointerType($cppType)) {
+            return 'NULL';
+        }
+
+        return sprintf('%s()', $this->normalizeCppType($cppType));
     }
 
     private function isPointerType(string $cppType): bool
