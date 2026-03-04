@@ -113,6 +113,30 @@ static zend_always_inline bool qt_method_is_overridden(zend_object *object, zend
     return current != NULL && base != NULL && current != base;
 }
 
+static zend_always_inline bool qt_method_is_overridden_in_ce(zend_class_entry *actual_ce, zend_class_entry *base_ce, const char *function_name)
+{
+    if (actual_ce == NULL || base_ce == NULL) {
+        return false;
+    }
+
+    if (actual_ce == base_ce) {
+        return false;
+    }
+
+    zend_function *child_fn = qt_lookup_method(actual_ce, function_name);
+    zend_function *base_fn = qt_lookup_method(base_ce, function_name);
+
+    if (child_fn == NULL || base_fn == NULL) {
+        return false;
+    }
+
+    if ((base_fn->common.fn_flags & ZEND_ACC_PRIVATE) != 0) {
+        return false;
+    }
+
+    return child_fn->common.scope != base_fn->common.scope;
+}
+
 static zend_always_inline bool qt_call_php_method(zend_object *object, const char *function_name, zval *retval, uint32_t param_count, zval *params)
 {
     if (object == NULL || object->ce == NULL) {

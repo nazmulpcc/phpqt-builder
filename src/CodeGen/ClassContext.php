@@ -515,6 +515,22 @@ class ClassContext
     }
 
     /**
+     * @return list<string>
+     */
+    public function virtualDispatchMethodNames(): array
+    {
+        $names = [];
+
+        foreach ($this->virtualMethods() as $method) {
+            if (!\in_array($method->name, $names, true)) {
+                $names[] = $method->name;
+            }
+        }
+
+        return $names;
+    }
+
+    /**
      * @param list<MethodContext> $signals
      * @return list<SignalOverloadContext>
      */

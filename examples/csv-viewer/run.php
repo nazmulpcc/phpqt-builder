@@ -40,9 +40,9 @@ final class CsvViewerController
             throw new RuntimeException('Unable to open CSV: ' . $path);
         }
 
-        $headers = fgetcsv($handle);
+        $headers = fgetcsv($handle, escape: '\\');
         $rows = [];
-        while (($row = fgetcsv($handle)) !== false) {
+        while (($row = fgetcsv($handle, escape: '\\')) !== false) {
             $rows[] = array_map(static fn ($value): string => (string) $value, $row);
         }
         fclose($handle);
@@ -224,7 +224,7 @@ $refresh = static function () use ($controller, $model, $pagination, $status, $w
 };
 
 $pagination->pageSizeBox()->setCurrentText((string) $controller->pageSize());
-$pagination->pageSizeBox()->connectSignal('currentIndexChanged(int)', static function () use ($controller, $pagination, $refresh): void {
+$pagination->pageSizeBox()->connect('currentIndexChanged(int)', static function () use ($controller, $pagination, $refresh): void {
     $controller->setPageSize((int) $pagination->pageSizeBox()->currentText());
     $refresh();
 });
@@ -239,7 +239,7 @@ $pagination->nextButton()->onClicked(static function () use ($controller, $refre
     $refresh();
 });
 
-$search->input()->connectSignal('textChanged(QString)', static function (string $query) use ($controller, $refresh): void {
+$search->input()->connect('textChanged(QString)', static function (string $query) use ($controller, $refresh): void {
     $controller->applyFilter($query);
     $refresh();
 });
