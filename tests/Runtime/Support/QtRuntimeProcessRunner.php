@@ -29,13 +29,6 @@ final class QtRuntimeProcessRunner
 
     public static function runFixture(string $fixture, array $env = [], int $timeout = 5): QtRuntimeProcessResult
     {
-        $extensionPath = self::extensionPath();
-        if ($extensionPath === null) {
-            return new QtRuntimeProcessResult(77, '', '', [
-                'reason' => 'Built qt extension not found. Run `php qtb build` first or set PHPQT_EXTENSION.',
-            ]);
-        }
-
         $fixturePath = self::fixturePath($fixture);
         if (!is_file($fixturePath)) {
             return new QtRuntimeProcessResult(1, '', '', [
@@ -43,26 +36,23 @@ final class QtRuntimeProcessRunner
             ]);
         }
 
-        $runtimeEnv = array_merge($_ENV, [
-            'PHPQT_EXTENSION' => $extensionPath,
-            'PHPQT_TEST_MODE' => '1',
-            'QT_QPA_PLATFORM' => $env['QT_QPA_PLATFORM'] ?? 'offscreen',
-        ], $env);
+        return self::runScript($fixturePath, $env, $timeout);
+    }
 
-        $process = new Process(
-            [PHP_BINARY, '-dextension=' . $extensionPath, $fixturePath],
-            dirname(__DIR__, 3),
-            $runtimeEnv,
-        );
-        $process->setTimeout($timeout);
-        $process->run();
+    public static function runInline(string $body, array $env = [], int $timeout = 30): QtRuntimeProcessResult
+    {
+        $scriptPath = tempnam(sys_get_temp_dir(), 'phpqt-inline-');
+        if ($scriptPath === false) {
+            return new QtRuntimeProcessResult(1, '', 'Could not create inline runtime temp file.', []);
+        }
 
-        return new QtRuntimeProcessResult(
-            $process->getExitCode() ?? 1,
-            $process->getOutput(),
-            $process->getErrorOutput(),
-            self::parsePayload($process->getOutput()),
-        );
+        file_put_contents($scriptPath, "<?php\n" . $body . "\n");
+
+        try {
+            return self::runScript($scriptPath, $env, $timeout);
+        } finally {
+            @unlink($scriptPath);
+        }
     }
 
     /**
@@ -85,5 +75,36 @@ final class QtRuntimeProcessRunner
         }
 
         return [];
+    }
+
+    private static function runScript(string $scriptPath, array $env, int $timeout): QtRuntimeProcessResult
+    {
+        $extensionPath = self::extensionPath();
+        if ($extensionPath === null) {
+            return new QtRuntimeProcessResult(77, '', '', [
+                'reason' => 'Built qt extension not found. Run `php qtb build` first or set PHPQT_EXTENSION.',
+            ]);
+        }
+
+        $runtimeEnv = array_merge($_ENV, [
+            'PHPQT_EXTENSION' => $extensionPath,
+            'PHPQT_TEST_MODE' => '1',
+            'QT_QPA_PLATFORM' => $env['QT_QPA_PLATFORM'] ?? 'offscreen',
+        ], $env);
+
+        $process = new Process(
+            [PHP_BINARY, '-dextension=' . $extensionPath, $scriptPath],
+            dirname(__DIR__, 3),
+            $runtimeEnv,
+        );
+        $process->setTimeout($timeout);
+        $process->run();
+
+        return new QtRuntimeProcessResult(
+            $process->getExitCode() ?? 1,
+            $process->getOutput(),
+            $process->getErrorOutput(),
+            self::parsePayload($process->getOutput()),
+        );
     }
 }

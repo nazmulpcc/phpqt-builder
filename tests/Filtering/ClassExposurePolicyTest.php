@@ -2,40 +2,31 @@
 
 declare(strict_types=1);
 
-namespace QtBuilder\Tests\Filtering;
-
-use PHPUnit\Framework\TestCase;
 use QtBuilder\Filtering\ClassExposurePolicy;
 
-final class ClassExposurePolicyTest extends TestCase
-{
-    public function testViewClassesAreNoLongerFilteredBySuffix(): void
-    {
-        $policy = new ClassExposurePolicy();
+it('no longer filters view classes by suffix', function (): void {
+    $policy = new ClassExposurePolicy();
 
-        $decision = $policy->decideClassName('QAbstractItemView');
+    $decision = $policy->decideClassName('QAbstractItemView');
 
-        self::assertTrue($decision->accepted);
-        self::assertNull($decision->reasonCode);
-    }
+    expect($decision->accepted)->toBeTrue()
+        ->and($decision->reasonCode)->toBeNull();
+});
 
-    public function testIteratorClassesRemainFilteredBySuffix(): void
-    {
-        $policy = new ClassExposurePolicy();
+it('keeps iterator classes filtered by suffix', function (): void {
+    $policy = new ClassExposurePolicy();
 
-        $decision = $policy->decideClassName('QJSValueIterator');
+    $decision = $policy->decideClassName('QJSValueIterator');
 
-        self::assertFalse($decision->accepted);
-        self::assertSame('class_filtered', $decision->reasonCode);
-    }
+    expect($decision->accepted)->toBeFalse()
+        ->and($decision->reasonCode)->toBe('class_filtered');
+});
 
-    public function testInternalQmlPlaceholderTypeIsExplicitlyFiltered(): void
-    {
-        $policy = new ClassExposurePolicy();
+it('explicitly filters the internal qml placeholder type', function (): void {
+    $policy = new ClassExposurePolicy();
 
-        $decision = $policy->decideClassName('QQmlTypeNotAvailable');
+    $decision = $policy->decideClassName('QQmlTypeNotAvailable');
 
-        self::assertFalse($decision->accepted);
-        self::assertSame('class_filtered', $decision->reasonCode);
-    }
-}
+    expect($decision->accepted)->toBeFalse()
+        ->and($decision->reasonCode)->toBe('class_filtered');
+});

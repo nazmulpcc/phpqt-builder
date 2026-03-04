@@ -2,261 +2,257 @@
 
 declare(strict_types=1);
 
-namespace QtBuilder\Tests\Commands;
-
-use PHPUnit\Framework\TestCase;
 use QtBuilder\Commands\BuildCommand;
 use QtBuilder\Tests\Support\FakeExtensionBootstrapper;
 use QtBuilder\Tests\Support\FakeSystemInformation;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Tester\CommandTester;
 
-final class BuildCommandTest extends TestCase
-{
-    public function testBuildGeneratesExtensionTreeFromFixtureQtRoot(): void
-    {
-        $fixtureRoot = dirname(__DIR__) . '/Fixtures/qt';
-        $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-' . bin2hex(random_bytes(4));
-        $outputDir = $buildRoot . '/ext';
-        $metadataDir = $buildRoot . '/generated';
-        $classCacheDir = $buildRoot . '/classes';
-        $bootstrapper = new FakeExtensionBootstrapper();
+it('generates the extension tree from a fixture qt root', function (): void {
+    $fixtureRoot = qt_fixture_path('qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-' . bin2hex(random_bytes(4));
+    $outputDir = $buildRoot . '/ext';
+    $metadataDir = $buildRoot . '/generated';
+    $classCacheDir = $buildRoot . '/classes';
+    $bootstrapper = new FakeExtensionBootstrapper();
 
-        $command = new BuildCommand(FakeSystemInformation::passing(), $bootstrapper);
-        $tester = new CommandTester($command);
-        $exitCode = $tester->execute([
+    $result = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
             '--qt-path' => $fixtureRoot,
             '--modules' => 'QtCore',
             '--output' => $outputDir,
             '--jobs' => '2',
-        ]);
+        ],
+    );
 
-        self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
-        self::assertFileExists($outputDir . '/config.m4');
-        self::assertFileExists($outputDir . '/php_qt.h');
-        self::assertFileExists($outputDir . '/qt.cpp');
-        self::assertFileExists($outputDir . '/classes/qt_qpoint.cpp');
-        self::assertFileExists($outputDir . '/classes/qt_qtree.cpp');
-        self::assertFileExists($outputDir . '/classes/qt_qnode.cpp');
-        self::assertFileExists($outputDir . '/classes/qt_qabstractitemmodel.cpp');
-        self::assertFileExists($outputDir . '/build/gen_stub.php');
-        self::assertFileExists($outputDir . '/configure');
-        self::assertFileExists($outputDir . '/Makefile');
-        self::assertFileExists($outputDir . '/classes/qt_qpoint_arginfo.h');
-        self::assertFileExists($metadataDir . '/build_summary.json');
-        self::assertFileExists($metadataDir . '/allowed_classes.json');
-        self::assertFileExists($metadataDir . '/discovery_cache.json');
-        self::assertFileExists($metadataDir . '/accepted_candidates.json');
-        self::assertFileExists($classCacheDir . '/QPoint.json');
-        self::assertFileExists($metadataDir . '/phpize.stdout.log');
-        self::assertFileExists($metadataDir . '/gen_stub.stdout.log');
-        self::assertFileExists($metadataDir . '/configure.stdout.log');
-        self::assertFileExists($metadataDir . '/make.stdout.log');
-        self::assertStringContainsString('Running 2 parallel discovery worker(s)...', $tester->getDisplay());
-        self::assertStringContainsString('Class structure cache:', $tester->getDisplay());
-        self::assertStringContainsString('Discovery pass 1', $tester->getDisplay());
-        self::assertCount(1, $bootstrapper->contexts);
+    expect($result['exitCode'])->toBe(Command::SUCCESS, $result['display']);
+    expect(is_file($outputDir . '/config.m4'))->toBeTrue()
+        ->and(is_file($outputDir . '/php_qt.h'))->toBeTrue()
+        ->and(is_file($outputDir . '/qt.cpp'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_qpoint.cpp'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_qtree.cpp'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_qnode.cpp'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_qabstractitemmodel.cpp'))->toBeTrue()
+        ->and(is_file($outputDir . '/build/gen_stub.php'))->toBeTrue()
+        ->and(is_file($outputDir . '/configure'))->toBeTrue()
+        ->and(is_file($outputDir . '/Makefile'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_qpoint_arginfo.h'))->toBeTrue()
+        ->and(is_file($metadataDir . '/build_summary.json'))->toBeTrue()
+        ->and(is_file($metadataDir . '/allowed_classes.json'))->toBeTrue()
+        ->and(is_file($metadataDir . '/discovery_cache.json'))->toBeTrue()
+        ->and(is_file($metadataDir . '/accepted_candidates.json'))->toBeTrue()
+        ->and(is_file($classCacheDir . '/QPoint.json'))->toBeTrue()
+        ->and(is_file($metadataDir . '/phpize.stdout.log'))->toBeTrue()
+        ->and(is_file($metadataDir . '/gen_stub.stdout.log'))->toBeTrue()
+        ->and(is_file($metadataDir . '/configure.stdout.log'))->toBeTrue()
+        ->and(is_file($metadataDir . '/make.stdout.log'))->toBeTrue()
+        ->and($result['display'])->toContain(
+            'Running 2 parallel discovery worker(s)...',
+            'Class structure cache:',
+            'Discovery pass 1',
+        )
+        ->and($bootstrapper->contexts)->toHaveCount(1);
 
-        $summary = json_decode((string) file_get_contents($metadataDir . '/build_summary.json'), true, 512, JSON_THROW_ON_ERROR);
-        self::assertSame(5, $summary['generated_classes']);
-        self::assertSame(1, $summary['skipped_classes']);
-        self::assertSame(['phpize', 'gen_stub', 'configure', 'make'], array_column($summary['bootstrap'], 'name'));
+    $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
+    expect($summary['generated_classes'])->toBe(5)
+        ->and($summary['skipped_classes'])->toBe(1)
+        ->and(array_column($summary['bootstrap'], 'name'))->toBe(['phpize', 'gen_stub', 'configure', 'make']);
 
-        $classmap = json_decode((string) file_get_contents($metadataDir . '/classmap.json'), true, 512, JSON_THROW_ON_ERROR);
-        self::assertSame(['QAbstractItemModel', 'QModelIndex', 'QNode', 'QPoint', 'QTree'], array_column($classmap, 'class'));
+    $classmap = qt_decode_json((string) file_get_contents($metadataDir . '/classmap.json'));
+    expect(array_column($classmap, 'class'))->toBe(['QAbstractItemModel', 'QModelIndex', 'QNode', 'QPoint', 'QTree']);
 
-        $allowedClasses = json_decode((string) file_get_contents($metadataDir . '/allowed_classes.json'), true, 512, JSON_THROW_ON_ERROR);
-        self::assertSame(['QAbstractItemModel', 'QModelIndex', 'QNode', 'QPoint', 'QTree'], $allowedClasses);
+    $allowedClasses = qt_decode_json((string) file_get_contents($metadataDir . '/allowed_classes.json'));
+    expect($allowedClasses)->toBe(['QAbstractItemModel', 'QModelIndex', 'QNode', 'QPoint', 'QTree']);
 
-        $stub = (string) file_get_contents($outputDir . '/classes/qt_qtree.stub.php');
-        self::assertStringContainsString('QNode|null $node = null', $stub);
-    }
+    $stub = (string) file_get_contents($outputDir . '/classes/qt_qtree.stub.php');
+    expect($stub)->toContain('QNode|null $node = null');
+});
 
-    public function testBuildReusesExistingDiscoveryCache(): void
-    {
-        $fixtureRoot = dirname(__DIR__) . '/Fixtures/qt';
-        $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-cache-' . bin2hex(random_bytes(4));
-        $outputDir = $buildRoot . '/ext';
-        $metadataDir = $buildRoot . '/generated';
-        $bootstrapper = new FakeExtensionBootstrapper();
+it('reuses an existing discovery cache', function (): void {
+    $fixtureRoot = qt_fixture_path('qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-cache-' . bin2hex(random_bytes(4));
+    $outputDir = $buildRoot . '/ext';
+    $metadataDir = $buildRoot . '/generated';
+    $bootstrapper = new FakeExtensionBootstrapper();
 
-        $command = new BuildCommand(FakeSystemInformation::passing(), $bootstrapper);
-        $tester = new CommandTester($command);
-        self::assertSame(Command::SUCCESS, $tester->execute([
+    $initialRun = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
             '--qt-path' => $fixtureRoot,
             '--modules' => 'QtCore',
             '--output' => $outputDir,
             '--jobs' => '2',
-        ]));
+        ],
+    );
+    expect($initialRun['exitCode'])->toBe(Command::SUCCESS, $initialRun['display']);
 
-        $cache = json_decode((string) file_get_contents($metadataDir . '/discovery_cache.json'), true, 512, JSON_THROW_ON_ERROR);
-        $cache['candidate_count'] = 1;
-        $cache['accepted_candidates'] = [[
-            'module' => 'QtCore',
-            'class' => 'QPoint',
-            'public_header' => $fixtureRoot . '/include/QtCore/QPoint',
-            'parse_header' => $fixtureRoot . '/include/QtCore/qpoint.h',
-        ]];
-        $cache['allowed_classes'] = ['QPoint'];
-        file_put_contents($metadataDir . '/discovery_cache.json', json_encode($cache, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-        file_put_contents($metadataDir . '/accepted_candidates.json', json_encode($cache['accepted_candidates'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-        file_put_contents($metadataDir . '/allowed_classes.json', json_encode($cache['allowed_classes'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+    $cache = qt_decode_json((string) file_get_contents($metadataDir . '/discovery_cache.json'));
+    $cache['candidate_count'] = 1;
+    $cache['accepted_candidates'] = [[
+        'module' => 'QtCore',
+        'class' => 'QPoint',
+        'public_header' => $fixtureRoot . '/include/QtCore/QPoint',
+        'parse_header' => $fixtureRoot . '/include/QtCore/qpoint.h',
+    ]];
+    $cache['allowed_classes'] = ['QPoint'];
+    file_put_contents($metadataDir . '/discovery_cache.json', json_encode($cache, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+    file_put_contents($metadataDir . '/accepted_candidates.json', json_encode($cache['accepted_candidates'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+    file_put_contents($metadataDir . '/allowed_classes.json', json_encode($cache['allowed_classes'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 
-        $tester = new CommandTester(new BuildCommand(FakeSystemInformation::passing(), $bootstrapper));
-        $exitCode = $tester->execute([
+    $result = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
             '--qt-path' => $fixtureRoot,
             '--modules' => 'QtCore',
             '--output' => $outputDir,
             '--jobs' => '2',
-        ]);
+        ],
+    );
 
-        self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
-        self::assertStringContainsString('Using cached build metadata:', $tester->getDisplay());
-        self::assertStringContainsString('Bootstrapping extension build tree...', $tester->getDisplay());
-        self::assertStringContainsString('discovery_cache.json', $tester->getDisplay());
-        self::assertStringContainsString('accepted_candidates.json', $tester->getDisplay());
-        self::assertStringContainsString('allowed_classes.json', $tester->getDisplay());
-        self::assertStringNotContainsString('Running 2 parallel discovery worker(s)...', $tester->getDisplay());
+    expect($result['exitCode'])->toBe(Command::SUCCESS, $result['display']);
+    expect($result['display'])->toContain(
+        'Using cached build metadata:',
+        'Bootstrapping extension build tree...',
+        'discovery_cache.json',
+        'accepted_candidates.json',
+        'allowed_classes.json',
+    )->not->toContain('Running 2 parallel discovery worker(s)...');
 
-        $summary = json_decode((string) file_get_contents($metadataDir . '/build_summary.json'), true, 512, JSON_THROW_ON_ERROR);
-        self::assertSame(1, $summary['generated_classes']);
-        self::assertSame(1, $summary['candidate_classes']);
+    $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
+    expect($summary['generated_classes'])->toBe(1)
+        ->and($summary['candidate_classes'])->toBe(1);
 
-        $classmap = json_decode((string) file_get_contents($metadataDir . '/classmap.json'), true, 512, JSON_THROW_ON_ERROR);
-        self::assertSame(['QPoint'], array_column($classmap, 'class'));
-    }
+    $classmap = qt_decode_json((string) file_get_contents($metadataDir . '/classmap.json'));
+    expect(array_column($classmap, 'class'))->toBe(['QPoint']);
+});
 
-    public function testBuildGeneratesAbstractShellsAndConcreteChildren(): void
-    {
-        $fixtureRoot = dirname(__DIR__) . '/Fixtures/abstract-qt';
-        $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-abstract-' . bin2hex(random_bytes(4));
-        $outputDir = $buildRoot . '/ext';
-        $metadataDir = $buildRoot . '/generated';
-        $bootstrapper = new FakeExtensionBootstrapper();
+it('generates abstract shells and concrete children', function (): void {
+    $fixtureRoot = qt_fixture_path('abstract-qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-abstract-' . bin2hex(random_bytes(4));
+    $outputDir = $buildRoot . '/ext';
+    $metadataDir = $buildRoot . '/generated';
+    $bootstrapper = new FakeExtensionBootstrapper();
 
-        $command = new BuildCommand(FakeSystemInformation::passing(), $bootstrapper);
-        $tester = new CommandTester($command);
-        $exitCode = $tester->execute([
+    $result = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
             '--qt-path' => $fixtureRoot,
             '--modules' => 'QtCore',
             '--output' => $outputDir,
             '--jobs' => '2',
-        ]);
+        ],
+    );
 
-        self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
-        self::assertFileExists($outputDir . '/classes/qt_qabstractshell.cpp');
-        self::assertFileExists($outputDir . '/classes/qt_qabstractparentthing.cpp');
-        self::assertFileExists($outputDir . '/classes/qt_qconcretechildthing.cpp');
+    expect($result['exitCode'])->toBe(Command::SUCCESS, $result['display']);
+    expect(is_file($outputDir . '/classes/qt_qabstractshell.cpp'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_qabstractparentthing.cpp'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_qconcretechildthing.cpp'))->toBeTrue();
 
-        $classmap = json_decode((string) file_get_contents($metadataDir . '/classmap.json'), true, 512, JSON_THROW_ON_ERROR);
-        self::assertSame(
-            ['QAbstractParentThing', 'QAbstractShell', 'QConcreteChildThing'],
-            array_column($classmap, 'class'),
-        );
+    $classmap = qt_decode_json((string) file_get_contents($metadataDir . '/classmap.json'));
+    expect(array_column($classmap, 'class'))->toBe(['QAbstractParentThing', 'QAbstractShell', 'QConcreteChildThing']);
 
-        $allowedClasses = json_decode((string) file_get_contents($metadataDir . '/allowed_classes.json'), true, 512, JSON_THROW_ON_ERROR);
-        self::assertSame(['QAbstractParentThing', 'QAbstractShell', 'QConcreteChildThing'], $allowedClasses);
+    $allowedClasses = qt_decode_json((string) file_get_contents($metadataDir . '/allowed_classes.json'));
+    expect($allowedClasses)->toBe(['QAbstractParentThing', 'QAbstractShell', 'QConcreteChildThing']);
 
-        $skippedClasses = json_decode((string) file_get_contents($metadataDir . '/skipped_classes.json'), true, 512, JSON_THROW_ON_ERROR);
-        self::assertSame([], $skippedClasses);
+    $skippedClasses = qt_decode_json((string) file_get_contents($metadataDir . '/skipped_classes.json'));
+    expect($skippedClasses)->toBe([]);
 
-        $abstractStub = (string) file_get_contents($outputDir . '/classes/qt_qabstractparentthing.stub.php');
-        self::assertStringContainsString('abstract class QAbstractParentThing', $abstractStub);
-    }
+    $abstractStub = (string) file_get_contents($outputDir . '/classes/qt_qabstractparentthing.stub.php');
+    expect($abstractStub)->toContain('abstract class QAbstractParentThing');
+});
 
-    public function testBuildFailsWhenBootstrapStepFails(): void
-    {
-        $fixtureRoot = dirname(__DIR__) . '/Fixtures/qt';
-        $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-fail-' . bin2hex(random_bytes(4));
-        $outputDir = $buildRoot . '/ext';
-        $metadataDir = $buildRoot . '/generated';
+it('fails when a bootstrap step fails', function (): void {
+    $fixtureRoot = qt_fixture_path('qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-fail-' . bin2hex(random_bytes(4));
+    $outputDir = $buildRoot . '/ext';
+    $metadataDir = $buildRoot . '/generated';
 
-        $bootstrapper = new FakeExtensionBootstrapper();
-        $bootstrapper->failureMessage = 'configure failed';
+    $bootstrapper = new FakeExtensionBootstrapper();
+    $bootstrapper->failureMessage = 'configure failed';
 
-        $command = new BuildCommand(FakeSystemInformation::passing(), $bootstrapper);
-        $tester = new CommandTester($command);
-        $exitCode = $tester->execute([
+    $result = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
             '--qt-path' => $fixtureRoot,
             '--modules' => 'QtCore',
             '--output' => $outputDir,
             '--jobs' => '2',
-        ]);
+        ],
+    );
 
-        self::assertSame(Command::FAILURE, $exitCode, $tester->getDisplay());
-        self::assertStringContainsString('configure failed', $tester->getDisplay());
+    expect($result['exitCode'])->toBe(Command::FAILURE, $result['display'])
+        ->and($result['display'])->toContain('configure failed');
 
-        $summary = json_decode((string) file_get_contents($metadataDir . '/build_summary.json'), true, 512, JSON_THROW_ON_ERROR);
-        self::assertSame('configure failed', $summary['bootstrap_error']);
-    }
+    $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
+    expect($summary['bootstrap_error'])->toBe('configure failed');
+});
 
-    public function testBuildRewritesCachedAllowListToActualGeneratedClasses(): void
-    {
-        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
-        $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-stable-' . bin2hex(random_bytes(4));
-        $outputDir = $buildRoot . '/ext';
-        $metadataDir = $buildRoot . '/generated';
-        mkdir($metadataDir, 0755, true);
+it('rewrites cached allow lists to actual generated classes', function (): void {
+    $fixtureRoot = qt_fixture_path('policy-qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-stable-' . bin2hex(random_bytes(4));
+    $outputDir = $buildRoot . '/ext';
+    $metadataDir = $buildRoot . '/generated';
+    mkdir($metadataDir, 0755, true);
 
-        $cache = [
-            'modules' => ['QtCore'],
-            'qt_path' => $fixtureRoot,
-            'candidate_count' => 2,
-            'accepted_candidates' => [
-                [
-                    'module' => 'QtCore',
-                    'class' => 'QCStringHolder',
-                    'public_header' => $fixtureRoot . '/include/QtCore/QCStringHolder',
-                    'parse_header' => $fixtureRoot . '/include/QtCore/qcstringholder.h',
-                ],
-                [
-                    'module' => 'QtCore',
-                    'class' => 'QChildThing',
-                    'public_header' => $fixtureRoot . '/include/QtCore/QChildThing',
-                    'parse_header' => $fixtureRoot . '/include/QtCore/qchildthing.h',
-                ],
+    $cache = [
+        'modules' => ['QtCore'],
+        'qt_path' => $fixtureRoot,
+        'candidate_count' => 2,
+        'accepted_candidates' => [
+            [
+                'module' => 'QtCore',
+                'class' => 'QCStringHolder',
+                'public_header' => $fixtureRoot . '/include/QtCore/QCStringHolder',
+                'parse_header' => $fixtureRoot . '/include/QtCore/qcstringholder.h',
             ],
-            'skipped_classes' => [],
-            'allowed_classes' => ['QCStringHolder', 'QChildThing'],
-        ];
+            [
+                'module' => 'QtCore',
+                'class' => 'QChildThing',
+                'public_header' => $fixtureRoot . '/include/QtCore/QChildThing',
+                'parse_header' => $fixtureRoot . '/include/QtCore/qchildthing.h',
+            ],
+        ],
+        'skipped_classes' => [],
+        'allowed_classes' => ['QCStringHolder', 'QChildThing'],
+    ];
 
-        file_put_contents($metadataDir . '/discovery_cache.json', json_encode($cache, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-        file_put_contents($metadataDir . '/accepted_candidates.json', json_encode($cache['accepted_candidates'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-        file_put_contents($metadataDir . '/allowed_classes.json', json_encode($cache['allowed_classes'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+    file_put_contents($metadataDir . '/discovery_cache.json', json_encode($cache, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+    file_put_contents($metadataDir . '/accepted_candidates.json', json_encode($cache['accepted_candidates'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+    file_put_contents($metadataDir . '/allowed_classes.json', json_encode($cache['allowed_classes'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 
-        $bootstrapper = new FakeExtensionBootstrapper();
-        $command = new BuildCommand(FakeSystemInformation::passing(), $bootstrapper);
-        $tester = new CommandTester($command);
-        $exitCode = $tester->execute([
+    $bootstrapper = new FakeExtensionBootstrapper();
+    $result = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
             '--qt-path' => $fixtureRoot,
             '--modules' => 'QtCore',
             '--output' => $outputDir,
             '--jobs' => '2',
-        ]);
+        ],
+    );
 
-        self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
-        self::assertStringContainsString('Using cached build metadata:', $tester->getDisplay());
-        self::assertStringContainsString('Re-evaluating generated dependency set', $tester->getDisplay());
+    expect($result['exitCode'])->toBe(Command::SUCCESS, $result['display']);
+    expect($result['display'])->toContain('Using cached build metadata:', 'Re-evaluating generated dependency set');
 
-        $allowedClasses = json_decode((string) file_get_contents($metadataDir . '/allowed_classes.json'), true, 512, JSON_THROW_ON_ERROR);
-        self::assertSame(['QCStringHolder'], $allowedClasses);
+    $allowedClasses = qt_decode_json((string) file_get_contents($metadataDir . '/allowed_classes.json'));
+    expect($allowedClasses)->toBe(['QCStringHolder']);
 
-        $acceptedCandidates = json_decode((string) file_get_contents($metadataDir . '/accepted_candidates.json'), true, 512, JSON_THROW_ON_ERROR);
-        self::assertSame(['QCStringHolder'], array_column($acceptedCandidates, 'class'));
+    $acceptedCandidates = qt_decode_json((string) file_get_contents($metadataDir . '/accepted_candidates.json'));
+    expect(array_column($acceptedCandidates, 'class'))->toBe(['QCStringHolder']);
 
-        $classmap = json_decode((string) file_get_contents($metadataDir . '/classmap.json'), true, 512, JSON_THROW_ON_ERROR);
-        self::assertSame(['QCStringHolder'], array_column($classmap, 'class'));
+    $classmap = qt_decode_json((string) file_get_contents($metadataDir . '/classmap.json'));
+    expect(array_column($classmap, 'class'))->toBe(['QCStringHolder']);
 
-        $skippedClasses = json_decode((string) file_get_contents($metadataDir . '/skipped_classes.json'), true, 512, JSON_THROW_ON_ERROR);
-        $skippedByClass = [];
-        foreach ($skippedClasses as $skippedClass) {
-            $skippedByClass[$skippedClass['class']] = $skippedClass['reason_code'];
-        }
-        self::assertSame('unsupported_parent_class', $skippedByClass['QChildThing'] ?? null);
-
-        $summary = json_decode((string) file_get_contents($metadataDir . '/build_summary.json'), true, 512, JSON_THROW_ON_ERROR);
-        self::assertSame(2, $summary['generation_passes']);
-        self::assertSame(1, $summary['generated_classes']);
-        self::assertSame(1, $summary['skipped_classes']);
+    $skippedClasses = qt_decode_json((string) file_get_contents($metadataDir . '/skipped_classes.json'));
+    $skippedByClass = [];
+    foreach ($skippedClasses as $skippedClass) {
+        $skippedByClass[$skippedClass['class']] = $skippedClass['reason_code'];
     }
-}
+    expect($skippedByClass['QChildThing'] ?? null)->toBe('unsupported_parent_class');
+
+    $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
+    expect($summary['generation_passes'])->toBe(2)
+        ->and($summary['generated_classes'])->toBe(1)
+        ->and($summary['skipped_classes'])->toBe(1);
+});

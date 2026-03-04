@@ -2,58 +2,50 @@
 
 declare(strict_types=1);
 
-namespace QtBuilder\Tests\Parsing;
-
-use PHPUnit\Framework\TestCase;
 use QtBuilder\Parsing\ContainerTypeParser;
 
-final class ContainerTypeParserTest extends TestCase
-{
-    public function testParseRecognizesCommonQtContainers(): void
-    {
-        $parser = new ContainerTypeParser();
+it('recognizes common qt containers', function (): void {
+    $parser = new ContainerTypeParser();
 
-        $stringList = $parser->parse('const QStringList &');
-        self::assertNotNull($stringList);
-        self::assertSame('sequence', $stringList->kind);
-        self::assertSame('QString', $stringList->elementType);
+    $stringList = $parser->parse('const QStringList &');
+    expect($stringList)->not->toBeNull();
+    expect($stringList->kind)->toBe('sequence')
+        ->and($stringList->elementType)->toBe('QString');
 
-        $indexList = $parser->parse('QModelIndexList');
-        self::assertNotNull($indexList);
-        self::assertSame('sequence', $indexList->kind);
-        self::assertSame('QModelIndex', $indexList->elementType);
+    $indexList = $parser->parse('QModelIndexList');
+    expect($indexList)->not->toBeNull();
+    expect($indexList->kind)->toBe('sequence')
+        ->and($indexList->elementType)->toBe('QModelIndex');
 
-        $byteMap = $parser->parse('QHash<int, QByteArray>');
-        self::assertNotNull($byteMap);
-        self::assertSame('hash', $byteMap->kind);
-        self::assertSame('int', $byteMap->keyType);
-        self::assertSame('QByteArray', $byteMap->valueType);
+    $byteMap = $parser->parse('QHash<int, QByteArray>');
+    expect($byteMap)->not->toBeNull();
+    expect($byteMap->kind)->toBe('hash')
+        ->and($byteMap->keyType)->toBe('int')
+        ->and($byteMap->valueType)->toBe('QByteArray');
 
-        $variantMap = $parser->parse('QMap<int, QVariant>');
-        self::assertNotNull($variantMap);
-        self::assertSame('map', $variantMap->kind);
-        self::assertSame('int', $variantMap->keyType);
-        self::assertSame('QVariant', $variantMap->valueType);
+    $variantMap = $parser->parse('QMap<int, QVariant>');
+    expect($variantMap)->not->toBeNull();
+    expect($variantMap->kind)->toBe('map')
+        ->and($variantMap->keyType)->toBe('int')
+        ->and($variantMap->valueType)->toBe('QVariant');
 
-        $actionList = $parser->parse('const QList<QAction *> &');
-        self::assertNotNull($actionList);
-        self::assertSame('sequence', $actionList->kind);
-        self::assertSame('QAction *', $actionList->elementType);
+    $actionList = $parser->parse('const QList<QAction *> &');
+    expect($actionList)->not->toBeNull();
+    expect($actionList->kind)->toBe('sequence')
+        ->and($actionList->elementType)->toBe('QAction *');
 
-        $constActionList = $parser->parse('const QList<const QAction *> &');
-        self::assertNotNull($constActionList);
-        self::assertSame('sequence', $constActionList->kind);
-        self::assertSame('const QAction *', $constActionList->elementType);
-    }
+    $constActionList = $parser->parse('const QList<const QAction *> &');
+    expect($constActionList)->not->toBeNull();
+    expect($constActionList->kind)->toBe('sequence')
+        ->and($constActionList->elementType)->toBe('const QAction *');
+});
 
-    public function testParseRejectsUnsupportedContainerShapes(): void
-    {
-        $parser = new ContainerTypeParser();
+it('rejects unsupported container shapes', function (): void {
+    $parser = new ContainerTypeParser();
 
-        self::assertNull($parser->parse('QSet<QString>'));
+    expect($parser->parse('QSet<QString>'))->toBeNull();
 
-        $complexList = $parser->parse('QList<std::pair<qreal, QPointF>>');
-        self::assertNotNull($complexList);
-        self::assertSame('std::pair<qreal, QPointF>', $complexList->elementType);
-    }
-}
+    $complexList = $parser->parse('QList<std::pair<qreal, QPointF>>');
+    expect($complexList)->not->toBeNull();
+    expect($complexList->elementType)->toBe('std::pair<qreal, QPointF>');
+});

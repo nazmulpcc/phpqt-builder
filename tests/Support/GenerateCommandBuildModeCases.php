@@ -2,16 +2,15 @@
 
 declare(strict_types=1);
 
-namespace QtBuilder\Tests\Commands;
+namespace QtBuilder\Tests\Support;
 
-use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Assert;
 use QtBuilder\Build\ClassGenerationService;
 use QtBuilder\Commands\GenerateCommand;
-use QtBuilder\Tests\Support\FakeSystemInformation;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Tester\CommandTester;
 
-final class GenerateCommandBuildModeTest extends TestCase
+final class GenerateCommandBuildModeCases extends Assert
 {
     public function testGenerateBuildModeReturnsJsonAndWritesFiles(): void
     {

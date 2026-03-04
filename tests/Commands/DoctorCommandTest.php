@@ -2,73 +2,56 @@
 
 declare(strict_types=1);
 
-namespace QtBuilder\Tests\Commands;
-
-use PHPUnit\Framework\TestCase;
 use QtBuilder\Commands\DoctorCommand;
 use QtBuilder\System\QtDetectionResult;
 use QtBuilder\Tests\Support\FakeSystemInformation;
 use Symfony\Component\Console\Command\Command;
-use Symfony\Component\Console\Tester\CommandTester;
 
-final class DoctorCommandTest extends TestCase
-{
-    public function testDoctorReturnsFailureAndJsonWhenChecksFail(): void
-    {
-        $system = FakeSystemInformation::passing();
-        $system->setExtension('cparser', false);
-        $command = new DoctorCommand($system);
+it('returns failure and json when checks fail', function (): void {
+    $system = FakeSystemInformation::passing();
+    $system->setExtension('cparser', false);
 
-        $tester = new CommandTester($command);
-        $exitCode = $tester->execute(['--format' => 'json']);
+    $result = qt_command_result(new DoctorCommand($system), ['--format' => 'json']);
 
-        self::assertSame(Command::FAILURE, $exitCode);
+    expect($result['exitCode'])->toBe(Command::FAILURE);
 
-        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
-        self::assertSame('fail', $payload['summary']['status']);
-    }
+    $payload = qt_decode_json($result['display']);
+    expect($payload['summary']['status'])->toBe('fail');
+});
 
-    public function testDoctorRejectsUnsupportedFormat(): void
-    {
-        $system = FakeSystemInformation::passing();
-        $command = new DoctorCommand($system);
+it('rejects unsupported formats', function (): void {
+    $system = FakeSystemInformation::passing();
 
-        $tester = new CommandTester($command);
-        $exitCode = $tester->execute(['--format' => 'yaml']);
+    $result = qt_command_result(new DoctorCommand($system), ['--format' => 'yaml']);
 
-        self::assertSame(Command::FAILURE, $exitCode);
-        self::assertStringContainsString('Unsupported format', $tester->getDisplay());
-    }
+    expect($result['exitCode'])->toBe(Command::FAILURE)
+        ->and($result['display'])->toContain('Unsupported format');
+});
 
-    public function testDoctorMarksQtCheckAsFailureWhenQtIsNotDetected(): void
-    {
-        $system = FakeSystemInformation::passing();
-        $system->setQtDetectionResult(
-            new QtDetectionResult(
-                false,
-                'No working Qt discovery path found (qtpaths/qmake/pkg-config Qt6Core).',
-                ['attempts' => []],
-            ),
-        );
+it('marks qt check as failure when qt is not detected', function (): void {
+    $system = FakeSystemInformation::passing();
+    $system->setQtDetectionResult(
+        new QtDetectionResult(
+            false,
+            'No working Qt discovery path found (qtpaths/qmake/pkg-config Qt6Core).',
+            ['attempts' => []],
+        ),
+    );
 
-        $command = new DoctorCommand($system);
-        $tester = new CommandTester($command);
+    $result = qt_command_result(new DoctorCommand($system), ['--format' => 'json']);
+    $payload = qt_decode_json($result['display']);
 
-        $exitCode = $tester->execute(['--format' => 'json']);
-        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+    expect($result['exitCode'])->toBe(Command::FAILURE)
+        ->and($payload['summary']['status'])->toBe('fail');
 
-        self::assertSame(Command::FAILURE, $exitCode);
-        self::assertSame('fail', $payload['summary']['status']);
-
-        $qtCheck = null;
-        foreach ($payload['checks'] as $check) {
-            if ($check['id'] === 'qt_discovery') {
-                $qtCheck = $check;
-                break;
-            }
+    $qtCheck = null;
+    foreach ($payload['checks'] as $check) {
+        if ($check['id'] === 'qt_discovery') {
+            $qtCheck = $check;
+            break;
         }
-
-        self::assertNotNull($qtCheck);
-        self::assertSame('fail', $qtCheck['status']);
     }
-}
+
+    expect($qtCheck)->not->toBeNull();
+    expect($qtCheck['status'])->toBe('fail');
+});

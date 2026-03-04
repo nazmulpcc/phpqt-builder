@@ -2,83 +2,73 @@
 
 declare(strict_types=1);
 
-namespace QtBuilder\Tests\Parsing;
-
-use PHPUnit\Framework\TestCase;
 use QtBuilder\Parsing\ClangArgumentBuilder;
 use QtBuilder\Parsing\QtClassInspector;
 
-final class QtClassInspectorTest extends TestCase
-{
-    public function testInspectDetectsSignalAndSlotMethodsViaAnnotations(): void
-    {
-        if (!method_exists(\CParser\Cursor::class, 'getAnnotations')) {
-            self::markTestSkipped('ext-cparser does not expose cursor annotations.');
-        }
-
-        $fixtureRoot = dirname(__DIR__) . '/Fixtures/signals-qt';
-        $includeRoot = $fixtureRoot . '/include';
-        $header = $includeRoot . '/QtCore/qsignalfixture.h';
-
-        $inspector = new QtClassInspector(new ClangArgumentBuilder([
-            $includeRoot,
-            $includeRoot . '/QtCore',
-        ]));
-
-        $classData = $inspector->inspect($header, 'QSignalFixture');
-        self::assertNotNull($classData);
-
-        $methods = [];
-        foreach ($classData['methods'] as $method) {
-            $methods[$method['name']] = $method;
-        }
-
-        self::assertArrayHasKey('plainMethod', $methods);
-        self::assertArrayHasKey('setValue', $methods);
-        self::assertArrayHasKey('resetValue', $methods);
-        self::assertArrayHasKey('triggered', $methods);
-        self::assertArrayHasKey('valueChanged', $methods);
-
-        self::assertFalse($methods['plainMethod']['is_signal']);
-        self::assertFalse($methods['plainMethod']['is_slot']);
-
-        self::assertFalse($methods['setValue']['is_signal']);
-        self::assertTrue($methods['setValue']['is_slot']);
-        self::assertSame('public', $methods['setValue']['access']);
-
-        self::assertFalse($methods['resetValue']['is_signal']);
-        self::assertTrue($methods['resetValue']['is_slot']);
-        self::assertSame('protected', $methods['resetValue']['access']);
-
-        self::assertTrue($methods['triggered']['is_signal']);
-        self::assertFalse($methods['triggered']['is_slot']);
-        self::assertSame('public', $methods['triggered']['access']);
-
-        self::assertTrue($methods['valueChanged']['is_signal']);
-        self::assertFalse($methods['valueChanged']['is_slot']);
+it('detects signal and slot methods via annotations', function (): void {
+    if (!method_exists(\CParser\Cursor::class, 'getAnnotations')) {
+        test()->markTestSkipped('ext-cparser does not expose cursor annotations.');
     }
 
-    public function testInspectDetectsFinalMethodViaCursorKind404(): void
-    {
-        $fixtureRoot = dirname(__DIR__) . '/Fixtures/policy-qt';
-        $includeRoot = $fixtureRoot . '/include';
-        $header = $includeRoot . '/QtCore/qfinalvirtualthing.h';
+    $fixtureRoot = qt_fixture_path('signals-qt');
+    $includeRoot = $fixtureRoot . '/include';
+    $header = $includeRoot . '/QtCore/qsignalfixture.h';
 
-        $inspector = new QtClassInspector(new ClangArgumentBuilder([
-            $includeRoot,
-            $includeRoot . '/QtCore',
-        ]));
+    $inspector = new QtClassInspector(new ClangArgumentBuilder([
+        $includeRoot,
+        $includeRoot . '/QtCore',
+    ]));
 
-        $classData = $inspector->inspect($header, 'QFinalVirtualThing');
-        self::assertNotNull($classData);
+    $classData = $inspector->inspect($header, 'QSignalFixture');
+    expect($classData)->not->toBeNull();
 
-        $methods = [];
-        foreach ($classData['methods'] as $method) {
-            $methods[$method['name']] = $method;
-        }
-
-        self::assertArrayHasKey('value', $methods);
-        self::assertTrue($methods['value']['is_virtual']);
-        self::assertTrue($methods['value']['is_final']);
+    $methods = [];
+    foreach ($classData['methods'] as $method) {
+        $methods[$method['name']] = $method;
     }
-}
+
+    expect($methods)->toHaveKeys([
+        'plainMethod',
+        'setValue',
+        'resetValue',
+        'triggered',
+        'valueChanged',
+    ]);
+
+    expect($methods['plainMethod']['is_signal'])->toBeFalse()
+        ->and($methods['plainMethod']['is_slot'])->toBeFalse()
+        ->and($methods['setValue']['is_signal'])->toBeFalse()
+        ->and($methods['setValue']['is_slot'])->toBeTrue()
+        ->and($methods['setValue']['access'])->toBe('public')
+        ->and($methods['resetValue']['is_signal'])->toBeFalse()
+        ->and($methods['resetValue']['is_slot'])->toBeTrue()
+        ->and($methods['resetValue']['access'])->toBe('protected')
+        ->and($methods['triggered']['is_signal'])->toBeTrue()
+        ->and($methods['triggered']['is_slot'])->toBeFalse()
+        ->and($methods['triggered']['access'])->toBe('public')
+        ->and($methods['valueChanged']['is_signal'])->toBeTrue()
+        ->and($methods['valueChanged']['is_slot'])->toBeFalse();
+});
+
+it('detects final methods via cursor kind 404', function (): void {
+    $fixtureRoot = qt_fixture_path('policy-qt');
+    $includeRoot = $fixtureRoot . '/include';
+    $header = $includeRoot . '/QtCore/qfinalvirtualthing.h';
+
+    $inspector = new QtClassInspector(new ClangArgumentBuilder([
+        $includeRoot,
+        $includeRoot . '/QtCore',
+    ]));
+
+    $classData = $inspector->inspect($header, 'QFinalVirtualThing');
+    expect($classData)->not->toBeNull();
+
+    $methods = [];
+    foreach ($classData['methods'] as $method) {
+        $methods[$method['name']] = $method;
+    }
+
+    expect($methods)->toHaveKey('value');
+    expect($methods['value']['is_virtual'])->toBeTrue()
+        ->and($methods['value']['is_final'])->toBeTrue();
+});
