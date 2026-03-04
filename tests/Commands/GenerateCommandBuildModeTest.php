@@ -356,11 +356,16 @@ final class GenerateCommandBuildModeTest extends TestCase
         self::assertStringContainsString('static zval *qt_qobject_read_property(', $cpp);
         self::assertStringContainsString('static zval *qt_qobject_write_property(', $cpp);
         self::assertStringContainsString('static zend_array *qt_qobject_get_properties_for(', $cpp);
+        self::assertStringContainsString('static bool qt_qobject_should_delegate_to_std_property(', $cpp);
+        self::assertStringContainsString('if (qt_qobject_should_delegate_to_std_property(object, member)) {', $cpp);
+        self::assertStringContainsString('return zend_std_write_property(object, member, value, cache_slot);', $cpp);
         self::assertStringContainsString('zend_declare_typed_property(', $cpp);
         self::assertStringContainsString('ZEND_ACC_PUBLIC | ZEND_ACC_VIRTUAL', $cpp);
         self::assertStringContainsString('qt_qobject_handlers.read_property = qt_qobject_read_property;', $cpp);
         self::assertStringContainsString('qt_qobject_handlers.get_properties_for = qt_qobject_get_properties_for;', $cpp);
         self::assertStringContainsString('object_init_ex(target, qt_ce_QVariant);', $cpp);
+        self::assertStringContainsString('value.metaType().flags().testFlag(QMetaType::IsEnumeration)', $cpp);
+        self::assertStringContainsString('ZVAL_LONG(target, (zend_long) value.toLongLong());', $cpp);
     }
 
     public function testGenerateBuildModeAddsQObjectPropertyHandlersToDerivedClasses(): void

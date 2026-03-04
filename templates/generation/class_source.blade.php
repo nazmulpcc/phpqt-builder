@@ -163,6 +163,11 @@ static void qt_variant_to_zval(zval *target, const QVariant &value)
         case QMetaType::Bool:
             ZVAL_BOOL(target, value.toBool());
             return;
+        case QMetaType::Char:
+        case QMetaType::SChar:
+        case QMetaType::UChar:
+        case QMetaType::Short:
+        case QMetaType::UShort:
         case QMetaType::Int:
         case QMetaType::UInt:
         case QMetaType::LongLong:
@@ -185,6 +190,11 @@ static void qt_variant_to_zval(zval *target, const QVariant &value)
         }
         default:
             break;
+    }
+
+    if (value.metaType().flags().testFlag(QMetaType::IsEnumeration)) {
+        ZVAL_LONG(target, (zend_long)value.toLongLong());
+        return;
     }
 
     if (value.canConvert<QVariantList>()) {
@@ -325,6 +335,11 @@ static void qt_qobject_variant_to_property_zval(zval *target, const QVariant &va
         case QMetaType::Bool:
             ZVAL_BOOL(target, value.toBool());
             return;
+        case QMetaType::Char:
+        case QMetaType::SChar:
+        case QMetaType::UChar:
+        case QMetaType::Short:
+        case QMetaType::UShort:
         case QMetaType::Int:
         case QMetaType::UInt:
         case QMetaType::LongLong:
@@ -347,6 +362,11 @@ static void qt_qobject_variant_to_property_zval(zval *target, const QVariant &va
         }
         default:
             break;
+    }
+
+    if (value.metaType().flags().testFlag(QMetaType::IsEnumeration)) {
+        ZVAL_LONG(target, (zend_long) value.toLongLong());
+        return;
     }
 
     if (value.canConvert<QVariantList>()) {
@@ -451,6 +471,20 @@ static bool qt_qobject_has_property_name(QObject *obj, zend_string *name)
 {
     return qt_qobject_meta_property_index(obj, name) >= 0
         || qt_qobject_has_dynamic_property(obj, name);
+}
+
+static bool qt_qobject_should_delegate_to_std_property(zend_object *object, zend_string *name)
+{
+    if (object == NULL || name == NULL) {
+        return false;
+    }
+
+    zend_property_info *_qt_prop_info = zend_get_property_info(object->ce, name, /* silent */ true);
+    if (_qt_prop_info == NULL || _qt_prop_info == ZEND_WRONG_PROPERTY_INFO) {
+        return false;
+    }
+
+    return (_qt_prop_info->flags & ZEND_ACC_VIRTUAL) == 0;
 }
 
 static void qt_qobject_property_names(QObject *obj, zval *return_value)
@@ -594,6 +628,10 @@ static bool qt_qobject_notify_signature(QObject *obj, zend_string *name, zend_st
 
 static zval *{!! $ctx->filePrefix !!}_read_property(zend_object *object, zend_string *member, int type, void **cache_slot, zval *rv)
 {
+    if (qt_qobject_should_delegate_to_std_property(object, member)) {
+        return zend_std_read_property(object, member, type, cache_slot, rv);
+    }
+
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
     QObject *_qt_obj = qt_native_qobject(intern);
     if (_qt_obj == NULL) {
@@ -610,6 +648,10 @@ static zval *{!! $ctx->filePrefix !!}_read_property(zend_object *object, zend_st
 
 static zval *{!! $ctx->filePrefix !!}_write_property(zend_object *object, zend_string *member, zval *value, void **cache_slot)
 {
+    if (qt_qobject_should_delegate_to_std_property(object, member)) {
+        return zend_std_write_property(object, member, value, cache_slot);
+    }
+
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
     QObject *_qt_obj = qt_native_qobject(intern);
     if (_qt_obj == NULL) {
@@ -626,6 +668,10 @@ static zval *{!! $ctx->filePrefix !!}_write_property(zend_object *object, zend_s
 
 static zval *{!! $ctx->filePrefix !!}_get_property_ptr_ptr(zend_object *object, zend_string *member, int type, void **cache_slot)
 {
+    if (qt_qobject_should_delegate_to_std_property(object, member)) {
+        return zend_std_get_property_ptr_ptr(object, member, type, cache_slot);
+    }
+
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
     QObject *_qt_obj = qt_native_qobject(intern);
     if (_qt_obj != NULL && qt_qobject_has_property_name(_qt_obj, member)) {
@@ -637,6 +683,10 @@ static zval *{!! $ctx->filePrefix !!}_get_property_ptr_ptr(zend_object *object, 
 
 static int {!! $ctx->filePrefix !!}_has_property(zend_object *object, zend_string *member, int has_set_exists, void **cache_slot)
 {
+    if (qt_qobject_should_delegate_to_std_property(object, member)) {
+        return zend_std_has_property(object, member, has_set_exists, cache_slot);
+    }
+
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
     QObject *_qt_obj = qt_native_qobject(intern);
     if (_qt_obj == NULL) {
@@ -667,15 +717,27 @@ static int {!! $ctx->filePrefix !!}_has_property(zend_object *object, zend_strin
 
 static zend_array *{!! $ctx->filePrefix !!}_get_properties_for(zend_object *object, zend_prop_purpose purpose)
 {
-    (void) purpose;
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
     QObject *_qt_obj = qt_native_qobject(intern);
+    zend_array *_qt_props = zend_std_get_properties_for(object, purpose);
     if (_qt_obj == NULL) {
-        return zend_std_get_properties_for(object, purpose);
+        return _qt_props;
     }
 
-    zend_array *_qt_props = zend_new_array(8);
     std::unordered_set<std::string> _qt_seen;
+
+    if (_qt_props == NULL) {
+        _qt_props = zend_new_array(8);
+    } else {
+        zend_string *_qt_existing_key;
+        zval *_qt_existing_value;
+        ZEND_HASH_FOREACH_STR_KEY_VAL(_qt_props, _qt_existing_key, _qt_existing_value) {
+            (void) _qt_existing_value;
+            if (_qt_existing_key != NULL) {
+                _qt_seen.insert(std::string(ZSTR_VAL(_qt_existing_key), ZSTR_LEN(_qt_existing_key)));
+            }
+        } ZEND_HASH_FOREACH_END();
+    }
 
     const QMetaObject *_qt_meta = _qt_obj->metaObject();
     const int _qt_meta_count = _qt_meta->propertyCount();
