@@ -6,5 +6,5 @@ namespace QtBuilder\Build;
 
 interface ExtensionBootstrapper
 {
-    public function bootstrap(ExtensionBuildContext $context, int $jobs): BootstrapResult;
+    public function bootstrap(ExtensionBuildContext $context, int $jobs, ?callable $onEvent = null): BootstrapResult;
 }

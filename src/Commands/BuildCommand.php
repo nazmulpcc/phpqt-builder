@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace QtBuilder\Commands;
 
 use QtBuilder\Build\BootstrapResult;
+use QtBuilder\Build\BuildDirectoryCleaner;
 use QtBuilder\Build\BuildDiscoveryResult;
 use QtBuilder\Build\BuildDiscoveryService;
+use QtBuilder\Build\BuildLayout;
 use QtBuilder\Build\ClassGenerationService;
 use QtBuilder\Build\ExtensionBootstrapper;
 use QtBuilder\Build\ExtensionBuildContext;
@@ -33,6 +35,7 @@ class BuildCommand extends Command
         private readonly SystemInformation $systemInformation,
         ?ExtensionBootstrapper $bootstrapper = null,
         private readonly BuildDiscoveryService $discoveryService = new BuildDiscoveryService(),
+        private readonly BuildDirectoryCleaner $buildDirectoryCleaner = new BuildDirectoryCleaner(),
     ) {
         $this->bootstrapper = $bootstrapper ?? new ProcessExtensionBootstrapper($systemInformation);
 
@@ -46,7 +49,8 @@ class BuildCommand extends Command
             ->addOption('modules', null, InputOption::VALUE_REQUIRED, 'Comma-separated Qt modules to scan', 'QtCore')
             ->addOption('name', null, InputOption::VALUE_REQUIRED, 'Extension name', 'qt')
             ->addOption('ext-version', null, InputOption::VALUE_REQUIRED, 'Extension version', '0.1.0')
-            ->addOption('output', 'o', InputOption::VALUE_REQUIRED, 'Output directory', 'build/ext')
+            ->addOption('output', 'o', InputOption::VALUE_REQUIRED, 'Build root directory; extension sources go under <output>/ext', 'build')
+            ->addOption('force', 'F', InputOption::VALUE_NONE, 'Clear the selected build root before starting')
             ->addOption('jobs', 'j', InputOption::VALUE_REQUIRED, 'Number of parallel discovery/bootstrap workers');
     }
 
@@ -57,12 +61,30 @@ class BuildCommand extends Command
         $qtResolver = new QtInstallationResolver($this->systemInformation);
         $installation = $qtResolver->resolve($input->getOption('qt-path') !== null ? (string) $input->getOption('qt-path') : null, $modules);
 
-        $outputDir = (string) $input->getOption('output');
+        try {
+            $layout = BuildLayout::fromCliOutput((string) $input->getOption('output'));
+        } catch (\InvalidArgumentException $e) {
+            $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
+            return self::FAILURE;
+        }
+
+        $outputDir = $layout->extensionDir();
         $extensionName = (string) $input->getOption('name');
         $extensionVersion = (string) $input->getOption('ext-version');
         $jobs = $this->resolveJobs($input->getOption('jobs'));
+        $force = (bool) $input->getOption('force');
 
-        $context = new ExtensionBuildContext($extensionName, $extensionVersion, $outputDir, $installation, $modules);
+        if ($force) {
+            try {
+                $this->buildDirectoryCleaner->clear($layout->buildRootDir);
+                $output->writeln(sprintf('<comment>Cleared build root:</comment> %s', $layout->buildRootDir));
+            } catch (\InvalidArgumentException|\RuntimeException $e) {
+                $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
+                return self::FAILURE;
+            }
+        }
+
+        $context = new ExtensionBuildContext($extensionName, $extensionVersion, $layout->buildRootDir, $outputDir, $installation, $modules);
         $scaffolder = new ExtensionScaffolder();
         $scaffolder->prepare($context);
         $metadataDir = $context->metadataDir();
@@ -74,6 +96,7 @@ class BuildCommand extends Command
             $allowedClasses = $cachedDiscovery->allowedClasses;
             $candidateCount = $cachedDiscovery->candidateCount;
             $this->renderCacheUsage($output, $metadataDir);
+            $this->renderModuleAcceptance($output, $modules, $acceptedCandidates, $skippedClasses);
         } else {
             $output->writeln('<comment>Discovery cache miss; invoking build:discover.</comment>');
 
@@ -82,7 +105,7 @@ class BuildCommand extends Command
                 $output,
                 qtPath: $input->getOption('qt-path') !== null ? (string) $input->getOption('qt-path') : null,
                 modules: $modules,
-                outputDir: $outputDir,
+                outputDir: $layout->buildRootDir,
                 jobs: $jobs,
             );
             if ($discoverExitCode !== self::SUCCESS) {
@@ -102,7 +125,6 @@ class BuildCommand extends Command
         }
 
         $output->writeln(sprintf('<info>Scanning complete.</info> %d candidates queued, %d filtered before generation.', count($acceptedCandidates), count($skippedClasses)));
-        $this->renderModuleAcceptance($output, $modules, $acceptedCandidates, $skippedClasses);
         $classStructures = $this->discoveryService->prepareClassStructures(
             $acceptedCandidates,
             $outputDir,
@@ -170,8 +192,9 @@ class BuildCommand extends Command
             $output->writeln('<info>Bootstrapping extension build tree...</info>');
 
             try {
-                $bootstrapResult = $this->bootstrapper->bootstrap($context, $jobs);
-                $this->renderBootstrapResult($output, $bootstrapResult);
+                $bootstrapResult = $this->bootstrapper->bootstrap($context, $jobs, function (array $event) use ($output): void {
+                    $this->renderBootstrapEvent($output, $event);
+                });
             } catch (\RuntimeException $e) {
                 $bootstrapError = $e->getMessage();
                 $output->writeln(sprintf('<error>%s</error>', $bootstrapError));
@@ -199,7 +222,6 @@ class BuildCommand extends Command
             $output->writeln(sprintf('  <comment>Wrote:</comment> %s', $file));
         }
         $output->writeln(sprintf('<info>Generated %d class wrapper(s); %d class(es) skipped; %d error(s).</info>', count($generatedClasses), count($skippedClasses), count($errors)));
-        $this->renderModuleAcceptance($output, $modules, $acceptedCandidates, $skippedClasses);
 
         if ($generatedClasses === [] || $errors !== [] || $bootstrapError !== null) {
             return self::FAILURE;
@@ -263,6 +285,42 @@ class BuildCommand extends Command
             ));
             $output->writeln(sprintf('    <comment>stdout:</comment> %s', $step->stdoutLogPath));
             $output->writeln(sprintf('    <comment>stderr:</comment> %s', $step->stderrLogPath));
+        }
+    }
+
+    /**
+     * @param array{
+     *   type: string,
+     *   step: string,
+     *   command: list<string>,
+     *   stdout_log: string|null,
+     *   stderr_log: string|null,
+     *   message: string|null
+     * } $event
+     */
+    private function renderBootstrapEvent(OutputInterface $output, array $event): void
+    {
+        $step = $event['step'];
+        $type = $event['type'];
+
+        if ($type === 'step_started') {
+            $output->writeln(sprintf('  <comment>%s:</comment> started', $step));
+            return;
+        }
+
+        if ($type === 'step_succeeded') {
+            $output->writeln(sprintf('  <info>%s:</info> succeeded', $step));
+        } elseif ($type === 'step_failed') {
+            $output->writeln(sprintf('  <error>%s:</error> failed', $step));
+        } else {
+            return;
+        }
+
+        if (is_string($event['stdout_log']) && $event['stdout_log'] !== '') {
+            $output->writeln(sprintf('    <comment>stdout:</comment> %s', $event['stdout_log']));
+        }
+        if (is_string($event['stderr_log']) && $event['stderr_log'] !== '') {
+            $output->writeln(sprintf('    <comment>stderr:</comment> %s', $event['stderr_log']));
         }
     }
 

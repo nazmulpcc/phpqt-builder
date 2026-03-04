@@ -20,7 +20,7 @@ it('injects darwin framework flags into compiler and linker variables', function
         moduleHeaderRoots: ['QtCore' => '/opt/qt/lib/QtCore.framework/Headers'],
         tools: [],
     );
-    $context = new ExtensionBuildContext('qt', '0.1.0', $outputDir, $installation, ['QtCore'], ['QPoint']);
+    $context = new ExtensionBuildContext('qt', '0.1.0', dirname($outputDir), $outputDir, $installation, ['QtCore'], ['QPoint']);
 
     $scaffolder = new ExtensionScaffolder();
     $scaffolder->prepare($context);
@@ -46,7 +46,7 @@ it('does not write core files before finalize', function (): void {
         moduleHeaderRoots: ['QtCore' => '/opt/qt/include/QtCore'],
         tools: [],
     );
-    $context = new ExtensionBuildContext('qt', '0.1.0', $outputDir, $installation, ['QtCore'], ['QPoint']);
+    $context = new ExtensionBuildContext('qt', '0.1.0', dirname($outputDir), $outputDir, $installation, ['QtCore'], ['QPoint']);
 
     $scaffolder = new ExtensionScaffolder();
     $scaffolder->prepare($context);
@@ -80,7 +80,7 @@ it('links all requested darwin framework modules', function (): void {
         ],
         tools: [],
     );
-    $context = new ExtensionBuildContext('qt', '0.1.0', $outputDir, $installation, ['QtCore', 'QtGui'], ['QPoint']);
+    $context = new ExtensionBuildContext('qt', '0.1.0', dirname($outputDir), $outputDir, $installation, ['QtCore', 'QtGui'], ['QPoint']);
 
     $scaffolder = new ExtensionScaffolder();
     $scaffolder->prepare($context);
@@ -102,7 +102,7 @@ it('prefers resolved module link flags', function (): void {
         moduleLinkFlags: '-F/custom/qt/lib -framework QtGui -framework QtCore',
         tools: [],
     );
-    $context = new ExtensionBuildContext('qt', '0.1.0', $outputDir, $installation, ['QtCore', 'QtGui'], ['QPoint']);
+    $context = new ExtensionBuildContext('qt', '0.1.0', dirname($outputDir), $outputDir, $installation, ['QtCore', 'QtGui'], ['QPoint']);
 
     $scaffolder = new ExtensionScaffolder();
     $scaffolder->prepare($context);
@@ -127,6 +127,7 @@ it('registers parents before children in extension source', function (): void {
     $context = new ExtensionBuildContext(
         'qt',
         '0.1.0',
+        dirname($outputDir),
         $outputDir,
         $installation,
         ['QtCore'],
@@ -157,6 +158,7 @@ it('registers typed dependencies before consumers', function (): void {
     $context = new ExtensionBuildContext(
         'qt',
         '0.1.0',
+        dirname($outputDir),
         $outputDir,
         $installation,
         ['QtGui'],

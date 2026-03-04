@@ -19,6 +19,7 @@ it('keeps parents before children even when dependency cycles exist', function (
     $context = new ExtensionBuildContext(
         'qt',
         '0.1.0',
+        'build',
         'build/ext',
         $installation,
         ['QtCore'],

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace QtBuilder\Commands;
 
+use QtBuilder\Build\BuildLayout;
+use QtBuilder\Build\BuildDirectoryCleaner;
 use QtBuilder\Build\BuildDiscoveryService;
 use QtBuilder\Build\ExtensionBuildContext;
 use QtBuilder\Contracts\SystemInformation;
@@ -20,6 +22,7 @@ class BuildDiscoverCommand extends Command
     public function __construct(
         private readonly SystemInformation $systemInformation,
         private readonly BuildDiscoveryService $discoveryService = new BuildDiscoveryService(),
+        private readonly BuildDirectoryCleaner $buildDirectoryCleaner = new BuildDirectoryCleaner(),
     ) {
         parent::__construct();
     }
@@ -29,7 +32,8 @@ class BuildDiscoverCommand extends Command
         $this
             ->addOption('qt-path', null, InputOption::VALUE_REQUIRED, 'Path to the Qt installation root')
             ->addOption('modules', null, InputOption::VALUE_REQUIRED, 'Comma-separated Qt modules to scan', 'QtCore')
-            ->addOption('output', 'o', InputOption::VALUE_REQUIRED, 'Output directory', 'build/ext')
+            ->addOption('output', 'o', InputOption::VALUE_REQUIRED, 'Build root directory; discovery metadata is written under <output>/generated', 'build')
+            ->addOption('force', 'F', InputOption::VALUE_NONE, 'Clear the selected build root before starting discovery')
             ->addOption('jobs', 'j', InputOption::VALUE_REQUIRED, 'Number of parallel discovery workers');
     }
 
@@ -40,9 +44,26 @@ class BuildDiscoverCommand extends Command
         $qtResolver = new QtInstallationResolver($this->systemInformation);
         $installation = $qtResolver->resolve($input->getOption('qt-path') !== null ? (string) $input->getOption('qt-path') : null, $modules);
 
-        $outputDir = (string) $input->getOption('output');
+        try {
+            $layout = BuildLayout::fromCliOutput((string) $input->getOption('output'));
+        } catch (\InvalidArgumentException $e) {
+            $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
+            return self::FAILURE;
+        }
+
         $jobs = $this->resolveJobs($input->getOption('jobs'));
-        $context = new ExtensionBuildContext('qt', '0.1.0', $outputDir, $installation, $modules);
+        if ((bool) $input->getOption('force')) {
+            try {
+                $this->buildDirectoryCleaner->clear($layout->buildRootDir);
+                $output->writeln(sprintf('<comment>Cleared build root:</comment> %s', $layout->buildRootDir));
+            } catch (\InvalidArgumentException|\RuntimeException $e) {
+                $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
+                return self::FAILURE;
+            }
+        }
+
+        $context = new ExtensionBuildContext('qt', '0.1.0', $layout->buildRootDir, $layout->extensionDir(), $installation, $modules);
+        $outputDir = $context->outputDir;
         $metadataDir = $context->metadataDir();
 
         $output->writeln(sprintf('<info>Running %d parallel discovery worker(s)...</info>', $jobs));

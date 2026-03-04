@@ -18,6 +18,7 @@ readonly class ExtensionBuildContext
     public function __construct(
         public string $extensionName,
         public string $extensionVersion,
+        public string $buildRootDir,
         public string $outputDir,
         public QtInstallation $installation,
         public array $modules,
@@ -37,6 +38,7 @@ readonly class ExtensionBuildContext
         return new self(
             $this->extensionName,
             $this->extensionVersion,
+            $this->buildRootDir,
             $this->outputDir,
             $this->installation,
             $this->modules,
@@ -57,20 +59,9 @@ readonly class ExtensionBuildContext
         return sprintf('%s.cpp', $this->extensionName);
     }
 
-    public function buildRootDir(): string
-    {
-        $trimmed = rtrim($this->outputDir, '/');
-
-        if (basename($trimmed) === 'ext') {
-            return dirname($trimmed);
-        }
-
-        return $trimmed;
-    }
-
     public function metadataDir(): string
     {
-        return $this->buildRootDir() . '/generated';
+        return $this->buildRootDir . '/generated';
     }
 
     /**

@@ -17,14 +17,11 @@ final class FakeExtensionBootstrapper implements ExtensionBootstrapper
     public array $contexts = [];
 
     public ?string $failureMessage = null;
+    public string $failureStep = 'configure';
 
-    public function bootstrap(ExtensionBuildContext $context, int $jobs): BootstrapResult
+    public function bootstrap(ExtensionBuildContext $context, int $jobs, ?callable $onEvent = null): BootstrapResult
     {
         $this->contexts[] = $context;
-
-        if ($this->failureMessage !== null) {
-            throw new \RuntimeException($this->failureMessage);
-        }
 
         if (!is_dir($context->outputDir . '/build')) {
             mkdir($context->outputDir . '/build', 0755, true);
@@ -57,6 +54,42 @@ final class FakeExtensionBootstrapper implements ExtensionBootstrapper
                 'make' => ['make', '-j' . max(1, $jobs)],
                 default => ['./configure', '--enable-' . $context->extensionName, '--with-php-config=/usr/bin/php-config'],
             };
+
+            if ($onEvent !== null) {
+                $onEvent([
+                    'type' => 'step_started',
+                    'step' => $stepName,
+                    'command' => $command,
+                    'stdout_log' => null,
+                    'stderr_log' => null,
+                    'message' => null,
+                ]);
+            }
+
+            if ($this->failureMessage !== null && $stepName === $this->failureStep) {
+                if ($onEvent !== null) {
+                    $onEvent([
+                        'type' => 'step_failed',
+                        'step' => $stepName,
+                        'command' => $command,
+                        'stdout_log' => $stdoutLogPath,
+                        'stderr_log' => $stderrLogPath,
+                        'message' => $this->failureMessage,
+                    ]);
+                }
+                throw new \RuntimeException($this->failureMessage);
+            }
+
+            if ($onEvent !== null) {
+                $onEvent([
+                    'type' => 'step_succeeded',
+                    'step' => $stepName,
+                    'command' => $command,
+                    'stdout_log' => $stdoutLogPath,
+                    'stderr_log' => $stderrLogPath,
+                    'message' => null,
+                ]);
+            }
 
             $steps[] = new BootstrapStep(
                 $stepName,

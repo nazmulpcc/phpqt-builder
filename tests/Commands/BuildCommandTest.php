@@ -21,7 +21,7 @@ it('generates the extension tree from a fixture qt root', function (): void {
         [
             '--qt-path' => $fixtureRoot,
             '--modules' => 'QtCore',
-            '--output' => $outputDir,
+            '--output' => $buildRoot,
             '--jobs' => '2',
         ],
     );
@@ -51,10 +51,20 @@ it('generates the extension tree from a fixture qt root', function (): void {
             'Running 2 parallel discovery worker(s)...',
             'Class structure cache:',
             'Discovery pass 1',
+            'phpize: started',
+            'phpize: succeeded',
+            'gen_stub: started',
+            'gen_stub: succeeded',
+            'configure: started',
+            'configure: succeeded',
+            'make: started',
+            'make: succeeded',
             'Module acceptance:',
             'QtCore:',
         )
         ->and($bootstrapper->contexts)->toHaveCount(1);
+
+    expect(substr_count($result['display'], 'Module acceptance:'))->toBe(1);
 
     $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
     expect($summary['generated_classes'])->toBe(5)
@@ -83,7 +93,7 @@ it('reuses an existing discovery cache', function (): void {
         [
             '--qt-path' => $fixtureRoot,
             '--modules' => 'QtCore',
-            '--output' => $outputDir,
+            '--output' => $buildRoot,
             '--jobs' => '2',
         ],
     );
@@ -107,7 +117,7 @@ it('reuses an existing discovery cache', function (): void {
         [
             '--qt-path' => $fixtureRoot,
             '--modules' => 'QtCore',
-            '--output' => $outputDir,
+            '--output' => $buildRoot,
             '--jobs' => '2',
         ],
     );
@@ -119,9 +129,18 @@ it('reuses an existing discovery cache', function (): void {
         'discovery_cache.json',
         'accepted_candidates.json',
         'allowed_classes.json',
+        'phpize: started',
+        'phpize: succeeded',
+        'gen_stub: started',
+        'gen_stub: succeeded',
+        'configure: started',
+        'configure: succeeded',
+        'make: started',
+        'make: succeeded',
         'Module acceptance:',
         'QtCore:',
     )->not->toContain('Running 2 parallel discovery worker(s)...');
+    expect(substr_count($result['display'], 'Module acceptance:'))->toBe(1);
 
     $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
     expect($summary['generated_classes'])->toBe(1)
@@ -143,7 +162,7 @@ it('generates abstract shells and concrete children', function (): void {
         [
             '--qt-path' => $fixtureRoot,
             '--modules' => 'QtCore',
-            '--output' => $outputDir,
+            '--output' => $buildRoot,
             '--jobs' => '2',
         ],
     );
@@ -180,13 +199,13 @@ it('fails when a bootstrap step fails', function (): void {
         [
             '--qt-path' => $fixtureRoot,
             '--modules' => 'QtCore',
-            '--output' => $outputDir,
+            '--output' => $buildRoot,
             '--jobs' => '2',
         ],
     );
 
     expect($result)->toBeFailureCommandResult()
-        ->and($result['display'])->toContain('configure failed');
+        ->and($result['display'])->toContain('configure: started', 'configure: failed', 'stdout:', 'stderr:', 'configure failed');
 
     $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
     expect($summary['bootstrap_error'])->toBe('configure failed');
@@ -231,13 +250,14 @@ it('rewrites cached allow lists to actual generated classes', function (): void 
         [
             '--qt-path' => $fixtureRoot,
             '--modules' => 'QtCore',
-            '--output' => $outputDir,
+            '--output' => $buildRoot,
             '--jobs' => '2',
         ],
     );
 
     expect($result)->toBeSuccessfulCommandResult();
     expect($result['display'])->toContain('Using cached build metadata:', 'Re-evaluating generated dependency set', 'Module acceptance:', 'QtCore:');
+    expect(substr_count($result['display'], 'Module acceptance:'))->toBe(1);
 
     $allowedClasses = qt_decode_json((string) file_get_contents($metadataDir . '/allowed_classes.json'));
     expect($allowedClasses)->toBe(['QCStringHolder']);
@@ -259,4 +279,69 @@ it('rewrites cached allow lists to actual generated classes', function (): void 
     expect($summary['generation_passes'])->toBe(2)
         ->and($summary['generated_classes'])->toBe(1)
         ->and($summary['skipped_classes'])->toBe(1);
+});
+
+it('rejects an ext directory as the build root', function (): void {
+    $fixtureRoot = qt_fixture_path('qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-invalid-' . bin2hex(random_bytes(4));
+    $bootstrapper = new FakeExtensionBootstrapper();
+
+    $result = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            '--modules' => 'QtCore',
+            '--output' => $buildRoot . '/ext',
+            '--jobs' => '2',
+        ],
+    );
+
+    expect($result)->toBeFailureCommandResult()
+        ->and($result['display'])->toContain('--output must be a build root directory, not an extension directory.');
+});
+
+it('clears the build root before building when forced', function (): void {
+    $fixtureRoot = qt_fixture_path('qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-force-' . bin2hex(random_bytes(4));
+    $outputDir = $buildRoot . '/ext';
+    $metadataDir = $buildRoot . '/generated';
+    mkdir($metadataDir, 0777, true);
+    file_put_contents($metadataDir . '/stale.txt', "stale\n");
+
+    $bootstrapper = new FakeExtensionBootstrapper();
+    $result = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            '--modules' => 'QtCore',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+            '--force' => true,
+        ],
+    );
+
+    expect($result)->toBeSuccessfulCommandResult()
+        ->and($result['display'])->toContain('Cleared build root:', $buildRoot);
+    expect(is_file($metadataDir . '/stale.txt'))->toBeFalse()
+        ->and(is_file($metadataDir . '/build_summary.json'))->toBeTrue()
+        ->and(is_file($outputDir . '/config.m4'))->toBeTrue();
+});
+
+it('refuses to force-clear the current working directory', function (): void {
+    $fixtureRoot = qt_fixture_path('qt');
+    $bootstrapper = new FakeExtensionBootstrapper();
+
+    $result = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            '--modules' => 'QtCore',
+            '--output' => '.',
+            '--jobs' => '2',
+            '--force' => true,
+        ],
+    );
+
+    expect($result)->toBeFailureCommandResult()
+        ->and($result['display'])->toContain('Refusing to clear the current working directory.');
 });
