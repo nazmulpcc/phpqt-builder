@@ -93,23 +93,3 @@ function qt_runtime_payload(string $fixture, array $env = [], int $timeout = 5):
 
     return $result->payload();
 }
-
-function qt_runtime_inline_payload(string $body, array $env = [], int $timeout = 30): array
-{
-    $result = QtRuntimeProcessRunner::runInline($body, $env, $timeout);
-
-    if ($result->isSkipped()) {
-        test()->markTestSkipped($result->skipReason());
-    }
-
-    expect($result->exitCode())->toBe(
-        0,
-        sprintf(
-            "Inline runtime test failed.\nSTDOUT:\n%s\nSTDERR:\n%s",
-            $result->stdout(),
-            $result->stderr(),
-        ),
-    );
-
-    return $result->payload();
-}

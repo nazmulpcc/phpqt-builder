@@ -2,122 +2,79 @@
 
 declare(strict_types=1);
 
-use PHPUnit\Framework\Assert;
-use QtBuilder\Build\ClassGenerationService;
-use QtBuilder\Commands\GenerateCommand;
-use QtBuilder\Tests\Support\FakeSystemInformation;
+use QtBuilder\Tests\Support\GenerateBuildModeRunner;
 use Symfony\Component\Console\Command\Command;
-use Symfony\Component\Console\Tester\CommandTester;
+
 it('returns json and writes files in build mode', function (): void {
-        $fixtureRoot = qt_fixture_path('qt');
-        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
-    
-        $command = new GenerateCommand(FakeSystemInformation::passing());
-        $tester = new CommandTester($command);
-        $exitCode = $tester->execute([
-            'header' => $fixtureRoot . '/include/QtCore/qpoint.h',
-            'class' => 'QPoint',
-            '--qt-path' => $fixtureRoot,
-            '--module' => 'QtCore',
-            '--build-mode' => true,
-            '--output' => $outputDir,
-            '--output-subdir' => 'classes',
-            '--allowed-classes' => 'QPoint',
-        ]);
-    
-        Assert::assertSame(Command::SUCCESS, $exitCode);
-    
-        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
-        Assert::assertSame('ok', $payload['status']);
-        Assert::assertSame('QPoint', $payload['class']);
-        Assert::assertFileExists($outputDir . '/classes/qt_qpoint.cpp');
-        Assert::assertFileExists($outputDir . '/classes/qt_qpoint.h');
-        Assert::assertFileExists($outputDir . '/classes/qt_qpoint.stub.php');
-    
-        $skipNames = array_column($payload['skipped_methods'], 'name');
-        Assert::assertContains('rx', $skipNames);
+    $result = GenerateBuildModeRunner::run('qt', [
+        'header' => qt_fixture_path('qt/include/QtCore/qpoint.h'),
+        'class' => 'QPoint',
+        '--qt-path' => qt_fixture_path('qt'),
+        '--module' => 'QtCore',
+        '--allowed-classes' => 'QPoint',
+    ]);
+
+    expect($result->exitCode)->toBe(Command::SUCCESS)
+        ->and($result->payload['status'])->toBe('ok')
+        ->and($result->payload['class'])->toBe('QPoint')
+        ->and(is_file($result->path('QPoint', 'cpp')))->toBeTrue()
+        ->and(is_file($result->path('QPoint', 'h')))->toBeTrue()
+        ->and(is_file($result->path('QPoint', 'stub.php')))->toBeTrue()
+        ->and(array_column($result->payload['skipped_methods'], 'name'))->toContain('rx');
 });
 
 it('returns json without writing files in probe mode', function (): void {
-        $fixtureRoot = qt_fixture_path('qt');
-        $outputDir = sys_get_temp_dir() . '/qtbuilder-probe-' . bin2hex(random_bytes(4));
-    
-        $command = new GenerateCommand(FakeSystemInformation::passing());
-        $tester = new CommandTester($command);
-        $exitCode = $tester->execute([
-            'header' => $fixtureRoot . '/include/QtCore/qpoint.h',
-            'class' => 'QPoint',
-            '--qt-path' => $fixtureRoot,
-            '--module' => 'QtCore',
-            '--build-mode' => true,
-            '--worker-mode' => 'probe',
-            '--output' => $outputDir,
-            '--output-subdir' => 'classes',
-            '--allowed-classes' => 'QPoint',
-        ]);
-    
-        Assert::assertSame(Command::SUCCESS, $exitCode);
-    
-        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
-        Assert::assertSame('ok', $payload['status']);
-        Assert::assertSame('QPoint', $payload['class']);
-        Assert::assertArrayNotHasKey('generated_files', $payload);
-        Assert::assertFileDoesNotExist($outputDir . '/classes/qt_qpoint.cpp');
-        Assert::assertFileDoesNotExist($outputDir . '/classes/qt_qpoint.h');
-        Assert::assertFileDoesNotExist($outputDir . '/classes/qt_qpoint.stub.php');
+    $result = GenerateBuildModeRunner::run('qt', [
+        'header' => qt_fixture_path('qt/include/QtCore/qpoint.h'),
+        'class' => 'QPoint',
+        '--qt-path' => qt_fixture_path('qt'),
+        '--module' => 'QtCore',
+        '--worker-mode' => 'probe',
+        '--allowed-classes' => 'QPoint',
+    ], 'qtbuilder-probe-');
+
+    expect($result->exitCode)->toBe(Command::SUCCESS)
+        ->and($result->payload['status'])->toBe('ok')
+        ->and($result->payload['class'])->toBe('QPoint')
+        ->and(array_key_exists('generated_files', $result->payload))->toBeFalse()
+        ->and(is_file($result->path('QPoint', 'cpp')))->toBeFalse()
+        ->and(is_file($result->path('QPoint', 'h')))->toBeFalse()
+        ->and(is_file($result->path('QPoint', 'stub.php')))->toBeFalse();
 });
 
 it('uses explicit includes even when qt path is invalid', function (): void {
-        $fixtureRoot = qt_fixture_path('qt');
-        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-includes-' . bin2hex(random_bytes(4));
-    
-        $command = new GenerateCommand(FakeSystemInformation::passing());
-        $tester = new CommandTester($command);
-        $exitCode = $tester->execute([
-            'header' => $fixtureRoot . '/include/QtCore/qpoint.h',
-            'class' => 'QPoint',
-            '--qt-path' => '/definitely/not/a/qt/root',
-            '--include' => [
-                $fixtureRoot . '/include',
-                $fixtureRoot . '/include/QtCore',
-            ],
-            '--module' => 'QtCore',
-            '--build-mode' => true,
-            '--output' => $outputDir,
-            '--output-subdir' => 'classes',
-            '--allowed-classes' => 'QPoint',
-        ]);
-    
-        Assert::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
-    
-        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
-        Assert::assertSame('ok', $payload['status']);
-        Assert::assertFileExists($outputDir . '/classes/qt_qpoint.cpp');
+    $result = GenerateBuildModeRunner::run('qt', [
+        'header' => qt_fixture_path('qt/include/QtCore/qpoint.h'),
+        'class' => 'QPoint',
+        '--qt-path' => '/definitely/not/a/qt/root',
+        '--include' => [
+            qt_fixture_path('qt/include'),
+            qt_fixture_path('qt/include/QtCore'),
+        ],
+        '--module' => 'QtCore',
+        '--allowed-classes' => 'QPoint',
+    ], 'qtbuilder-generate-includes-');
+
+    expect($result->exitCode)->toBe(Command::SUCCESS, $result->display)
+        ->and($result->payload['status'])->toBe('ok')
+        ->and(is_file($result->path('QPoint', 'cpp')))->toBeTrue();
 });
 
 it('can load allowed classes from a json file', function (): void {
-        $fixtureRoot = qt_fixture_path('qt');
-        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
-        $allowedClassesFile = $outputDir . '/allowed_classes.json';
-        mkdir($outputDir, 0755, true);
-        file_put_contents($allowedClassesFile, json_encode(['QTree', 'QNode'], JSON_THROW_ON_ERROR));
-    
-        $command = new GenerateCommand(FakeSystemInformation::passing());
-        $tester = new CommandTester($command);
-        $exitCode = $tester->execute([
-            'header' => $fixtureRoot . '/include/QtCore/qtree.h',
-            'class' => 'QTree',
-            '--qt-path' => $fixtureRoot,
-            '--module' => 'QtCore',
-            '--build-mode' => true,
-            '--output' => $outputDir,
-            '--output-subdir' => 'classes',
-            '--allowed-classes-file' => $allowedClassesFile,
-        ]);
-    
-        Assert::assertSame(Command::SUCCESS, $exitCode);
-    
-        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
-        Assert::assertSame('ok', $payload['status']);
-        Assert::assertFileExists($outputDir . '/classes/qt_qtree.cpp');
+    $outputDir = qt_temp_dir('qtbuilder-generate-');
+    $allowedClassesFile = $outputDir . '/allowed_classes.json';
+    file_put_contents($allowedClassesFile, json_encode(['QTree', 'QNode'], JSON_THROW_ON_ERROR));
+
+    $result = GenerateBuildModeRunner::run('qt', [
+        'header' => qt_fixture_path('qt/include/QtCore/qtree.h'),
+        'class' => 'QTree',
+        '--qt-path' => qt_fixture_path('qt'),
+        '--module' => 'QtCore',
+        '--allowed-classes-file' => $allowedClassesFile,
+        '--output' => $outputDir,
+    ]);
+
+    expect($result->exitCode)->toBe(Command::SUCCESS)
+        ->and($result->payload['status'])->toBe('ok')
+        ->and(is_file($result->path('QTree', 'cpp')))->toBeTrue();
 });

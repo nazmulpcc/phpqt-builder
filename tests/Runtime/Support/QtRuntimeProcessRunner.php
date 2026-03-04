@@ -39,22 +39,6 @@ final class QtRuntimeProcessRunner
         return self::runScript($fixturePath, $env, $timeout);
     }
 
-    public static function runInline(string $body, array $env = [], int $timeout = 30): QtRuntimeProcessResult
-    {
-        $scriptPath = tempnam(sys_get_temp_dir(), 'phpqt-inline-');
-        if ($scriptPath === false) {
-            return new QtRuntimeProcessResult(1, '', 'Could not create inline runtime temp file.', []);
-        }
-
-        file_put_contents($scriptPath, "<?php\n" . $body . "\n");
-
-        try {
-            return self::runScript($scriptPath, $env, $timeout);
-        } finally {
-            @unlink($scriptPath);
-        }
-    }
-
     /**
      * @return array<string, mixed>
      */

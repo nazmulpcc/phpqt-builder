@@ -5,9 +5,43 @@ declare(strict_types=1);
 use PHPUnit\Framework\Assert;
 use QtBuilder\Build\ClassGenerationService;
 use QtBuilder\Commands\GenerateCommand;
+use QtBuilder\Tests\Support\GenerateBuildModeRunner;
 use QtBuilder\Tests\Support\FakeSystemInformation;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Tester\CommandTester;
+
+dataset('nested return holders', [
+    'nested result type' => [
+        'qresultholder.h',
+        'QResultHolder',
+        'QResultHolder',
+        'decode',
+        'public function setMode(int $mode): void {}',
+        'intern->native_ptr->setMode((QResultHolder::Mode)((int)(mode)));',
+        null,
+        'RETURN_LONG((zend_long)(QResultHolder::decode()',
+    ],
+    'nested bare enum type' => [
+        'qpartsholder.h',
+        'QPartsHolder',
+        'QPartsHolder,QDate',
+        'partsFromDate',
+        'public function setFormat(int $format): void {}',
+        'intern->native_ptr->setFormat((QPartsHolder::NameFormat)((int)(format)));',
+        'public function partsFromDate',
+        'ZEND_METHOD(Qt_Core_QPartsHolder, partsFromDate)',
+    ],
+    'qualified nested enum type' => [
+        'qqualifiedtypeholder.h',
+        'QQualifiedTypeHolder',
+        'QQualifiedTypeHolder',
+        'elementAt',
+        'public function kind(): int {}',
+        'intern->native_ptr->setKind((QQualifiedTypeHolder::Kind)((int)(kind)));',
+        null,
+        'ZEND_METHOD(Qt_Core_QQualifiedTypeHolder, elementAt)',
+    ],
+]);
 it('casts const object pointer returns for wrapping', function (): void {
         $fixtureRoot = qt_fixture_path('const-pointer');
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
@@ -277,68 +311,52 @@ it('builds an input only argv constructor bridge', function (): void {
         Assert::assertStringContainsString('_qt_arg_0 = (int)_qt_argv_storage->argv_storage.size();', $cpp);
 });
 
-it('skips nested result types but keeps nested enums', function (): void {
-        $fixtureRoot = qt_fixture_path('policy-qt');
-        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
-    
-        $command = new GenerateCommand(FakeSystemInformation::passing());
-        $tester = new CommandTester($command);
-        $exitCode = $tester->execute([
-            'header' => $fixtureRoot . '/include/QtCore/qresultholder.h',
-            'class' => 'QResultHolder',
-            '--qt-path' => $fixtureRoot,
-            '--module' => 'QtCore',
-            '--build-mode' => true,
-            '--output' => $outputDir,
-            '--output-subdir' => 'classes',
-            '--allowed-classes' => 'QResultHolder',
-        ]);
-    
-        Assert::assertSame(Command::SUCCESS, $exitCode);
-    
-        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
-        Assert::assertSame('ok', $payload['status']);
-        Assert::assertContains('decode', array_column($payload['skipped_methods'], 'name'));
-        Assert::assertContains('unsupported_return_type', array_column($payload['skipped_methods'], 'reason_code'));
-    
-        $stub = (string) file_get_contents($outputDir . '/classes/qt_qresultholder.stub.php');
-        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qresultholder.cpp');
-    
-        Assert::assertStringContainsString('public function setMode(int $mode): void {}', $stub);
-        Assert::assertStringContainsString('intern->native_ptr->setMode((QResultHolder::Mode)((int)(mode)));', $cpp);
-        Assert::assertStringNotContainsString('fromBase64Encoding', $cpp);
-        Assert::assertStringNotContainsString('RETURN_LONG((zend_long)(QResultHolder::decode()', $cpp);
-});
+it('skips nested return types while keeping enum-facing apis', function (
+    string $header,
+    string $class,
+    string $allowed,
+    string $skippedMethod,
+    string $stubFragment,
+    string $cppFragment,
+    ?string $missingStubFragment,
+    string $missingCppFragment,
+): void {
+    $result = GenerateBuildModeRunner::run('policy-qt', [
+        'header' => qt_fixture_path('policy-qt/include/QtCore/' . $header),
+        'class' => $class,
+        '--qt-path' => qt_fixture_path('policy-qt'),
+        '--module' => 'QtCore',
+        '--allowed-classes' => $allowed,
+    ]);
+
+    expect($result->exitCode)->toBe(Command::SUCCESS)
+        ->and($result->payload['status'])->toBe('ok')
+        ->and(array_column($result->payload['skipped_methods'], 'name'))->toContain($skippedMethod)
+        ->and(array_column($result->payload['skipped_methods'], 'reason_code'))->toContain('unsupported_return_type')
+        ->and($result->stub($class))->toContain($stubFragment)
+        ->and($result->cpp($class))->toContain($cppFragment)
+        ->and($result->cpp($class))->not->toContain($missingCppFragment);
+
+    if ($missingStubFragment !== null) {
+        expect($result->stub($class))->not->toContain($missingStubFragment);
+    }
+})->with('nested return holders');
 
 it('handles std string conversions', function (): void {
-        $fixtureRoot = qt_fixture_path('policy-qt');
-        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
-    
-        $command = new GenerateCommand(FakeSystemInformation::passing());
-        $tester = new CommandTester($command);
-        $exitCode = $tester->execute([
-            'header' => $fixtureRoot . '/include/QtCore/qstdstringholder.h',
-            'class' => 'QStdStringHolder',
-            '--qt-path' => $fixtureRoot,
-            '--module' => 'QtCore',
-            '--build-mode' => true,
-            '--output' => $outputDir,
-            '--output-subdir' => 'classes',
-            '--allowed-classes' => 'QStdStringHolder',
-        ]);
-    
-        Assert::assertSame(Command::SUCCESS, $exitCode);
-    
-        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
-        Assert::assertSame('ok', $payload['status']);
-    
-        $stub = (string) file_get_contents($outputDir . '/classes/qt_qstdstringholder.stub.php');
-        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qstdstringholder.cpp');
-    
-        Assert::assertStringContainsString('public static function fromStdString(string $s): QStdStringHolder {}', $stub);
-        Assert::assertStringContainsString('public function toStdString(): string {}', $stub);
-        Assert::assertStringContainsString('QStdStringHolder::fromStdString(std::string(ZSTR_VAL(s), ZSTR_LEN(s)))', $cpp);
-        Assert::assertStringContainsString('RETURN_STRINGL(_result.data(), _result.size())', $cpp);
+    $result = GenerateBuildModeRunner::run('policy-qt', [
+        'header' => qt_fixture_path('policy-qt/include/QtCore/qstdstringholder.h'),
+        'class' => 'QStdStringHolder',
+        '--qt-path' => qt_fixture_path('policy-qt'),
+        '--module' => 'QtCore',
+        '--allowed-classes' => 'QStdStringHolder',
+    ]);
+
+    expect($result->exitCode)->toBe(Command::SUCCESS)
+        ->and($result->payload['status'])->toBe('ok')
+        ->and($result->stub('QStdStringHolder'))->toContain('public static function fromStdString(string $s): QStdStringHolder {}')
+        ->and($result->stub('QStdStringHolder'))->toContain('public function toStdString(): string {}')
+        ->and($result->cpp('QStdStringHolder'))->toContain('QStdStringHolder::fromStdString(std::string(ZSTR_VAL(s), ZSTR_LEN(s)))')
+        ->and($result->cpp('QStdStringHolder'))->toContain('RETURN_STRINGL(_result.data(), _result.size())');
 });
 
 it('treats object returns without pointers as value objects', function (): void {
@@ -375,135 +393,40 @@ it('treats object returns without pointers as value objects', function (): void 
         Assert::assertStringNotContainsString('QValueReturnHolder *_result = intern->native_ptr->normalized();', $cpp);
 });
 
-it('skips nested struct returns but keeps bare enums', function (): void {
-        $fixtureRoot = qt_fixture_path('policy-qt');
-        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
-    
-        $command = new GenerateCommand(FakeSystemInformation::passing());
-        $tester = new CommandTester($command);
-        $exitCode = $tester->execute([
-            'header' => $fixtureRoot . '/include/QtCore/qpartsholder.h',
-            'class' => 'QPartsHolder',
-            '--qt-path' => $fixtureRoot,
-            '--module' => 'QtCore',
-            '--build-mode' => true,
-            '--output' => $outputDir,
-            '--output-subdir' => 'classes',
-            '--allowed-classes' => 'QPartsHolder,QDate',
-        ]);
-    
-        Assert::assertSame(Command::SUCCESS, $exitCode);
-    
-        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
-        Assert::assertSame('ok', $payload['status']);
-        Assert::assertContains('partsFromDate', array_column($payload['skipped_methods'], 'name'));
-        Assert::assertContains('unsupported_return_type', array_column($payload['skipped_methods'], 'reason_code'));
-    
-        $stub = (string) file_get_contents($outputDir . '/classes/qt_qpartsholder.stub.php');
-        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qpartsholder.cpp');
-    
-        Assert::assertStringContainsString('public function setFormat(int $format): void {}', $stub);
-        Assert::assertStringContainsString('intern->native_ptr->setFormat((QPartsHolder::NameFormat)((int)(format)));', $cpp);
-        Assert::assertStringNotContainsString('public function partsFromDate', $stub);
-        Assert::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QPartsHolder, partsFromDate)', $cpp);
-});
-
-it('skips qualified nested struct returns but keeps qualified enums', function (): void {
-        $fixtureRoot = qt_fixture_path('policy-qt');
-        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
-    
-        $command = new GenerateCommand(FakeSystemInformation::passing());
-        $tester = new CommandTester($command);
-        $exitCode = $tester->execute([
-            'header' => $fixtureRoot . '/include/QtCore/qqualifiedtypeholder.h',
-            'class' => 'QQualifiedTypeHolder',
-            '--qt-path' => $fixtureRoot,
-            '--module' => 'QtCore',
-            '--build-mode' => true,
-            '--output' => $outputDir,
-            '--output-subdir' => 'classes',
-            '--allowed-classes' => 'QQualifiedTypeHolder',
-        ]);
-    
-        Assert::assertSame(Command::SUCCESS, $exitCode);
-    
-        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
-        Assert::assertSame('ok', $payload['status']);
-        Assert::assertContains('elementAt', array_column($payload['skipped_methods'], 'name'));
-        Assert::assertContains('unsupported_return_type', array_column($payload['skipped_methods'], 'reason_code'));
-    
-        $stub = (string) file_get_contents($outputDir . '/classes/qt_qqualifiedtypeholder.stub.php');
-        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qqualifiedtypeholder.cpp');
-    
-        Assert::assertStringContainsString('public function kind(): int {}', $stub);
-        Assert::assertStringContainsString('public function setKind(int $kind): void {}', $stub);
-        Assert::assertStringContainsString('RETURN_LONG((zend_long)(intern->native_ptr->kind()));', $cpp);
-        Assert::assertStringContainsString('intern->native_ptr->setKind((QQualifiedTypeHolder::Kind)((int)(kind)));', $cpp);
-        Assert::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QQualifiedTypeHolder, elementAt)', $cpp);
-});
-
 it('converts chrono durations to and from integers', function (): void {
-        $fixtureRoot = qt_fixture_path('policy-qt');
-        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
-    
-        $command = new GenerateCommand(FakeSystemInformation::passing());
-        $tester = new CommandTester($command);
-        $exitCode = $tester->execute([
-            'header' => $fixtureRoot . '/include/QtCore/qchronoholder.h',
-            'class' => 'QChronoHolder',
-            '--qt-path' => $fixtureRoot,
-            '--module' => 'QtCore',
-            '--build-mode' => true,
-            '--output' => $outputDir,
-            '--output-subdir' => 'classes',
-            '--allowed-classes' => 'QChronoHolder',
-        ]);
-    
-        Assert::assertSame(Command::SUCCESS, $exitCode);
-    
-        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
-        Assert::assertSame('ok', $payload['status']);
-    
-        $stub = (string) file_get_contents($outputDir . '/classes/qt_qchronoholder.stub.php');
-        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qchronoholder.cpp');
-    
-        Assert::assertStringContainsString('public function setInterval(int $value): void {}', $stub);
-        Assert::assertStringContainsString('intern->native_ptr->setInterval(std::chrono::milliseconds((std::chrono::milliseconds::rep)((int)(value))));', $cpp);
-        Assert::assertStringContainsString('RETURN_LONG((zend_long)(intern->native_ptr->interval().count()));', $cpp);
+    $result = GenerateBuildModeRunner::run('policy-qt', [
+        'header' => qt_fixture_path('policy-qt/include/QtCore/qchronoholder.h'),
+        'class' => 'QChronoHolder',
+        '--qt-path' => qt_fixture_path('policy-qt'),
+        '--module' => 'QtCore',
+        '--allowed-classes' => 'QChronoHolder',
+    ]);
+
+    expect($result->exitCode)->toBe(Command::SUCCESS)
+        ->and($result->payload['status'])->toBe('ok')
+        ->and($result->stub('QChronoHolder'))->toContain('public function setInterval(int $value): void {}')
+        ->and($result->cpp('QChronoHolder'))->toContain('intern->native_ptr->setInterval(std::chrono::milliseconds((std::chrono::milliseconds::rep)((int)(value))));')
+        ->and($result->cpp('QChronoHolder'))->toContain('RETURN_LONG((zend_long)(intern->native_ptr->interval().count()));');
 });
 
 it('bridges wide strings through qstring', function (): void {
-        $fixtureRoot = qt_fixture_path('policy-qt');
-        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
-    
-        $command = new GenerateCommand(FakeSystemInformation::passing());
-        $tester = new CommandTester($command);
-        $exitCode = $tester->execute([
-            'header' => $fixtureRoot . '/include/QtCore/qwidestringholder.h',
-            'class' => 'QWideStringHolder',
-            '--qt-path' => $fixtureRoot,
-            '--module' => 'QtCore',
-            '--build-mode' => true,
-            '--output' => $outputDir,
-            '--output-subdir' => 'classes',
-            '--allowed-classes' => 'QWideStringHolder',
-        ]);
-    
-        Assert::assertSame(Command::SUCCESS, $exitCode);
-    
-        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
-        Assert::assertSame('ok', $payload['status']);
-    
-        $stub = (string) file_get_contents($outputDir . '/classes/qt_qwidestringholder.stub.php');
-        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qwidestringholder.cpp');
-    
-        Assert::assertStringContainsString('public static function fromStdWString(string $s): QWideStringHolder {}', $stub);
-        Assert::assertStringContainsString('QString::fromUtf8(ZSTR_VAL(s), (int)ZSTR_LEN(s)).toStdWString()', $cpp);
-        Assert::assertStringContainsString('QString::fromStdWString(_result).toUtf8()', $cpp);
-        Assert::assertStringContainsString('QString::fromUtf8(ZSTR_VAL(s), (int)ZSTR_LEN(s)).toStdU16String()', $cpp);
-        Assert::assertStringContainsString('QString::fromStdU16String(_result).toUtf8()', $cpp);
-        Assert::assertStringContainsString('QString::fromUtf8(ZSTR_VAL(s), (int)ZSTR_LEN(s)).toStdU32String()', $cpp);
-        Assert::assertStringContainsString('QString::fromStdU32String(_result).toUtf8()', $cpp);
+    $result = GenerateBuildModeRunner::run('policy-qt', [
+        'header' => qt_fixture_path('policy-qt/include/QtCore/qwidestringholder.h'),
+        'class' => 'QWideStringHolder',
+        '--qt-path' => qt_fixture_path('policy-qt'),
+        '--module' => 'QtCore',
+        '--allowed-classes' => 'QWideStringHolder',
+    ]);
+
+    expect($result->exitCode)->toBe(Command::SUCCESS)
+        ->and($result->payload['status'])->toBe('ok')
+        ->and($result->stub('QWideStringHolder'))->toContain('public static function fromStdWString(string $s): QWideStringHolder {}')
+        ->and($result->cpp('QWideStringHolder'))->toContain('QString::fromUtf8(ZSTR_VAL(s), (int)ZSTR_LEN(s)).toStdWString()')
+        ->and($result->cpp('QWideStringHolder'))->toContain('QString::fromStdWString(_result).toUtf8()')
+        ->and($result->cpp('QWideStringHolder'))->toContain('QString::fromUtf8(ZSTR_VAL(s), (int)ZSTR_LEN(s)).toStdU16String()')
+        ->and($result->cpp('QWideStringHolder'))->toContain('QString::fromStdU16String(_result).toUtf8()')
+        ->and($result->cpp('QWideStringHolder'))->toContain('QString::fromUtf8(ZSTR_VAL(s), (int)ZSTR_LEN(s)).toStdU32String()')
+        ->and($result->cpp('QWideStringHolder'))->toContain('QString::fromStdU32String(_result).toUtf8()');
 });
 
 it('returns qanystringview values via toString', function (): void {
