@@ -47,7 +47,9 @@
 @if($ctx->requiresVirtualTrampoline)
             if (_qt_use_trampoline) {
                 intern->native_ptr = new {!! $ctx->nativeInstantiationType !!}({!! implode(', ', $callPlan['args']) !!});
-                static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr)->php_object = &intern->std;
+                auto *_qt_trampoline = static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr);
+                _qt_trampoline->php_object = &intern->std;
+                _qt_trampoline->qt_cache_virtual_overrides(_qt_actual_ce, {!! $ctx->ceVarName !!});
                 intern->native_is_generated_subclass = true;
                 intern->native_is_virtual_trampoline = true;
             } else {

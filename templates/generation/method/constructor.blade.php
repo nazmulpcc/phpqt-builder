@@ -36,23 +36,23 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
     }
 
 @if($ctx->requiresVirtualTrampoline)
-@if($ctx->isAbstract)
-    bool _qt_use_trampoline = (Z_OBJCE_P(ZEND_THIS) != {!! $ctx->ceVarName !!});
-@else
     zend_class_entry *_qt_actual_ce = Z_OBJCE_P(ZEND_THIS);
+@if($ctx->isAbstract)
+    bool _qt_use_trampoline = (_qt_actual_ce != {!! $ctx->ceVarName !!});
+@else
     bool _qt_has_virtual_override = false;
     if (_qt_actual_ce != {!! $ctx->ceVarName !!}) {
+        static const char * const _qt_virtual_methods[] = {
 @foreach($ctx->virtualDispatchMethodNames() as $methodName)
-        if (qt_method_is_overridden_in_ce(_qt_actual_ce, {!! $ctx->ceVarName !!}, "{!! $methodName !!}")) {
-            _qt_has_virtual_override = true;
-        }
-@if(!$loop->last)
-        if (!_qt_has_virtual_override) {
-@endif
+            "{!! $methodName !!}",
 @endforeach
-@for($i = 0; $i < count($ctx->virtualDispatchMethodNames()) - 1; $i++)
-        }
-@endfor
+        };
+        _qt_has_virtual_override = qt_any_virtual_method_overridden_in_ce(
+            _qt_actual_ce,
+            {!! $ctx->ceVarName !!},
+            _qt_virtual_methods,
+            sizeof(_qt_virtual_methods) / sizeof(_qt_virtual_methods[0])
+        );
     }
     bool _qt_use_trampoline = (_qt_actual_ce != {!! $ctx->ceVarName !!}) && _qt_has_virtual_override;
 @endif
@@ -62,7 +62,9 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
 @if($ctx->requiresVirtualTrampoline)
     if (_qt_use_trampoline) {
         intern->native_ptr = new {!! $ctx->nativeInstantiationType !!}();
-        static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr)->php_object = &intern->std;
+        auto *_qt_trampoline = static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr);
+        _qt_trampoline->php_object = &intern->std;
+        _qt_trampoline->qt_cache_virtual_overrides(_qt_actual_ce, {!! $ctx->ceVarName !!});
         intern->native_is_generated_subclass = true;
         intern->native_is_virtual_trampoline = true;
     } else {
@@ -100,7 +102,9 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
 @if($ctx->requiresVirtualTrampoline)
     if (_qt_use_trampoline) {
         intern->native_ptr = new {!! $ctx->nativeInstantiationType !!}({!! implode(', ', $callPlan['args']) !!});
-        static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr)->php_object = &intern->std;
+        auto *_qt_trampoline = static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr);
+        _qt_trampoline->php_object = &intern->std;
+        _qt_trampoline->qt_cache_virtual_overrides(_qt_actual_ce, {!! $ctx->ceVarName !!});
         intern->native_is_generated_subclass = true;
         intern->native_is_virtual_trampoline = true;
     } else {

@@ -531,6 +531,39 @@ class ClassContext
     }
 
     /**
+     * @return list<array{method:string, field:string}>
+     */
+    public function virtualDispatchCacheEntries(): array
+    {
+        $entries = [];
+
+        foreach ($this->virtualDispatchMethodNames() as $methodName) {
+            $entries[] = [
+                'method' => $methodName,
+                'field' => 'qt_has_override_' . self::sanitizeIdentifierFragment($methodName),
+            ];
+        }
+
+        return $entries;
+    }
+
+    private static function sanitizeIdentifierFragment(string $name): string
+    {
+        $sanitized = preg_replace('/[^a-zA-Z0-9_]+/', '_', $name) ?? $name;
+        $sanitized = strtolower($sanitized);
+
+        if ($sanitized === '') {
+            return 'method';
+        }
+
+        if (\ctype_digit($sanitized[0])) {
+            return 'm_' . $sanitized;
+        }
+
+        return $sanitized;
+    }
+
+    /**
      * @param list<MethodContext> $signals
      * @return list<SignalOverloadContext>
      */

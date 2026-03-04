@@ -18,6 +18,7 @@
 #include <new>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <QString>
@@ -135,6 +136,70 @@ static zend_always_inline bool qt_method_is_overridden_in_ce(zend_class_entry *a
     }
 
     return child_fn->common.scope != base_fn->common.scope;
+}
+
+struct qt_override_cache_key {
+    zend_class_entry *actual_ce;
+    zend_class_entry *base_ce;
+};
+
+struct qt_override_cache_key_hash {
+    size_t operator()(const qt_override_cache_key &key) const
+    {
+        auto left = reinterpret_cast<size_t>(key.actual_ce);
+        auto right = reinterpret_cast<size_t>(key.base_ce);
+        return left ^ (right + 0x9e3779b97f4a7c15ULL + (left << 6) + (left >> 2));
+    }
+};
+
+struct qt_override_cache_key_equal {
+    bool operator()(const qt_override_cache_key &left, const qt_override_cache_key &right) const
+    {
+        return left.actual_ce == right.actual_ce && left.base_ce == right.base_ce;
+    }
+};
+
+static zend_always_inline bool qt_any_virtual_method_overridden_in_ce(
+    zend_class_entry *actual_ce,
+    zend_class_entry *base_ce,
+    const char * const *method_names,
+    size_t method_count
+)
+{
+    if (actual_ce == NULL || base_ce == NULL || method_names == NULL || method_count == 0) {
+        return false;
+    }
+
+    if (actual_ce == base_ce) {
+        return false;
+    }
+
+    static std::unordered_map<qt_override_cache_key, bool, qt_override_cache_key_hash, qt_override_cache_key_equal> _qt_cache;
+    static std::mutex _qt_cache_mutex;
+
+    qt_override_cache_key _qt_key{actual_ce, base_ce};
+    {
+        std::lock_guard<std::mutex> _qt_lock(_qt_cache_mutex);
+        auto _qt_it = _qt_cache.find(_qt_key);
+        if (_qt_it != _qt_cache.end()) {
+            return _qt_it->second;
+        }
+    }
+
+    bool _qt_has_override = false;
+    for (size_t _qt_i = 0; _qt_i < method_count; ++_qt_i) {
+        if (qt_method_is_overridden_in_ce(actual_ce, base_ce, method_names[_qt_i])) {
+            _qt_has_override = true;
+            break;
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> _qt_lock(_qt_cache_mutex);
+        _qt_cache.emplace(_qt_key, _qt_has_override);
+    }
+
+    return _qt_has_override;
 }
 
 static zend_always_inline bool qt_call_php_method(zend_object *object, const char *function_name, zval *retval, uint32_t param_count, zval *params)
@@ -964,6 +1029,26 @@ public:
     using @if($ctx->requiresAccessShim){!! $ctx->accessShimTypeName !!}@else{!! $ctx->nativeCppType !!}@endif::@if($ctx->requiresAccessShim){!! $ctx->accessShimTypeName !!}@else{!! $ctx->nativeCppType !!}@endif;
 
     zend_object *php_object = nullptr;
+    mutable bool qt_override_cache_initialized = false;
+@foreach($ctx->virtualDispatchCacheEntries() as $entry)
+    mutable bool {!! $entry['field'] !!} = false;
+@endforeach
+
+    inline void qt_cache_virtual_overrides(zend_class_entry *actual_ce, zend_class_entry *base_ce) const
+    {
+        if (this->qt_override_cache_initialized) {
+            return;
+        }
+
+        this->qt_override_cache_initialized = true;
+        if (actual_ce == NULL || base_ce == NULL || actual_ce == base_ce) {
+            return;
+        }
+
+@foreach($ctx->virtualDispatchCacheEntries() as $entry)
+        this->{!! $entry['field'] !!} = qt_method_is_overridden_in_ce(actual_ce, base_ce, "{!! $entry['method'] !!}");
+@endforeach
+    }
 
 @foreach($ctx->virtualMethods() as $method)
 @foreach($method->overloads as $overloadIndex => $overload)
@@ -989,6 +1074,13 @@ public:
 @endif
     {!! $overload->cppReturnType !!} {!! $method->cppName !!}({!! $overrideSignature !!}){!! $constQualifier !!} override
     {
+@php
+    $entryMap = [];
+    foreach ($ctx->virtualDispatchCacheEntries() as $entry) {
+        $entryMap[$entry['method']] = $entry['field'];
+    }
+    $overrideField = $entryMap[$method->name] ?? null;
+@endphp
         if (this->php_object == nullptr) {
             zend_throw_error(NULL, "Missing PHP object for {!! $ctx->phpClassName !!}::{!! $method->name !!}() virtual dispatch.");
 @if($overload->returnStrategy === 'void')
@@ -998,7 +1090,11 @@ public:
 @endif
         }
 
-        if (!qt_method_is_overridden(this->php_object, {!! $ctx->ceVarName !!}, "{!! $method->name !!}")) {
+        if (!this->qt_override_cache_initialized) {
+            this->qt_cache_virtual_overrides(this->php_object->ce, {!! $ctx->ceVarName !!});
+        }
+
+        if (!this->{!! $overrideField !!}) {
 @if($overload->isPureVirtual)
             zend_throw_error(NULL, "Pure virtual method {!! $ctx->phpClassName !!}::{!! $method->name !!}() must be overridden in PHP.");
 @if($overload->returnStrategy === 'void')

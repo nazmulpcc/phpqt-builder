@@ -88,10 +88,11 @@ it('generates abstract classes and retains pure virtual methods', function (): v
         Assert::assertStringContainsString('ZEND_ACC_PROTECTED', $cpp);
         Assert::assertStringContainsString('ZEND_RAW_FENTRY("size", NULL, arginfo_class_Qt_Core_QAbstractThing_size, ZEND_ACC_PUBLIC | ZEND_ACC_ABSTRACT, NULL, NULL)', $cpp);
         Assert::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QAbstractThing, size)', $cpp);
-        Assert::assertStringContainsString('bool _qt_use_trampoline = (Z_OBJCE_P(ZEND_THIS) != qt_ce_QAbstractThing);', $cpp);
+        Assert::assertStringContainsString('zend_class_entry *_qt_actual_ce = Z_OBJCE_P(ZEND_THIS);', $cpp);
+        Assert::assertStringContainsString('bool _qt_use_trampoline = (_qt_actual_ce != qt_ce_QAbstractThing);', $cpp);
         Assert::assertStringContainsString('intern->native_ptr = new qt_php_QAbstractThing();', $cpp);
         Assert::assertStringContainsString('zend_throw_error(NULL, "Abstract class QAbstractThing cannot be instantiated directly.");', $cpp);
-        Assert::assertStringContainsString('if (!qt_method_is_overridden(this->php_object, qt_ce_QAbstractThing, "size"))', $cpp);
+        Assert::assertStringContainsString('if (!this->qt_has_override_size)', $cpp);
         Assert::assertStringContainsString('ce_flags |= ZEND_ACC_ABSTRACT;', $cpp);
 });
 
@@ -298,7 +299,7 @@ it('renames inherited conflicting methods deterministically', function (): void 
         Assert::assertStringNotContainsString('abstract public function parent(', $stub);
         Assert::assertStringContainsString('ZEND_RAW_FENTRY("parentModelIndex", NULL,', $cpp);
         Assert::assertStringContainsString('QModelIndex parent(const QModelIndex & _qt_p0) const override', $cpp);
-        Assert::assertStringContainsString('qt_method_is_overridden(this->php_object, qt_ce_QConflictingParentThing, "parentModelIndex")', $cpp);
+        Assert::assertStringContainsString('if (!this->qt_has_override_parentmodelindex)', $cpp);
         Assert::assertStringContainsString('qt_call_php_method(this->php_object, "parentModelIndex"', $cpp);
 });
 
