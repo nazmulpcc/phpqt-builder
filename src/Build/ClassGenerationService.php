@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace QtBuilder\Build;
 
+use QtBuilder\CodeGen\TypeBridge;
 use QtBuilder\Definition\PhpClass;
 use QtBuilder\Definition\PhpMethod;
 use QtBuilder\Filtering\ClassExposurePolicy;
 use QtBuilder\Filtering\MethodExposurePolicy;
 use QtBuilder\Parsing\ClassDefinitionBuilder;
 use QtBuilder\Parsing\ClangArgumentBuilder;
+use QtBuilder\Parsing\CppToPhpTypeMapper;
 use QtBuilder\Parsing\QtClassInspector;
 
 class ClassGenerationService
@@ -18,6 +20,8 @@ class ClassGenerationService
         private readonly ClassExposurePolicy $classPolicy = new ClassExposurePolicy(),
         private readonly MethodExposurePolicy $methodPolicy = new MethodExposurePolicy(),
         private readonly ClassDefinitionBuilder $builder = new ClassDefinitionBuilder(),
+        private readonly TypeBridge $typeBridge = new TypeBridge(),
+        private readonly CppToPhpTypeMapper $typeMapper = new CppToPhpTypeMapper(),
     ) {}
 
     /**
@@ -33,46 +37,41 @@ class ClassGenerationService
         array $classHeaders = [],
     ): ClassGenerationResult
     {
-        $decision = $this->classPolicy->decideClassName($className);
-        if (!$decision->accepted) {
+        $facts = $this->prepareDiscoveryFacts($headerPath, $className, $includePaths);
+        if (($facts['status'] ?? 'error') !== 'ok') {
             return ClassGenerationResult::skipped(
                 $className,
                 $headerPath,
-                $decision->reasonCode ?? 'class_filtered',
-                $decision->reasonMessage ?? 'Class is filtered.',
+                (string) ($facts['reason_code'] ?? 'class_filtered'),
+                (string) ($facts['reason_message'] ?? 'Class is filtered.'),
             );
         }
 
-        $inspector = new QtClassInspector(new ClangArgumentBuilder($includePaths));
-        if ($this->isTemplateClassDeclaration($headerPath, $className)) {
-            return ClassGenerationResult::skipped(
-                $className,
-                $headerPath,
-                'template_class',
-                'Template classes are skipped in the current build mode.',
-            );
-        }
+        /** @var array<string, mixed> $classData */
+        $classData = $facts['class_data'];
+        $classData = $this->mergeInheritedTypeMetadata(
+            $classData,
+            function (string $baseClass) use ($headerPath, $includePaths, $classHeaders): ?array {
+                $baseHeaderPath = $classHeaders[$baseClass] ?? $headerPath;
+                $facts = $this->prepareDiscoveryFacts($baseHeaderPath, $baseClass, $includePaths);
 
-        $classData = $inspector->inspect($headerPath, $className);
-        if ($classData === null) {
-            return ClassGenerationResult::skipped($className, $headerPath, 'class_not_found', 'Class definition was not found in the parsed header.');
-        }
-        $lifecycle = $this->analyzeLifecycleCapabilities($headerPath, $className, (bool) ($classData['is_struct'] ?? false));
-        $classData['is_copy_constructible'] = $lifecycle['is_copy_constructible'];
-        $classData['has_public_constructor'] = $lifecycle['has_public_constructor'];
-        $classData['has_public_default_constructor'] = $lifecycle['has_public_default_constructor'];
-        $classData['has_public_destructor'] = $lifecycle['has_public_destructor'];
-        $classData['flag_aliases'] = $this->discoverFlagAliases($headerPath, $className);
-        $classData['enum_names'] = $this->discoverEnumNames($headerPath, $className);
+                return (($facts['status'] ?? 'error') === 'ok' && is_array($facts['class_data'] ?? null))
+                    ? $facts['class_data']
+                    : null;
+            },
+        );
+        $classData['is_qobject_derived'] = $this->isQObjectDerivedClassData(
+            $classData,
+            function (string $baseClass) use ($headerPath, $includePaths, $classHeaders): ?array {
+                $baseHeaderPath = $classHeaders[$baseClass] ?? $headerPath;
+                $facts = $this->prepareDiscoveryFacts($baseHeaderPath, $baseClass, $includePaths);
 
-        if (($classData['is_abstract'] ?? false) === true) {
-            return ClassGenerationResult::skipped(
-                $className,
-                $headerPath,
-                'abstract_class',
-                'Abstract classes are skipped in the current build mode.',
-            );
-        }
+                return (($facts['status'] ?? 'error') === 'ok' && is_array($facts['class_data'] ?? null))
+                    ? $facts['class_data']
+                    : null;
+            },
+        );
+        $sourceClassData = $classData;
 
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
         if ($parentClass !== null && !in_array($parentClass, $allowedClasses, true)) {
@@ -85,7 +84,28 @@ class ClassGenerationService
         }
 
         $filtered = $this->methodPolicy->filter($classData, $allowedClasses);
-        $classData['methods'] = $filtered['selected_methods'];
+        $signalFilter = $this->filterSignalCallbackMethods(
+            $filtered['selected_methods'],
+            $includePaths,
+            $classHeaders,
+        );
+        $virtualFilter = $this->filterVirtualOverrideMethods(
+            $signalFilter['selected_methods'],
+            $includePaths,
+            $classHeaders,
+        );
+        $classData['signals'] = $this->collectSignalVariants(
+            $className,
+            $headerPath,
+            $includePaths,
+            $allowedClasses,
+            $classHeaders,
+            $virtualFilter['selected_methods'],
+        );
+        $classData['methods'] = array_values(array_filter(
+            $virtualFilter['selected_methods'],
+            static fn(array $method): bool => ($method['is_signal'] ?? false) !== true,
+        ));
 
         $phpClass = $this->builder->build($classData);
         $inheritanceFiltered = $this->filterConflictingInheritedMethods(
@@ -96,9 +116,223 @@ class ClassGenerationService
             $classHeaders,
         );
         $phpClass = $inheritanceFiltered['class'];
-        $skippedMethods = [...$filtered['skipped_methods'], ...$inheritanceFiltered['skipped_methods']];
+        $skippedMethods = [...$filtered['skipped_methods'], ...$signalFilter['skipped_methods'], ...$virtualFilter['skipped_methods'], ...$inheritanceFiltered['skipped_methods']];
+        $abstractConstructorAdjusted = $this->filterUnsupportedAbstractConstructors(
+            $phpClass,
+            $sourceClassData,
+            function () use ($className, $sourceClassData, $headerPath, $includePaths, $allowedClasses, $classHeaders): array {
+                /** @var array<string, true> $names */
+                $names = [];
+                $visited = [];
 
-        if (count($phpClass->methods) === 0) {
+                foreach ((array) ($sourceClassData['bases'] ?? []) as $baseClass) {
+                    if (!is_string($baseClass) || $baseClass === '' || $baseClass === $className) {
+                        continue;
+                    }
+
+                    foreach ($this->collectInheritedPureVirtualRequirementNames(
+                        $baseClass,
+                        $headerPath,
+                        $includePaths,
+                        $allowedClasses,
+                        $classHeaders,
+                        $visited,
+                    ) as $methodName) {
+                        $names[$methodName] = true;
+                    }
+                }
+
+                return array_keys($names);
+            },
+        );
+        $phpClass = $abstractConstructorAdjusted['class'];
+        $skippedMethods = [...$skippedMethods, ...$abstractConstructorAdjusted['skipped_methods']];
+        $phpClass = $this->stripQObjectRuntimeMethods($phpClass);
+
+        if (count($phpClass->methods) === 0 && count($phpClass->signals) === 0 && !$phpClass->isAbstract) {
+            return ClassGenerationResult::skipped(
+                $className,
+                $headerPath,
+                'no_supported_methods',
+                'No supported methods remained after filtering.',
+                $skippedMethods,
+            );
+        }
+
+        return ClassGenerationResult::ok($className, $headerPath, $phpClass, $skippedMethods);
+    }
+
+    /**
+     * @param list<string> $includePaths
+     * @return array<string, mixed>
+     */
+    public function prepareDiscoveryFacts(string $headerPath, string $className, array $includePaths): array
+    {
+        $decision = $this->classPolicy->decideClassName($className);
+        if (!$decision->accepted) {
+            return [
+                'status' => 'skipped',
+                'class' => $className,
+                'header' => $headerPath,
+                'reason_code' => $decision->reasonCode ?? 'class_filtered',
+                'reason_message' => $decision->reasonMessage ?? 'Class is filtered.',
+            ];
+        }
+
+        if ($this->isTemplateClassDeclaration($headerPath, $className)) {
+            return [
+                'status' => 'skipped',
+                'class' => $className,
+                'header' => $headerPath,
+                'reason_code' => 'template_class',
+                'reason_message' => 'Template classes are skipped in the current build mode.',
+            ];
+        }
+
+        $inspector = new QtClassInspector(new ClangArgumentBuilder($includePaths));
+        $classData = $inspector->inspect($headerPath, $className);
+        if ($classData === null) {
+            return [
+                'status' => 'skipped',
+                'class' => $className,
+                'header' => $headerPath,
+                'reason_code' => 'class_not_found',
+                'reason_message' => 'Class definition was not found in the parsed header.',
+            ];
+        }
+
+        $lifecycle = $this->analyzeLifecycleCapabilities($headerPath, $className, (bool) ($classData['is_struct'] ?? false));
+        $classData['is_copy_constructible'] = $lifecycle['is_copy_constructible'];
+        $classData['has_public_constructor'] = $lifecycle['has_public_constructor'];
+        $classData['has_public_default_constructor'] = $lifecycle['has_public_default_constructor'];
+        $classData['has_public_destructor'] = $lifecycle['has_public_destructor'];
+        $classData['flag_aliases'] = $this->discoverFlagAliases($headerPath, $className);
+        $classData['enum_names'] = $this->discoverEnumNames($headerPath, $className);
+        $classData['methods'] = $this->annotateConstructorVariants(
+            is_array($classData['methods'] ?? null) ? $classData['methods'] : [],
+            $headerPath,
+            $className,
+            (bool) ($classData['is_struct'] ?? false),
+        );
+
+        return [
+            'status' => 'ok',
+            'class' => $className,
+            'header' => $headerPath,
+            'class_data' => $classData,
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $classData
+     * @param list<string> $allowedClasses
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     */
+    public function generateFromPreparedData(
+        array $classData,
+        string $headerPath,
+        array $allowedClasses = [],
+        array $preparedClassDataByClass = [],
+    ): ClassGenerationResult {
+        $className = (string) ($classData['name'] ?? '');
+        if ($className === '') {
+            return ClassGenerationResult::skipped(
+                '',
+                $headerPath,
+                'invalid_class_data',
+                'Prepared class data is missing the class name.',
+            );
+        }
+        $classData = $this->mergeInheritedTypeMetadata(
+            $classData,
+            static fn(string $baseClass): ?array => is_array($preparedClassDataByClass[$baseClass] ?? null)
+                ? $preparedClassDataByClass[$baseClass]
+                : null,
+        );
+        $classData['is_qobject_derived'] = $this->isQObjectDerivedClassData(
+            $classData,
+            static fn(string $baseClass): ?array => is_array($preparedClassDataByClass[$baseClass] ?? null)
+                ? $preparedClassDataByClass[$baseClass]
+                : null,
+        );
+        $sourceClassData = $classData;
+
+        $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
+        if ($parentClass !== null && !in_array($parentClass, $allowedClasses, true)) {
+            return ClassGenerationResult::skipped(
+                $className,
+                $headerPath,
+                'unsupported_parent_class',
+                sprintf('Parent class %s is not available for generation.', $parentClass),
+            );
+        }
+
+        $filtered = $this->methodPolicy->filter($classData, $allowedClasses);
+        $signalFilter = $this->filterSignalCallbackMethods(
+            $filtered['selected_methods'],
+            [],
+            [],
+            $preparedClassDataByClass,
+        );
+        $virtualFilter = $this->filterVirtualOverrideMethods(
+            $signalFilter['selected_methods'],
+            [],
+            [],
+            $preparedClassDataByClass,
+        );
+        $classData['signals'] = $this->collectSignalVariantsFromPrepared(
+            $classData,
+            $headerPath,
+            $allowedClasses,
+            $preparedClassDataByClass,
+            $virtualFilter['selected_methods'],
+        );
+        $classData['methods'] = array_values(array_filter(
+            $virtualFilter['selected_methods'],
+            static fn(array $method): bool => ($method['is_signal'] ?? false) !== true,
+        ));
+
+        $phpClass = $this->builder->build($classData);
+        $inheritanceFiltered = $this->filterConflictingInheritedMethodsFromPrepared(
+            $phpClass,
+            $headerPath,
+            $allowedClasses,
+            $preparedClassDataByClass,
+        );
+        $phpClass = $inheritanceFiltered['class'];
+        $skippedMethods = [...$filtered['skipped_methods'], ...$signalFilter['skipped_methods'], ...$virtualFilter['skipped_methods'], ...$inheritanceFiltered['skipped_methods']];
+        $abstractConstructorAdjusted = $this->filterUnsupportedAbstractConstructors(
+            $phpClass,
+            $sourceClassData,
+            function () use ($className, $sourceClassData, $headerPath, $allowedClasses, $preparedClassDataByClass): array {
+                /** @var array<string, true> $names */
+                $names = [];
+                $visited = [];
+
+                foreach ((array) ($sourceClassData['bases'] ?? []) as $baseClass) {
+                    if (!is_string($baseClass) || $baseClass === '' || $baseClass === $className) {
+                        continue;
+                    }
+
+                    foreach ($this->collectInheritedPureVirtualRequirementNamesFromPrepared(
+                        $baseClass,
+                        $headerPath,
+                        $allowedClasses,
+                        $preparedClassDataByClass,
+                        $visited,
+                    ) as $methodName) {
+                        $names[$methodName] = true;
+                    }
+                }
+
+                return array_keys($names);
+            },
+        );
+        $phpClass = $abstractConstructorAdjusted['class'];
+        $skippedMethods = [...$skippedMethods, ...$abstractConstructorAdjusted['skipped_methods']];
+        $phpClass = $this->stripQObjectRuntimeMethods($phpClass);
+
+        if (count($phpClass->methods) === 0 && count($phpClass->signals) === 0 && !$phpClass->isAbstract) {
             return ClassGenerationResult::skipped(
                 $className,
                 $headerPath,
@@ -142,11 +376,25 @@ class ClassGenerationService
 
         $methods = [];
         $skippedMethods = [];
+        $usedMethodNames = [];
+
+        foreach ($parentMethods as $parentMethod) {
+            $usedMethodNames[$parentMethod->name] = true;
+        }
 
         foreach ($phpClass->methods as $method) {
             $parentMethod = $parentMethods[$method->name] ?? null;
             if ($parentMethod === null || $this->isCompatibleInheritedMethod($method, $parentMethod)) {
-                $methods[] = $method;
+                $normalizedMethod = $this->normalizeAbstractMethodAgainstParent($method, $parentMethod);
+                $methods[] = $normalizedMethod;
+                $usedMethodNames[$normalizedMethod->name] = true;
+                continue;
+            }
+
+            $renamedMethod = $this->renameConflictingInheritedMethod($method, $usedMethodNames);
+            if ($renamedMethod !== null) {
+                $methods[] = $renamedMethod;
+                $usedMethodNames[$renamedMethod->name] = true;
                 continue;
             }
 
@@ -168,8 +416,10 @@ class ClassGenerationService
                 isAbstract: $phpClass->isAbstract,
                 isCopyConstructible: $phpClass->isCopyConstructible,
                 hasPublicDestructor: $phpClass->hasPublicDestructor,
+                isQObjectDerived: $phpClass->isQObjectDerived,
                 properties: $phpClass->properties,
                 methods: $methods,
+                signals: $phpClass->signals,
             ),
             'skipped_methods' => $skippedMethods,
         ];
@@ -210,6 +460,882 @@ class ClassGenerationService
                 $includePaths,
                 $allowedClasses,
                 $classHeaders,
+                $visited,
+            );
+        }
+
+        foreach ($phpClass->methods as $method) {
+            if ($method->name === '__construct') {
+                continue;
+            }
+
+            $methods[$method->name] = $method;
+        }
+
+        return $methods;
+    }
+
+    /**
+     * @param list<string> $includePaths
+     * @param list<string> $allowedClasses
+     * @param array<string, string> $classHeaders
+     * @param list<array<string, mixed>> $selectedMethods
+     * @return list<array<string, mixed>>
+     */
+    private function collectSignalVariants(
+        string $className,
+        string $headerPath,
+        array $includePaths,
+        array $allowedClasses,
+        array $classHeaders,
+        array $selectedMethods,
+    ): array {
+        $signals = [];
+
+        foreach ($selectedMethods as $method) {
+            if (($method['is_signal'] ?? false) === true) {
+                $signals[] = $method;
+            }
+        }
+
+        $rawClassData = $this->loadFilteredClassData(
+            $headerPath,
+            $className,
+            $includePaths,
+            $allowedClasses,
+            $classHeaders,
+        );
+        $parentClass = is_array($rawClassData)
+            ? (is_string($rawClassData['bases'][0] ?? null) ? $rawClassData['bases'][0] : null)
+            : null;
+
+        if ($parentClass === null || $parentClass === '' || $parentClass === $className || !in_array($parentClass, $allowedClasses, true)) {
+            return $signals;
+        }
+
+        $visited = [];
+        $inheritedSignals = $this->collectInheritedSignalVariants(
+            $parentClass,
+            $headerPath,
+            $includePaths,
+            $allowedClasses,
+            $classHeaders,
+            $visited,
+        );
+
+        return [...$inheritedSignals, ...$signals];
+    }
+
+    /**
+     * @param array<string, mixed> $classData
+     * @param list<string> $allowedClasses
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @param list<array<string, mixed>> $selectedMethods
+     * @return list<array<string, mixed>>
+     */
+    private function collectSignalVariantsFromPrepared(
+        array $classData,
+        string $headerPath,
+        array $allowedClasses,
+        array $preparedClassDataByClass,
+        array $selectedMethods,
+    ): array {
+        $signals = [];
+
+        foreach ($selectedMethods as $method) {
+            if (($method['is_signal'] ?? false) === true) {
+                $signals[] = $method;
+            }
+        }
+
+        $className = (string) ($classData['name'] ?? '');
+        $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
+        if ($parentClass === null || $parentClass === '' || $parentClass === $className || !in_array($parentClass, $allowedClasses, true)) {
+            return $signals;
+        }
+
+        $visited = [];
+        $inheritedSignals = $this->collectInheritedSignalVariantsFromPrepared(
+            $parentClass,
+            $headerPath,
+            $allowedClasses,
+            $preparedClassDataByClass,
+            $visited,
+        );
+
+        return [...$inheritedSignals, ...$signals];
+    }
+
+    /**
+     * @param list<string> $includePaths
+     * @param list<string> $allowedClasses
+     * @param array<string, string> $classHeaders
+     * @param array<string, bool> $visited
+     * @return list<array<string, mixed>>
+     */
+    private function collectInheritedSignalVariants(
+        string $className,
+        string $fallbackHeaderPath,
+        array $includePaths,
+        array $allowedClasses,
+        array $classHeaders,
+        array &$visited,
+    ): array {
+        if (isset($visited[$className])) {
+            return [];
+        }
+
+        $visited[$className] = true;
+        $headerPath = $classHeaders[$className] ?? $fallbackHeaderPath;
+        $classData = $this->loadFilteredClassData($headerPath, $className, $includePaths, $allowedClasses, $classHeaders);
+        if ($classData === null) {
+            return [];
+        }
+
+        $signals = [];
+        $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
+        if ($parentClass !== null && $parentClass !== '' && $parentClass !== $className && in_array($parentClass, $allowedClasses, true)) {
+            $signals = $this->collectInheritedSignalVariants(
+                $parentClass,
+                $headerPath,
+                $includePaths,
+                $allowedClasses,
+                $classHeaders,
+                $visited,
+            );
+        }
+
+        $signalFilter = $this->filterSignalCallbackMethods(
+            $classData['selected_methods'],
+            $includePaths,
+            $classHeaders,
+        );
+        foreach ($signalFilter['selected_methods'] as $method) {
+            if (($method['is_signal'] ?? false) === true) {
+                $signals[] = $method;
+            }
+        }
+
+        return $signals;
+    }
+
+    /**
+     * @param list<string> $allowedClasses
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @param array<string, bool> $visited
+     * @return list<array<string, mixed>>
+     */
+    private function collectInheritedSignalVariantsFromPrepared(
+        string $className,
+        string $fallbackHeaderPath,
+        array $allowedClasses,
+        array $preparedClassDataByClass,
+        array &$visited,
+    ): array {
+        if (isset($visited[$className])) {
+            return [];
+        }
+
+        $visited[$className] = true;
+        $classData = $preparedClassDataByClass[$className] ?? null;
+        if (!is_array($classData)) {
+            return [];
+        }
+
+        $signals = [];
+        $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
+        if ($parentClass !== null && $parentClass !== '' && $parentClass !== $className && in_array($parentClass, $allowedClasses, true)) {
+            $signals = $this->collectInheritedSignalVariantsFromPrepared(
+                $parentClass,
+                $fallbackHeaderPath,
+                $allowedClasses,
+                $preparedClassDataByClass,
+                $visited,
+            );
+        }
+
+        $filtered = $this->methodPolicy->filter($classData, $allowedClasses);
+        $signalFilter = $this->filterSignalCallbackMethods(
+            $filtered['selected_methods'],
+            [],
+            [],
+            $preparedClassDataByClass,
+        );
+        foreach ($signalFilter['selected_methods'] as $method) {
+            if (($method['is_signal'] ?? false) === true) {
+                $signals[] = $method;
+            }
+        }
+
+        return $signals;
+    }
+
+    /**
+     * @param list<array<string, mixed>> $selectedMethods
+     * @param list<string> $includePaths
+     * @param array<string, string> $classHeaders
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @return array{selected_methods: list<array<string, mixed>>, skipped_methods: list<array<string, string>>}
+     */
+    private function filterSignalCallbackMethods(
+        array $selectedMethods,
+        array $includePaths = [],
+        array $classHeaders = [],
+        array $preparedClassDataByClass = [],
+    ): array {
+        $keptMethods = [];
+        $skippedMethods = [];
+        /** @var array<string, array<string, mixed>|null> $parameterClassFactsCache */
+        $parameterClassFactsCache = [];
+
+        foreach ($selectedMethods as $method) {
+            if (($method['is_signal'] ?? false) !== true) {
+                $keptMethods[] = $method;
+                continue;
+            }
+
+            $unsupportedReason = $this->unsupportedSignalCallbackReason(
+                $method,
+                $includePaths,
+                $classHeaders,
+                $preparedClassDataByClass,
+                $parameterClassFactsCache,
+            );
+            if ($unsupportedReason !== null) {
+                $skippedMethods[] = [
+                    'name' => (string) ($method['name'] ?? ''),
+                    'reason_code' => $unsupportedReason['code'],
+                    'reason_message' => $unsupportedReason['message'],
+                ];
+                continue;
+            }
+
+            $keptMethods[] = $method;
+        }
+
+        return [
+            'selected_methods' => $keptMethods,
+            'skipped_methods' => $skippedMethods,
+        ];
+    }
+
+    /**
+     * @param list<array<string, mixed>> $selectedMethods
+     * @param list<string> $includePaths
+     * @param array<string, string> $classHeaders
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @return array{selected_methods: list<array<string, mixed>>, skipped_methods: list<array<string, string>>}
+     */
+    private function filterVirtualOverrideMethods(
+        array $selectedMethods,
+        array $includePaths = [],
+        array $classHeaders = [],
+        array $preparedClassDataByClass = [],
+    ): array {
+        $keptMethods = [];
+        $skippedMethods = [];
+        /** @var array<string, array<string, mixed>|null> $parameterClassFactsCache */
+        $parameterClassFactsCache = [];
+
+        foreach ($selectedMethods as $method) {
+            if (($method['is_final'] ?? false) === true) {
+                $method['is_virtual'] = false;
+                $method['is_pure_virtual'] = false;
+                $keptMethods[] = $method;
+                continue;
+            }
+
+            if (($method['is_virtual'] ?? false) !== true && ($method['is_pure_virtual'] ?? false) !== true) {
+                $keptMethods[] = $method;
+                continue;
+            }
+
+            $unsupportedReason = $this->unsupportedVirtualOverrideReason(
+                $method,
+                $includePaths,
+                $classHeaders,
+                $preparedClassDataByClass,
+                $parameterClassFactsCache,
+            );
+            if ($unsupportedReason !== null) {
+                $skippedMethods[] = [
+                    'name' => (string) ($method['name'] ?? ''),
+                    'reason_code' => $unsupportedReason['code'],
+                    'reason_message' => $unsupportedReason['message'],
+                ];
+                continue;
+            }
+
+            $keptMethods[] = $method;
+        }
+
+        return [
+            'selected_methods' => $keptMethods,
+            'skipped_methods' => $skippedMethods,
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $method
+     * @param list<string> $includePaths
+     * @param array<string, string> $classHeaders
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @param array<string, array<string, mixed>|null> $parameterClassFactsCache
+     * @return array{code: string, message: string}|null
+     */
+    private function unsupportedSignalCallbackReason(
+        array $method,
+        array $includePaths,
+        array $classHeaders,
+        array $preparedClassDataByClass,
+        array &$parameterClassFactsCache,
+    ): ?array {
+        $parameters = is_array($method['parameters'] ?? null) ? $method['parameters'] : [];
+
+        foreach ($parameters as $parameter) {
+            $cppType = is_string($parameter['type'] ?? null) ? $parameter['type'] : '';
+            if ($cppType === '') {
+                return [
+                    'code' => 'unsupported_signal_callback_parameter',
+                    'message' => sprintf('Signal %s() has a parameter with an unknown native type.', (string) ($method['name'] ?? '')),
+                ];
+            }
+
+            $phpType = $this->typeMapper->map($cppType);
+            $strategy = $this->typeBridge->returnStrategyForCpp($phpType, $cppType);
+            if (in_array($strategy, ['scalar', 'string', 'qobject_pointer'], true)) {
+                continue;
+            }
+
+            if ($strategy !== 'value_object') {
+                return [
+                    'code' => 'unsupported_signal_callback_parameter',
+                    'message' => sprintf('Signal %s() uses callback parameter type %s which is not supported.', (string) ($method['name'] ?? ''), $cppType),
+                ];
+            }
+
+            $classFacts = $this->signalParameterClassFacts(
+                $phpType,
+                $includePaths,
+                $classHeaders,
+                $preparedClassDataByClass,
+                $parameterClassFactsCache,
+            );
+            if ($classFacts === null) {
+                return [
+                    'code' => 'unsupported_signal_callback_parameter',
+                    'message' => sprintf('Signal %s() uses callback parameter type %s which cannot be prepared as a PHP object safely.', (string) ($method['name'] ?? ''), $cppType),
+                ];
+            }
+
+            if (!$this->isSignalParameterCopyable($classFacts, $phpType)) {
+                return [
+                    'code' => 'unsupported_signal_callback_parameter',
+                    'message' => sprintf('Signal %s() uses callback parameter type %s which is not copy-constructible.', (string) ($method['name'] ?? ''), $cppType),
+                ];
+            }
+
+            if (!(bool) ($classFacts['has_public_destructor'] ?? false)) {
+                return [
+                    'code' => 'unsupported_signal_callback_parameter',
+                    'message' => sprintf('Signal %s() uses callback parameter type %s which does not have a public destructor.', (string) ($method['name'] ?? ''), $cppType),
+                ];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param array<string, mixed> $method
+     * @param list<string> $includePaths
+     * @param array<string, string> $classHeaders
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @param array<string, array<string, mixed>|null> $parameterClassFactsCache
+     * @return array{code: string, message: string}|null
+     */
+    private function unsupportedVirtualOverrideReason(
+        array $method,
+        array $includePaths,
+        array $classHeaders,
+        array $preparedClassDataByClass,
+        array &$parameterClassFactsCache,
+    ): ?array {
+        $methodName = (string) ($method['name'] ?? '');
+        $returnType = is_string($method['return_type'] ?? null) ? $method['return_type'] : 'void';
+        $mappedReturnType = $this->typeMapper->map($returnType);
+        $returnStrategy = $this->typeBridge->returnStrategyForCpp($mappedReturnType, $returnType);
+        if ($returnStrategy === 'value_object') {
+            $unsupportedReturnReason = $this->unsupportedVirtualValueObjectReason(
+                $mappedReturnType,
+                $returnType,
+                $methodName,
+                $includePaths,
+                $classHeaders,
+                $preparedClassDataByClass,
+                $parameterClassFactsCache,
+            );
+            if ($unsupportedReturnReason !== null) {
+                return $unsupportedReturnReason;
+            }
+        } elseif (!$this->isSupportedVirtualReturnStrategy($returnStrategy)) {
+            return [
+                'code' => 'unsupported_virtual_override_signature',
+                'message' => sprintf('Virtual method %s() return type %s is not supported for PHP overrides.', $methodName, $returnType),
+            ];
+        }
+
+        $parameters = is_array($method['parameters'] ?? null) ? $method['parameters'] : [];
+        foreach ($parameters as $parameter) {
+            $cppType = is_string($parameter['type'] ?? null) ? $parameter['type'] : '';
+            if ($cppType === '') {
+                return [
+                    'code' => 'unsupported_virtual_override_signature',
+                    'message' => sprintf('Virtual method %s() has a parameter with an unknown native type.', $methodName),
+                ];
+            }
+
+            if ($this->isWritableReferenceType($cppType)) {
+                return [
+                    'code' => 'unsupported_virtual_override_signature',
+                    'message' => sprintf('Virtual method %s() uses writable reference parameter type %s which is not supported for PHP overrides.', $methodName, $cppType),
+                ];
+            }
+
+            $phpType = $this->typeMapper->map($cppType);
+            $strategy = $this->typeBridge->returnStrategyForCpp($phpType, $cppType);
+            if (!in_array($strategy, ['scalar', 'string', 'value_object', 'qobject_pointer'], true)) {
+                return [
+                    'code' => 'unsupported_virtual_override_signature',
+                    'message' => sprintf('Virtual method %s() uses parameter type %s which is not supported for PHP overrides.', $methodName, $cppType),
+                ];
+            }
+
+            if ($strategy !== 'value_object') {
+                continue;
+            }
+
+            $unsupportedParameterReason = $this->unsupportedVirtualValueObjectReason(
+                $phpType,
+                $cppType,
+                $methodName,
+                $includePaths,
+                $classHeaders,
+                $preparedClassDataByClass,
+                $parameterClassFactsCache,
+            );
+            if ($unsupportedParameterReason !== null) {
+                return $unsupportedParameterReason;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param list<string> $includePaths
+     * @param array<string, string> $classHeaders
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @param array<string, array<string, mixed>|null> $parameterClassFactsCache
+     * @return array<string, mixed>|null
+     */
+    private function signalParameterClassFacts(
+        string $phpType,
+        array $includePaths,
+        array $classHeaders,
+        array $preparedClassDataByClass,
+        array &$parameterClassFactsCache,
+    ): ?array {
+        if (isset($preparedClassDataByClass[$phpType]) && is_array($preparedClassDataByClass[$phpType])) {
+            return $preparedClassDataByClass[$phpType];
+        }
+
+        if (array_key_exists($phpType, $parameterClassFactsCache)) {
+            return $parameterClassFactsCache[$phpType];
+        }
+
+        $headerPath = $classHeaders[$phpType] ?? null;
+        if (!is_string($headerPath) || $headerPath === '') {
+            $parameterClassFactsCache[$phpType] = null;
+
+            return null;
+        }
+
+        $facts = $this->prepareDiscoveryFacts($headerPath, $phpType, $includePaths);
+        if (($facts['status'] ?? 'error') !== 'ok' || !is_array($facts['class_data'] ?? null)) {
+            $parameterClassFactsCache[$phpType] = null;
+
+            return null;
+        }
+
+        $parameterClassFactsCache[$phpType] = $facts['class_data'];
+
+        return $parameterClassFactsCache[$phpType];
+    }
+
+    /**
+     * @param array<string, mixed> $classFacts
+     */
+    private function isSignalParameterCopyable(array $classFacts, string $className): bool
+    {
+        if (!(bool) ($classFacts['is_copy_constructible'] ?? false)) {
+            return false;
+        }
+
+        $methods = is_array($classFacts['methods'] ?? null) ? $classFacts['methods'] : [];
+        foreach ($methods as $method) {
+            if (!is_array($method) || ($method['name'] ?? null) !== $className) {
+                continue;
+            }
+
+            $parameters = is_array($method['parameters'] ?? null) ? $method['parameters'] : [];
+            if (count($parameters) !== 1) {
+                continue;
+            }
+
+            $parameterType = is_string($parameters[0]['type'] ?? null) ? $parameters[0]['type'] : '';
+            if ($parameterType === '' || !str_contains($parameterType, '&')) {
+                continue;
+            }
+
+            if ($this->normalizeSignalParameterClassName($parameterType) !== $className) {
+                continue;
+            }
+
+            if (($method['is_deleted'] ?? false) === true) {
+                return false;
+            }
+
+            return ($method['access'] ?? 'private') === 'public';
+        }
+
+        return true;
+    }
+
+    private function unsupportedVirtualValueObjectReason(
+        string $phpType,
+        string $cppType,
+        string $methodName,
+        array $includePaths,
+        array $classHeaders,
+        array $preparedClassDataByClass,
+        array &$parameterClassFactsCache,
+    ): ?array {
+        $classFacts = $this->signalParameterClassFacts(
+            $phpType,
+            $includePaths,
+            $classHeaders,
+            $preparedClassDataByClass,
+            $parameterClassFactsCache,
+        );
+
+        if ($classFacts === null) {
+            if ($this->typeBridge->isValueType($phpType)) {
+                return null;
+            }
+
+            return [
+                'code' => 'unsupported_virtual_override_signature',
+                'message' => sprintf('Virtual method %s() uses %s type %s which cannot be prepared safely.', $methodName, str_contains($cppType, '&') || str_contains($cppType, '*') ? 'parameter' : 'return', $cppType),
+            ];
+        }
+
+        if (!$this->isSignalParameterCopyable($classFacts, $phpType)) {
+            return [
+                'code' => 'unsupported_virtual_override_signature',
+                'message' => sprintf('Virtual method %s() uses %s type %s which is not copy-constructible.', $methodName, str_contains($cppType, '&') || str_contains($cppType, '*') ? 'parameter' : 'return', $cppType),
+            ];
+        }
+
+        if (!(bool) ($classFacts['has_public_destructor'] ?? false)) {
+            return [
+                'code' => 'unsupported_virtual_override_signature',
+                'message' => sprintf('Virtual method %s() uses %s type %s which does not have a public destructor.', $methodName, str_contains($cppType, '&') || str_contains($cppType, '*') ? 'parameter' : 'return', $cppType),
+            ];
+        }
+
+        return null;
+    }
+
+    private function isSupportedVirtualReturnStrategy(string $strategy): bool
+    {
+        return in_array($strategy, ['void', 'scalar', 'string', 'qobject_pointer'], true);
+    }
+
+    private function isWritableReferenceType(string $cppType): bool
+    {
+        $trimmed = trim($cppType);
+
+        return str_contains($trimmed, '&') && preg_match('/^\s*const\b/', $trimmed) !== 1;
+    }
+
+    private function normalizeSignalParameterClassName(string $cppType): string
+    {
+        $type = trim($cppType);
+        $type = preg_replace('/\bconst\b/', '', $type) ?? $type;
+        $type = trim(preg_replace('/\s+/', ' ', $type) ?? $type);
+        $type = rtrim($type, '& ');
+
+        while (str_ends_with($type, '*')) {
+            $type = rtrim(substr($type, 0, -1));
+        }
+
+        return trim($type);
+    }
+
+    /**
+     * @param list<string> $includePaths
+     * @param list<string> $allowedClasses
+     * @param array<string, string> $classHeaders
+     * @return array{name: string, is_abstract: bool, is_copy_constructible?: bool, has_public_destructor?: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, selected_methods: list<array<string, mixed>>}|null
+     */
+    private function loadFilteredClassData(
+        string $headerPath,
+        string $className,
+        array $includePaths,
+        array $allowedClasses,
+        array $classHeaders,
+    ): ?array {
+        $decision = $this->classPolicy->decideClassName($className);
+        if (!$decision->accepted) {
+            return null;
+        }
+
+        if ($this->isTemplateClassDeclaration($headerPath, $className)) {
+            return null;
+        }
+
+        $inspector = new QtClassInspector(new ClangArgumentBuilder($includePaths));
+        $classData = $inspector->inspect($headerPath, $className);
+        if ($classData === null) {
+            return null;
+        }
+
+        $lifecycle = $this->analyzeLifecycleCapabilities($headerPath, $className, (bool) ($classData['is_struct'] ?? false));
+        $classData['is_copy_constructible'] = $lifecycle['is_copy_constructible'];
+        $classData['has_public_constructor'] = $lifecycle['has_public_constructor'];
+        $classData['has_public_default_constructor'] = $lifecycle['has_public_default_constructor'];
+        $classData['has_public_destructor'] = $lifecycle['has_public_destructor'];
+        $classData['flag_aliases'] = $this->discoverFlagAliases($headerPath, $className);
+        $classData['enum_names'] = $this->discoverEnumNames($headerPath, $className);
+        $classData['methods'] = $this->annotateConstructorVariants(
+            is_array($classData['methods'] ?? null) ? $classData['methods'] : [],
+            $headerPath,
+            $className,
+            (bool) ($classData['is_struct'] ?? false),
+        );
+        $classData = $this->mergeInheritedTypeMetadata(
+            $classData,
+            function (string $baseClass) use ($headerPath, $includePaths, $classHeaders): ?array {
+                $baseHeaderPath = $classHeaders[$baseClass] ?? $headerPath;
+                $facts = $this->prepareDiscoveryFacts($baseHeaderPath, $baseClass, $includePaths);
+
+                return (($facts['status'] ?? 'error') === 'ok' && is_array($facts['class_data'] ?? null))
+                    ? $facts['class_data']
+                    : null;
+            },
+        );
+
+        $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
+        if ($parentClass !== null && !in_array($parentClass, $allowedClasses, true)) {
+            return null;
+        }
+
+        $filtered = $this->methodPolicy->filter($classData, $allowedClasses);
+        $classData['selected_methods'] = $filtered['selected_methods'];
+
+        return $classData;
+    }
+
+    /**
+     * @param array<string, mixed> $classData
+     * @param callable(string): ?array<string, mixed> $baseClassLoader
+     * @param array<string, bool> $visited
+     * @return array<string, mixed>
+     */
+    private function mergeInheritedTypeMetadata(
+        array $classData,
+        callable $baseClassLoader,
+        array &$visited = [],
+    ): array {
+        $className = is_string($classData['name'] ?? null) ? $classData['name'] : '';
+        if ($className !== '') {
+            if (isset($visited[$className])) {
+                return $classData;
+            }
+
+            $visited[$className] = true;
+        }
+
+        /** @var list<string> $enumNames */
+        $enumNames = is_array($classData['enum_names'] ?? null)
+            ? array_values(array_filter(array_map(
+                static fn(mixed $value): string => is_string($value) ? trim($value) : '',
+                $classData['enum_names'],
+            ), static fn(string $value): bool => $value !== ''))
+            : [];
+        /** @var array<string, string> $flagAliases */
+        $flagAliases = is_array($classData['flag_aliases'] ?? null)
+            ? array_filter(
+                array_map(static fn(mixed $value): string => is_string($value) ? trim($value) : '', $classData['flag_aliases']),
+                static fn(string $value): bool => $value !== '',
+            )
+            : [];
+
+        foreach ((array) ($classData['bases'] ?? []) as $baseClass) {
+            if (!is_string($baseClass) || $baseClass === '' || $baseClass === $className) {
+                continue;
+            }
+
+            $baseClassData = $baseClassLoader($baseClass);
+            if (!is_array($baseClassData)) {
+                continue;
+            }
+
+            $baseVisited = $visited;
+            $baseClassData = $this->mergeInheritedTypeMetadata($baseClassData, $baseClassLoader, $baseVisited);
+
+            foreach ((array) ($baseClassData['enum_names'] ?? []) as $enumName) {
+                if (!is_string($enumName) || trim($enumName) === '') {
+                    continue;
+                }
+
+                $enumNames[] = trim($enumName);
+            }
+
+            foreach ((array) ($baseClassData['flag_aliases'] ?? []) as $flagName => $enumType) {
+                if (!is_string($flagName) || $flagName === '' || !is_string($enumType) || trim($enumType) === '') {
+                    continue;
+                }
+
+                $flagAliases[$flagName] ??= trim($enumType);
+            }
+        }
+
+        $classData['enum_names'] = array_values(array_unique($enumNames));
+        $classData['flag_aliases'] = $flagAliases;
+
+        return $classData;
+    }
+
+    /**
+     * @param list<string> $allowedClasses
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @return array{class: PhpClass, skipped_methods: list<array<string, string>>}
+     */
+    private function filterConflictingInheritedMethodsFromPrepared(
+        PhpClass $phpClass,
+        string $headerPath,
+        array $allowedClasses,
+        array $preparedClassDataByClass,
+    ): array {
+        $parentClass = $phpClass->parent;
+        if ($parentClass === null || $parentClass === '' || $parentClass === $phpClass->name) {
+            return ['class' => $phpClass, 'skipped_methods' => []];
+        }
+
+        $parentMethods = $this->collectInheritedMethodsFromPrepared(
+            $parentClass,
+            $headerPath,
+            $allowedClasses,
+            $preparedClassDataByClass,
+        );
+        if ($parentMethods === []) {
+            return ['class' => $phpClass, 'skipped_methods' => []];
+        }
+
+        $methods = [];
+        $skippedMethods = [];
+        $usedMethodNames = [];
+
+        foreach ($parentMethods as $parentMethod) {
+            $usedMethodNames[$parentMethod->name] = true;
+        }
+
+        foreach ($phpClass->methods as $method) {
+            $parentMethod = $parentMethods[$method->name] ?? null;
+            if ($parentMethod === null || $this->isCompatibleInheritedMethod($method, $parentMethod)) {
+                $normalizedMethod = $this->normalizeAbstractMethodAgainstParent($method, $parentMethod);
+                $methods[] = $normalizedMethod;
+                $usedMethodNames[$normalizedMethod->name] = true;
+                continue;
+            }
+
+            $renamedMethod = $this->renameConflictingInheritedMethod($method, $usedMethodNames);
+            if ($renamedMethod !== null) {
+                $methods[] = $renamedMethod;
+                $usedMethodNames[$renamedMethod->name] = true;
+                continue;
+            }
+
+            $skippedMethods[] = [
+                'name' => $method->name,
+                'reason_code' => 'incompatible_inherited_method',
+                'reason_message' => sprintf(
+                    'Method %s is skipped because its PHP signature is incompatible with an inherited %s() method.',
+                    $method->name,
+                    $parentMethod->name,
+                ),
+            ];
+        }
+
+        return [
+            'class' => new PhpClass(
+                name: $phpClass->name,
+                parent: $phpClass->parent,
+                isAbstract: $phpClass->isAbstract,
+                isCopyConstructible: $phpClass->isCopyConstructible,
+                hasPublicDestructor: $phpClass->hasPublicDestructor,
+                isQObjectDerived: $phpClass->isQObjectDerived,
+                properties: $phpClass->properties,
+                methods: $methods,
+                signals: $phpClass->signals,
+            ),
+            'skipped_methods' => $skippedMethods,
+        ];
+    }
+
+    /**
+     * @param list<string> $allowedClasses
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @param array<string, bool> $visited
+     * @return array<string, PhpMethod>
+     */
+    private function collectInheritedMethodsFromPrepared(
+        string $className,
+        string $fallbackHeaderPath,
+        array $allowedClasses,
+        array $preparedClassDataByClass,
+        array &$visited = [],
+    ): array {
+        if (isset($visited[$className])) {
+            return [];
+        }
+
+        $visited[$className] = true;
+        $classData = $preparedClassDataByClass[$className] ?? null;
+        if (!is_array($classData)) {
+            return [];
+        }
+
+        $result = $this->generateFromPreparedData(
+            $classData,
+            $fallbackHeaderPath,
+            $allowedClasses,
+            $preparedClassDataByClass,
+        );
+        $phpClass = $result->phpClass;
+        if ($result->status !== 'ok' || $phpClass === null) {
+            return [];
+        }
+
+        $methods = [];
+        if ($phpClass->parent !== null && $phpClass->parent !== '' && $phpClass->parent !== $className) {
+            $methods = $this->collectInheritedMethodsFromPrepared(
+                $phpClass->parent,
+                $fallbackHeaderPath,
+                $allowedClasses,
+                $preparedClassDataByClass,
                 $visited,
             );
         }
@@ -269,6 +1395,355 @@ class ClassGenerationService
         }
 
         return true;
+    }
+
+    private function normalizeAbstractMethodAgainstParent(PhpMethod $method, ?PhpMethod $parentMethod): PhpMethod
+    {
+        if (!$method->isAbstractMethod || $parentMethod === null || $parentMethod->isAbstractMethod) {
+            return $method;
+        }
+
+        return new PhpMethod(
+            name: $method->name,
+            access: $method->access,
+            isStatic: $method->isStatic,
+            isSignal: $method->isSignal,
+            isSlot: $method->isSlot,
+            isAbstractMethod: false,
+            returnType: $method->returnType,
+            parameters: $method->parameters,
+            overloads: $method->overloads,
+            cppName: $method->cppName,
+        );
+    }
+
+    /**
+     * @param array<string, bool> $usedMethodNames
+     */
+    private function renameConflictingInheritedMethod(PhpMethod $method, array $usedMethodNames): ?PhpMethod
+    {
+        if ($method->name === '__construct') {
+            return null;
+        }
+
+        $baseName = $method->name . $this->methodSignatureSuffix($method);
+        if ($baseName === $method->name) {
+            $baseName .= 'As' . $this->typeSuffix($method->returnType);
+        }
+
+        $candidate = $baseName;
+        if (isset($usedMethodNames[$candidate])) {
+            $candidate .= 'As' . $this->typeSuffix($method->returnType);
+        }
+
+        $counter = 2;
+        while (isset($usedMethodNames[$candidate])) {
+            $candidate = $baseName . $counter;
+            $counter++;
+        }
+
+        if ($candidate === $method->name) {
+            return null;
+        }
+
+        return new PhpMethod(
+            name: $candidate,
+            access: $method->access,
+            isStatic: $method->isStatic,
+            isSignal: $method->isSignal,
+            isSlot: $method->isSlot,
+            isAbstractMethod: $method->isAbstractMethod,
+            returnType: $method->returnType,
+            parameters: $method->parameters,
+            overloads: $method->overloads,
+            cppName: $method->cppName,
+        );
+    }
+
+    private function methodSignatureSuffix(PhpMethod $method): string
+    {
+        $parts = [];
+        foreach ($method->parameters as $parameter) {
+            if ($parameter->phpType === '' || $parameter->phpType === 'null') {
+                continue;
+            }
+
+            $parts[] = $this->typeSuffix($parameter->phpType);
+        }
+
+        return implode('', array_values(array_filter($parts, static fn(string $part): bool => $part !== '')));
+    }
+
+    private function typeSuffix(string $phpType): string
+    {
+        $parts = array_values(array_filter(
+            explode('|', $phpType),
+            static fn(string $part): bool => $part !== '' && $part !== 'null',
+        ));
+
+        if ($parts === []) {
+            return 'Value';
+        }
+
+        $suffixes = array_map(
+            fn(string $part): string => $this->singleTypeSuffix($part),
+            $parts,
+        );
+
+        return implode('Or', array_values(array_filter($suffixes, static fn(string $part): bool => $part !== '')));
+    }
+
+    private function singleTypeSuffix(string $phpType): string
+    {
+        return match ($phpType) {
+            'int' => 'Int',
+            'float' => 'Float',
+            'bool' => 'Bool',
+            'string' => 'String',
+            'array' => 'Array',
+            'mixed' => 'Mixed',
+            default => $this->normalizedObjectTypeSuffix($phpType),
+        };
+    }
+
+    private function normalizedObjectTypeSuffix(string $phpType): string
+    {
+        $type = ltrim($phpType, '\\');
+        if (str_contains($type, '\\')) {
+            $parts = explode('\\', $type);
+            $type = (string) end($parts);
+        }
+
+        if (preg_match('/^Q[A-Z]/', $type) === 1) {
+            return substr($type, 1);
+        }
+
+        return ucfirst($type);
+    }
+
+    /**
+     * @param callable(): list<string> $inheritedPureVirtualCollector
+     * @return array{class: PhpClass, skipped_methods: list<array<string, string>>}
+     */
+    private function filterUnsupportedAbstractConstructors(
+        PhpClass $phpClass,
+        array $classData,
+        callable $inheritedPureVirtualCollector,
+    ): array {
+        if (!$phpClass->isAbstract) {
+            return ['class' => $phpClass, 'skipped_methods' => []];
+        }
+
+        $hasConstructor = false;
+        foreach ($phpClass->methods as $method) {
+            if ($method->name === '__construct') {
+                $hasConstructor = true;
+                break;
+            }
+        }
+
+        if (!$hasConstructor) {
+            return ['class' => $phpClass, 'skipped_methods' => []];
+        }
+
+        if ($this->canInstantiateAbstractSubclass($phpClass, $classData, $inheritedPureVirtualCollector)) {
+            return ['class' => $phpClass, 'skipped_methods' => []];
+        }
+
+        $methods = array_values(array_filter(
+            $phpClass->methods,
+            static fn(PhpMethod $method): bool => $method->name !== '__construct',
+        ));
+
+        return [
+            'class' => new PhpClass(
+                name: $phpClass->name,
+                parent: $phpClass->parent,
+                isAbstract: $phpClass->isAbstract,
+                isCopyConstructible: $phpClass->isCopyConstructible,
+                hasPublicDestructor: $phpClass->hasPublicDestructor,
+                isQObjectDerived: $phpClass->isQObjectDerived,
+                properties: $phpClass->properties,
+                methods: $methods,
+                signals: $phpClass->signals,
+            ),
+            'skipped_methods' => [[
+                'name' => '__construct',
+                'reason_code' => 'unsupported_abstract_subclass_constructor',
+                'reason_message' => 'Abstract class constructors are only exposed when the generated native subclass can satisfy all pure virtual requirements.',
+            ]],
+        ];
+    }
+
+    /**
+     * @param callable(): list<string> $inheritedPureVirtualCollector
+     */
+    private function canInstantiateAbstractSubclass(
+        PhpClass $phpClass,
+        array $classData,
+        callable $inheritedPureVirtualCollector,
+    ): bool {
+        /** @var array<string, PhpMethod> $generatedMethodsByName */
+        $generatedMethodsByName = [];
+        foreach ($phpClass->methods as $method) {
+            if ($method->name === '__construct') {
+                continue;
+            }
+
+            $generatedMethodsByName[$method->cppName ?? $method->name] = $method;
+        }
+
+        $requiresPureVirtualCoverage = false;
+        foreach ($this->declaredPureVirtualMethodNames($classData) as $methodName) {
+            $requiresPureVirtualCoverage = true;
+            if (!isset($generatedMethodsByName[$methodName])) {
+                return false;
+            }
+        }
+
+        foreach ($inheritedPureVirtualCollector() as $methodName) {
+            $requiresPureVirtualCoverage = true;
+            if (!isset($generatedMethodsByName[$methodName])) {
+                return false;
+            }
+        }
+
+        return $requiresPureVirtualCoverage;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function declaredPureVirtualMethodNames(array $classData): array
+    {
+        $className = (string) ($classData['name'] ?? '');
+        $methods = is_array($classData['methods'] ?? null) ? $classData['methods'] : [];
+        $names = [];
+
+        foreach ($methods as $method) {
+            if (!is_array($method) || ($method['is_pure_virtual'] ?? false) !== true) {
+                continue;
+            }
+
+            $declaringClass = is_string($method['declaring_class'] ?? null)
+                ? (string) $method['declaring_class']
+                : $className;
+            if ($declaringClass !== '' && $className !== '' && $declaringClass !== $className) {
+                continue;
+            }
+
+            $methodName = is_string($method['name'] ?? null) ? (string) $method['name'] : '';
+            if ($methodName === '' || $methodName === $className) {
+                continue;
+            }
+
+            $names[$methodName] = true;
+        }
+
+        return array_keys($names);
+    }
+
+    /**
+     * @param list<string> $includePaths
+     * @param list<string> $allowedClasses
+     * @param array<string, string> $classHeaders
+     * @param array<string, bool> $visited
+     * @return list<string>
+     */
+    private function collectInheritedPureVirtualRequirementNames(
+        string $className,
+        string $fallbackHeaderPath,
+        array $includePaths,
+        array $allowedClasses,
+        array $classHeaders,
+        array &$visited = [],
+    ): array {
+        if (isset($visited[$className])) {
+            return [];
+        }
+
+        $visited[$className] = true;
+        $headerPath = $classHeaders[$className] ?? $fallbackHeaderPath;
+        $facts = $this->prepareDiscoveryFacts($headerPath, $className, $includePaths);
+        if (($facts['status'] ?? 'error') !== 'ok' || !is_array($facts['class_data'] ?? null)) {
+            return [];
+        }
+
+        /** @var array<string, mixed> $classData */
+        $classData = $facts['class_data'];
+        /** @var array<string, true> $names */
+        $names = [];
+
+        foreach ($this->declaredPureVirtualMethodNames($classData) as $methodName) {
+            $names[$methodName] = true;
+        }
+
+        foreach ((array) ($classData['bases'] ?? []) as $baseClass) {
+            if (!is_string($baseClass) || $baseClass === '' || $baseClass === $className || !in_array($baseClass, $allowedClasses, true)) {
+                continue;
+            }
+
+            foreach ($this->collectInheritedPureVirtualRequirementNames(
+                $baseClass,
+                $headerPath,
+                $includePaths,
+                $allowedClasses,
+                $classHeaders,
+                $visited,
+            ) as $methodName) {
+                $names[$methodName] = true;
+            }
+        }
+
+        return array_keys($names);
+    }
+
+    /**
+     * @param list<string> $allowedClasses
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @param array<string, bool> $visited
+     * @return list<string>
+     */
+    private function collectInheritedPureVirtualRequirementNamesFromPrepared(
+        string $className,
+        string $fallbackHeaderPath,
+        array $allowedClasses,
+        array $preparedClassDataByClass,
+        array &$visited = [],
+    ): array {
+        if (isset($visited[$className])) {
+            return [];
+        }
+
+        $visited[$className] = true;
+        $classData = $preparedClassDataByClass[$className] ?? null;
+        if (!is_array($classData)) {
+            return [];
+        }
+
+        /** @var array<string, true> $names */
+        $names = [];
+        foreach ($this->declaredPureVirtualMethodNames($classData) as $methodName) {
+            $names[$methodName] = true;
+        }
+
+        foreach ((array) ($classData['bases'] ?? []) as $baseClass) {
+            if (!is_string($baseClass) || $baseClass === '' || $baseClass === $className || !in_array($baseClass, $allowedClasses, true)) {
+                continue;
+            }
+
+            foreach ($this->collectInheritedPureVirtualRequirementNamesFromPrepared(
+                $baseClass,
+                $fallbackHeaderPath,
+                $allowedClasses,
+                $preparedClassDataByClass,
+                $visited,
+            ) as $methodName) {
+                $names[$methodName] = true;
+            }
+        }
+
+        return array_keys($names);
     }
 
     private function requiredParameterCount(PhpMethod $method): int
@@ -373,6 +1848,50 @@ class ClassGenerationService
             'has_public_default_constructor' => $hasPublicDefaultConstructor,
             'has_public_destructor' => $hasPublicDestructor,
         ];
+    }
+
+    /**
+     * @param list<array<string, mixed>> $methods
+     * @return list<array<string, mixed>>
+     */
+    private function annotateConstructorVariants(array $methods, string $headerPath, string $className, bool $isStruct): array
+    {
+        $resolved = $this->resolveClassDefinitionSource($headerPath, $className);
+        if ($resolved === null) {
+            return $methods;
+        }
+
+        $classBody = is_array($resolved['body'] ?? null) && is_string($resolved['body']['body'] ?? null)
+            ? $resolved['body']['body']
+            : null;
+        $defaultAccess = $resolved['body'] !== null && $resolved['body']['kind'] === 'struct'
+            ? 'public'
+            : ($isStruct ? 'public' : 'private');
+        $segments = $classBody !== null
+            ? $this->topLevelClassSegments($classBody, $defaultAccess)
+            : $this->lifecycleAccessBlocks($resolved['contents']);
+        $metadata = $this->constructorVariantMetadata($segments, $className);
+        if ($metadata === []) {
+            return $methods;
+        }
+
+        foreach ($methods as &$method) {
+            if (($method['name'] ?? null) !== $className) {
+                continue;
+            }
+
+            $key = $this->methodVariantKey($method);
+            $variantMetadata = $metadata[$key] ?? null;
+            if ($variantMetadata === null) {
+                continue;
+            }
+
+            $method['access'] = $variantMetadata['access'];
+            $method['is_deleted'] = $variantMetadata['is_deleted'];
+        }
+        unset($method);
+
+        return $methods;
     }
 
     /**
@@ -602,6 +2121,247 @@ class ClassGenerationService
         ), static fn(string $value): bool => $value !== ''));
     }
 
+    /**
+     * @param list<array{access: string, segment: string}> $segments
+     * @return array<string, array{access: string, is_deleted: bool}>
+     */
+    private function constructorVariantMetadata(array $segments, string $className): array
+    {
+        $metadata = [];
+
+        foreach ($segments as $segmentInfo) {
+            $access = $segmentInfo['access'];
+            $segment = $segmentInfo['segment'];
+
+            foreach ($this->constructorDeclarations($segment, $className) as $declaration) {
+                $key = $this->parameterSignatureKey($declaration['parameters']);
+                if ($key === null || isset($metadata[$key])) {
+                    continue;
+                }
+
+                $metadata[$key] = [
+                    'access' => $access,
+                    'is_deleted' => $declaration['is_deleted'],
+                ];
+            }
+        }
+
+        return $metadata;
+    }
+
+    /**
+     * @return list<array{parameters: list<string>, is_deleted: bool}>
+     */
+    private function constructorDeclarations(string $segment, string $className): array
+    {
+        $matchCount = preg_match_all(
+            '/(?<!~)\b' . preg_quote($className, '/') . '\s*\((.*?)\)\s*([^;{]*)\s*(?:;|\{)/s',
+            $segment,
+            $matches,
+            PREG_SET_ORDER,
+        );
+        if (!is_int($matchCount) || $matchCount === 0) {
+            return [];
+        }
+
+        $declarations = [];
+        foreach ($matches as $match) {
+            $parameterList = is_string($match[1] ?? null) ? $match[1] : '';
+            $suffix = is_string($match[2] ?? null) ? $match[2] : '';
+
+            $declarations[] = [
+                'parameters' => $this->normalizeParameterDeclarations($parameterList),
+                'is_deleted' => str_contains($suffix, '= delete') || str_contains($suffix, 'Q_DECL_EQ_DELETE'),
+            ];
+        }
+
+        return $declarations;
+    }
+
+    /**
+     * @param array<string, mixed> $method
+     */
+    private function methodVariantKey(array $method): ?string
+    {
+        $parameters = is_array($method['parameters'] ?? null) ? $method['parameters'] : [];
+        $types = [];
+
+        foreach ($parameters as $parameter) {
+            $type = is_string($parameter['type'] ?? null) ? $parameter['type'] : '';
+            if ($type === '') {
+                return null;
+            }
+
+            $types[] = $this->normalizeSignatureType($type);
+        }
+
+        return $this->parameterSignatureKey($types);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function normalizeParameterDeclarations(string $parameterList): array
+    {
+        $parameterList = trim($parameterList);
+        if ($parameterList === '') {
+            return [];
+        }
+
+        $parameters = [];
+        foreach ($this->splitTopLevelParameterList($parameterList) as $parameter) {
+            $parameter = $this->stripTopLevelDefaultValue($parameter);
+            $parameter = $this->stripParameterName($parameter);
+            if ($parameter === '') {
+                continue;
+            }
+
+            $parameters[] = $this->normalizeSignatureType($parameter);
+        }
+
+        return $parameters;
+    }
+
+    /**
+     * @param list<string> $types
+     */
+    private function parameterSignatureKey(array $types): ?string
+    {
+        return implode('|', $types);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function splitTopLevelParameterList(string $parameterList): array
+    {
+        $parts = [];
+        $buffer = '';
+        $angleDepth = 0;
+        $parenDepth = 0;
+        $braceDepth = 0;
+        $bracketDepth = 0;
+        $length = strlen($parameterList);
+
+        for ($index = 0; $index < $length; $index++) {
+            $char = $parameterList[$index];
+
+            switch ($char) {
+                case '<':
+                    $angleDepth++;
+                    break;
+                case '>':
+                    $angleDepth = max(0, $angleDepth - 1);
+                    break;
+                case '(':
+                    $parenDepth++;
+                    break;
+                case ')':
+                    $parenDepth = max(0, $parenDepth - 1);
+                    break;
+                case '{':
+                    $braceDepth++;
+                    break;
+                case '}':
+                    $braceDepth = max(0, $braceDepth - 1);
+                    break;
+                case '[':
+                    $bracketDepth++;
+                    break;
+                case ']':
+                    $bracketDepth = max(0, $bracketDepth - 1);
+                    break;
+                case ',':
+                    if ($angleDepth === 0 && $parenDepth === 0 && $braceDepth === 0 && $bracketDepth === 0) {
+                        $trimmed = trim($buffer);
+                        if ($trimmed !== '') {
+                            $parts[] = $trimmed;
+                        }
+                        $buffer = '';
+                        continue 2;
+                    }
+                    break;
+            }
+
+            $buffer .= $char;
+        }
+
+        $trimmed = trim($buffer);
+        if ($trimmed !== '') {
+            $parts[] = $trimmed;
+        }
+
+        return $parts;
+    }
+
+    private function stripTopLevelDefaultValue(string $parameter): string
+    {
+        $angleDepth = 0;
+        $parenDepth = 0;
+        $braceDepth = 0;
+        $bracketDepth = 0;
+        $length = strlen($parameter);
+
+        for ($index = 0; $index < $length; $index++) {
+            $char = $parameter[$index];
+
+            switch ($char) {
+                case '<':
+                    $angleDepth++;
+                    break;
+                case '>':
+                    $angleDepth = max(0, $angleDepth - 1);
+                    break;
+                case '(':
+                    $parenDepth++;
+                    break;
+                case ')':
+                    $parenDepth = max(0, $parenDepth - 1);
+                    break;
+                case '{':
+                    $braceDepth++;
+                    break;
+                case '}':
+                    $braceDepth = max(0, $braceDepth - 1);
+                    break;
+                case '[':
+                    $bracketDepth++;
+                    break;
+                case ']':
+                    $bracketDepth = max(0, $bracketDepth - 1);
+                    break;
+                case '=':
+                    if ($angleDepth === 0 && $parenDepth === 0 && $braceDepth === 0 && $bracketDepth === 0) {
+                        return trim(substr($parameter, 0, $index));
+                    }
+                    break;
+            }
+        }
+
+        return trim($parameter);
+    }
+
+    private function stripParameterName(string $parameter): string
+    {
+        if (preg_match('/^(.*(?:\*|&|&&))([A-Za-z_][A-Za-z0-9_]*)$/', $parameter, $matches) === 1) {
+            return trim((string) $matches[1]);
+        }
+
+        if (preg_match('/^(.*\S)\s+([A-Za-z_][A-Za-z0-9_]*)$/', $parameter, $matches) !== 1) {
+            return trim($parameter);
+        }
+
+        return trim((string) $matches[1]);
+    }
+
+    private function normalizeSignatureType(string $type): string
+    {
+        $normalized = trim(preg_replace('/\s+/', ' ', trim($type)) ?? trim($type));
+        $normalized = preg_replace('/\s*([*&])\s*/', '$1', $normalized) ?? $normalized;
+
+        return $normalized;
+    }
+
     private function containsDestructorSignature(string $segment, string $className): bool
     {
         return preg_match('/~\s*' . preg_quote($className, '/') . '\s*\(/', $segment) === 1;
@@ -727,6 +2487,65 @@ class ClassGenerationService
         )));
 
         return $names;
+    }
+
+    /**
+     * @param array<string, mixed> $classData
+     * @param callable(string): ?array<string, mixed> $baseLoader
+     * @param array<string, bool> $visited
+     */
+    private function isQObjectDerivedClassData(array $classData, callable $baseLoader, array &$visited = []): bool
+    {
+        $className = is_string($classData['name'] ?? null) ? $classData['name'] : '';
+        if ($className === 'QObject') {
+            return true;
+        }
+
+        foreach ((array) ($classData['bases'] ?? []) as $baseClass) {
+            if (!is_string($baseClass) || $baseClass === '') {
+                continue;
+            }
+
+            if ($baseClass === 'QObject') {
+                return true;
+            }
+
+            if (isset($visited[$baseClass])) {
+                continue;
+            }
+            $visited[$baseClass] = true;
+
+            $baseClassData = $baseLoader($baseClass);
+            if (is_array($baseClassData) && $this->isQObjectDerivedClassData($baseClassData, $baseLoader, $visited)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function stripQObjectRuntimeMethods(PhpClass $phpClass): PhpClass
+    {
+        if ($phpClass->name !== 'QObject') {
+            return $phpClass;
+        }
+
+        $methods = array_values(array_filter(
+            $phpClass->methods,
+            static fn(PhpMethod $method): bool => !in_array($method->name, ['property', 'setProperty'], true),
+        ));
+
+        return new PhpClass(
+            name: $phpClass->name,
+            parent: $phpClass->parent,
+            isAbstract: $phpClass->isAbstract,
+            isCopyConstructible: $phpClass->isCopyConstructible,
+            hasPublicDestructor: $phpClass->hasPublicDestructor,
+            properties: $phpClass->properties,
+            methods: $methods,
+            signals: $phpClass->signals,
+            isQObjectDerived: $phpClass->isQObjectDerived,
+        );
     }
 
     private function introspectionContents(string $headerPath, ?string $className = null): string

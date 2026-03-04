@@ -11,11 +11,33 @@
 #include "{!! $ctx->filePrefix !!}.h"
 #include "{!! $ctx->filePrefix !!}_arginfo.h"
 #include <chrono>
+#include <cstring>
 #include <filesystem>
+#include <memory>
+#include <mutex>
 #include <new>
 #include <string>
+#include <type_traits>
+#include <unordered_set>
+#include <utility>
 #include <QString>
 #include <QByteArray>
+#include <QVariant>
+#include <QMetaType>
+@if($ctx->hasQObjectPropertySupport())
+#include "qt_qvariant.h"
+#include <QMetaMethod>
+#include <QMetaProperty>
+@endif
+@if($ctx->hasPreventDestroy || $ctx->hasSignals() || $ctx->hasPostCallOwnershipHandling())
+#include <QObject>
+@endif
+@if($ctx->hasSignals())
+#include "qt_qmetaobjectconnection.h"
+#include <QCoreApplication>
+#include <QMetaObject>
+#include <QThread>
+@endif
 @if($ctx->parentCeVarName)
 #include "{!! 'qt_' . strtolower($ctx->parentClassName) !!}.h"
 @endif
@@ -31,6 +53,1082 @@ zend_class_entry *{!! $ctx->ceVarName !!} = NULL;
 zend_object_handlers {!! $ctx->handlersVarName !!};
 
 /* ------------------------------------------------------------------ */
+/* Internal PHP method dispatch helper                                 */
+/* ------------------------------------------------------------------ */
+
+static zend_always_inline zend_function *qt_lookup_method(zend_class_entry *ce, const char *function_name)
+{
+    return (zend_function *) zend_hash_str_find_ptr_lc(&ce->function_table, function_name, strlen(function_name));
+}
+
+static zend_always_inline int qt_match_score_max(int left, int right)
+{
+    return left > right ? left : right;
+}
+
+static zend_always_inline int qt_zend_class_distance(zend_class_entry *actual, zend_class_entry *expected)
+{
+    if (actual == NULL || expected == NULL) {
+        return -1;
+    }
+
+    int distance = 0;
+    for (zend_class_entry *cursor = actual; cursor != NULL; cursor = cursor->parent) {
+        if (cursor == expected) {
+            return distance;
+        }
+        distance++;
+    }
+
+    return instanceof_function(actual, expected) ? 500 : -1;
+}
+
+static zend_always_inline int qt_zval_object_match_score(zval *value, zend_class_entry *expected_ce)
+{
+    if (value == NULL || Z_TYPE_P(value) != IS_OBJECT || expected_ce == NULL) {
+        return -1;
+    }
+
+    int distance = qt_zend_class_distance(Z_OBJCE_P(value), expected_ce);
+    if (distance < 0) {
+        return -1;
+    }
+
+    if (distance > 999) {
+        distance = 999;
+    }
+
+    return 1000 - distance;
+}
+
+static zend_always_inline bool qt_method_is_overridden(zend_object *object, zend_class_entry *base_ce, const char *function_name)
+{
+    if (object == NULL || object->ce == NULL || base_ce == NULL) {
+        return false;
+    }
+
+    zend_function *current = qt_lookup_method(object->ce, function_name);
+    zend_function *base = qt_lookup_method(base_ce, function_name);
+
+    return current != NULL && base != NULL && current != base;
+}
+
+static zend_always_inline bool qt_call_php_method(zend_object *object, const char *function_name, zval *retval, uint32_t param_count, zval *params)
+{
+    if (object == NULL || object->ce == NULL) {
+        return false;
+    }
+
+    zend_function *method = qt_lookup_method(object->ce, function_name);
+    if (method == NULL) {
+        return false;
+    }
+
+    zend_call_known_function(method, object, object->ce, retval, param_count, params, NULL);
+
+    return !EG(exception);
+}
+
+@if($ctx->hasPostCallOwnershipHandling())
+template <typename T>
+static zend_always_inline bool qt_native_has_qobject_parent(T *ptr)
+{
+    if (ptr == NULL) {
+        return false;
+    }
+
+    if constexpr (std::is_base_of_v<QObject, T>) {
+        return ptr->parent() != NULL;
+    }
+
+    return false;
+}
+
+@endif
+
+/* ------------------------------------------------------------------ */
+/* QVariant <-> zval helpers                                           */
+/* ------------------------------------------------------------------ */
+
+static bool qt_zval_to_variant(zval *value, QVariant *out);
+
+static void qt_variant_to_zval(zval *target, const QVariant &value)
+{
+    if (!value.isValid() || value.isNull()) {
+        ZVAL_NULL(target);
+        return;
+    }
+
+    switch (value.metaType().id()) {
+        case QMetaType::Bool:
+            ZVAL_BOOL(target, value.toBool());
+            return;
+        case QMetaType::Char:
+        case QMetaType::SChar:
+        case QMetaType::UChar:
+        case QMetaType::Short:
+        case QMetaType::UShort:
+        case QMetaType::Int:
+        case QMetaType::UInt:
+        case QMetaType::LongLong:
+        case QMetaType::ULongLong:
+            ZVAL_LONG(target, (zend_long)value.toLongLong());
+            return;
+        case QMetaType::Float:
+        case QMetaType::Double:
+            ZVAL_DOUBLE(target, value.toDouble());
+            return;
+        case QMetaType::QString: {
+            QByteArray _qt_utf8 = value.toString().toUtf8();
+            ZVAL_STRINGL(target, _qt_utf8.constData(), _qt_utf8.size());
+            return;
+        }
+        case QMetaType::QByteArray: {
+            QByteArray _qt_bytes = value.toByteArray();
+            ZVAL_STRINGL(target, _qt_bytes.constData(), _qt_bytes.size());
+            return;
+        }
+        default:
+            break;
+    }
+
+    if (value.metaType().flags().testFlag(QMetaType::IsEnumeration)) {
+        ZVAL_LONG(target, (zend_long)value.toLongLong());
+        return;
+    }
+
+    if (value.canConvert<QVariantList>()) {
+        QVariantList _qt_list = value.toList();
+        array_init_size(target, (uint32_t)_qt_list.size());
+        for (const QVariant &_qt_item : _qt_list) {
+            zval _qt_value;
+            ZVAL_NULL(&_qt_value);
+            qt_variant_to_zval(&_qt_value, _qt_item);
+            add_next_index_zval(target, &_qt_value);
+        }
+        return;
+    }
+
+    if (value.canConvert<QVariantMap>()) {
+        QVariantMap _qt_map = value.toMap();
+        array_init_size(target, (uint32_t)_qt_map.size());
+        for (auto _qt_it = _qt_map.cbegin(); _qt_it != _qt_map.cend(); ++_qt_it) {
+            QByteArray _qt_key = _qt_it.key().toUtf8();
+            zval _qt_value;
+            ZVAL_NULL(&_qt_value);
+            qt_variant_to_zval(&_qt_value, _qt_it.value());
+            add_assoc_zval_ex(target, _qt_key.constData(), _qt_key.size(), &_qt_value);
+        }
+        return;
+    }
+
+    QByteArray _qt_utf8 = value.toString().toUtf8();
+    ZVAL_STRINGL(target, _qt_utf8.constData(), _qt_utf8.size());
+}
+
+static bool qt_zval_to_variant(zval *value, QVariant *out)
+{
+    switch (Z_TYPE_P(value)) {
+        case IS_NULL:
+            *out = QVariant();
+            return true;
+        case IS_TRUE:
+        case IS_FALSE:
+            *out = QVariant((bool)zend_is_true(value));
+            return true;
+        case IS_LONG:
+            *out = QVariant::fromValue<qlonglong>((qlonglong)zval_get_long(value));
+            return true;
+        case IS_DOUBLE:
+            *out = QVariant(zval_get_double(value));
+            return true;
+        case IS_STRING:
+            *out = QVariant(QString::fromUtf8(Z_STRVAL_P(value), (int)Z_STRLEN_P(value)));
+            return true;
+        case IS_ARRAY: {
+            HashTable *_qt_ht = Z_ARRVAL_P(value);
+            if (zend_array_is_list(_qt_ht)) {
+                QVariantList _qt_list;
+                zval *_qt_entry;
+                ZEND_HASH_FOREACH_VAL(_qt_ht, _qt_entry) {
+                    QVariant _qt_item;
+                    if (!qt_zval_to_variant(_qt_entry, &_qt_item)) {
+                        return false;
+                    }
+                    _qt_list.append(_qt_item);
+                } ZEND_HASH_FOREACH_END();
+                *out = QVariant(_qt_list);
+                return true;
+            }
+
+            QVariantMap _qt_map;
+            zend_string *_qt_key_str;
+            zend_ulong _qt_key_num;
+            zval *_qt_entry;
+            ZEND_HASH_FOREACH_KEY_VAL(_qt_ht, _qt_key_num, _qt_key_str, _qt_entry) {
+                QVariant _qt_item;
+                if (!qt_zval_to_variant(_qt_entry, &_qt_item)) {
+                    return false;
+                }
+
+                QString _qt_key = _qt_key_str != NULL
+                    ? QString::fromUtf8(ZSTR_VAL(_qt_key_str), (int)ZSTR_LEN(_qt_key_str))
+                    : QString::number((qlonglong)_qt_key_num);
+                _qt_map.insert(_qt_key, _qt_item);
+            } ZEND_HASH_FOREACH_END();
+            *out = QVariant(_qt_map);
+            return true;
+        }
+        default:
+            zend_type_error("Unsupported QVariant conversion from PHP value.");
+            return false;
+    }
+}
+
+@if($ctx->hasQObjectPropertySupport())
+/* ------------------------------------------------------------------ */
+/* QObject property helpers                                            */
+/* ------------------------------------------------------------------ */
+
+static zend_always_inline QObject *qt_native_qobject({!! $ctx->objectStructName !!} *intern)
+{
+    return intern->native_ptr != NULL
+        ? static_cast<QObject *>(intern->native_ptr)
+        : NULL;
+}
+
+static zend_always_inline int qt_qobject_meta_property_index(QObject *obj, zend_string *name)
+{
+    if (obj == NULL || name == NULL) {
+        return -1;
+    }
+
+    QByteArray _qt_name(ZSTR_VAL(name), (int) ZSTR_LEN(name));
+    return obj->metaObject()->indexOfProperty(_qt_name.constData());
+}
+
+static zend_always_inline bool qt_qobject_has_dynamic_property(QObject *obj, zend_string *name)
+{
+    if (obj == NULL || name == NULL) {
+        return false;
+    }
+
+    QByteArray _qt_name(ZSTR_VAL(name), (int) ZSTR_LEN(name));
+    const QList<QByteArray> _qt_names = obj->dynamicPropertyNames();
+    for (const QByteArray &_qt_dynamic_name : _qt_names) {
+        if (_qt_dynamic_name == _qt_name) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void qt_qobject_variant_to_property_zval(zval *target, const QVariant &value)
+{
+    if (!value.isValid() || value.isNull()) {
+        ZVAL_NULL(target);
+        return;
+    }
+
+    switch (value.metaType().id()) {
+        case QMetaType::Bool:
+            ZVAL_BOOL(target, value.toBool());
+            return;
+        case QMetaType::Char:
+        case QMetaType::SChar:
+        case QMetaType::UChar:
+        case QMetaType::Short:
+        case QMetaType::UShort:
+        case QMetaType::Int:
+        case QMetaType::UInt:
+        case QMetaType::LongLong:
+        case QMetaType::ULongLong:
+            ZVAL_LONG(target, (zend_long) value.toLongLong());
+            return;
+        case QMetaType::Float:
+        case QMetaType::Double:
+            ZVAL_DOUBLE(target, value.toDouble());
+            return;
+        case QMetaType::QString: {
+            QByteArray _qt_utf8 = value.toString().toUtf8();
+            ZVAL_STRINGL(target, _qt_utf8.constData(), _qt_utf8.size());
+            return;
+        }
+        case QMetaType::QByteArray: {
+            QByteArray _qt_bytes = value.toByteArray();
+            ZVAL_STRINGL(target, _qt_bytes.constData(), _qt_bytes.size());
+            return;
+        }
+        default:
+            break;
+    }
+
+    if (value.metaType().flags().testFlag(QMetaType::IsEnumeration)) {
+        ZVAL_LONG(target, (zend_long) value.toLongLong());
+        return;
+    }
+
+    if (value.canConvert<QVariantList>()) {
+        QVariantList _qt_list = value.toList();
+        array_init_size(target, (uint32_t) _qt_list.size());
+        for (const QVariant &_qt_item : _qt_list) {
+            zval _qt_value;
+            ZVAL_NULL(&_qt_value);
+            qt_qobject_variant_to_property_zval(&_qt_value, _qt_item);
+            add_next_index_zval(target, &_qt_value);
+        }
+        return;
+    }
+
+    if (value.canConvert<QVariantMap>()) {
+        QVariantMap _qt_map = value.toMap();
+        array_init_size(target, (uint32_t) _qt_map.size());
+        for (auto _qt_it = _qt_map.cbegin(); _qt_it != _qt_map.cend(); ++_qt_it) {
+            QByteArray _qt_key = _qt_it.key().toUtf8();
+            zval _qt_value;
+            ZVAL_NULL(&_qt_value);
+            qt_qobject_variant_to_property_zval(&_qt_value, _qt_it.value());
+            add_assoc_zval_ex(target, _qt_key.constData(), _qt_key.size(), &_qt_value);
+        }
+        return;
+    }
+
+    object_init_ex(target, qt_ce_QVariant);
+    qt_qvariant_object *_qt_variant_intern = qt_qvariant_from_obj(Z_OBJ_P(target));
+    _qt_variant_intern->native_ptr = new QVariant(value);
+}
+
+static bool qt_qobject_zval_to_property_variant(zval *value, QVariant *out)
+{
+    if (Z_TYPE_P(value) == IS_OBJECT && qt_ce_QVariant != NULL && instanceof_function(Z_OBJCE_P(value), qt_ce_QVariant)) {
+        qt_qvariant_object *_qt_variant_intern = qt_qvariant_from_obj(Z_OBJ_P(value));
+        if (_qt_variant_intern->native_ptr == NULL) {
+            *out = QVariant();
+        } else {
+            *out = *_qt_variant_intern->native_ptr;
+        }
+        return true;
+    }
+
+    return qt_zval_to_variant(value, out);
+}
+
+static bool qt_qobject_read_property_mixed(QObject *obj, zend_string *name, zval *rv)
+{
+    if (obj == NULL || name == NULL) {
+        return false;
+    }
+
+    QByteArray _qt_name(ZSTR_VAL(name), (int) ZSTR_LEN(name));
+    const QVariant _qt_value = obj->property(_qt_name.constData());
+
+    if (!_qt_value.isValid() && qt_qobject_meta_property_index(obj, name) < 0 && !qt_qobject_has_dynamic_property(obj, name)) {
+        return false;
+    }
+
+    qt_qobject_variant_to_property_zval(rv, _qt_value);
+    return true;
+}
+
+static bool qt_qobject_write_property_mixed(QObject *obj, zend_string *name, zval *value, bool *result)
+{
+    if (obj == NULL || name == NULL || value == NULL) {
+        return false;
+    }
+
+    QVariant _qt_value;
+    if (!qt_qobject_zval_to_property_variant(value, &_qt_value)) {
+        return false;
+    }
+
+    QByteArray _qt_name(ZSTR_VAL(name), (int) ZSTR_LEN(name));
+    const int _qt_property_index = qt_qobject_meta_property_index(obj, name);
+    if (_qt_property_index >= 0) {
+        auto _qt_property = obj->metaObject()->property(_qt_property_index);
+        if (!_qt_property.isWritable()) {
+            zend_throw_error(NULL, "Property %s is not writable.", ZSTR_VAL(name));
+            return false;
+        }
+
+        const bool _qt_result = obj->setProperty(_qt_name.constData(), _qt_value);
+        if (result != NULL) {
+            *result = _qt_result;
+        }
+
+        return true;
+    }
+
+    obj->setProperty(_qt_name.constData(), _qt_value);
+    if (result != NULL) {
+        *result = qt_qobject_has_dynamic_property(obj, name);
+    }
+
+    return true;
+}
+
+static bool qt_qobject_has_property_name(QObject *obj, zend_string *name)
+{
+    return qt_qobject_meta_property_index(obj, name) >= 0
+        || qt_qobject_has_dynamic_property(obj, name);
+}
+
+static bool qt_qobject_should_delegate_to_std_property(zend_object *object, zend_string *name)
+{
+    if (object == NULL || name == NULL) {
+        return false;
+    }
+
+    zend_property_info *_qt_prop_info = zend_get_property_info(object->ce, name, /* silent */ true);
+    if (_qt_prop_info == NULL || _qt_prop_info == ZEND_WRONG_PROPERTY_INFO) {
+        return false;
+    }
+
+    return (_qt_prop_info->flags & ZEND_ACC_VIRTUAL) == 0;
+}
+
+static void qt_qobject_property_names(QObject *obj, zval *return_value)
+{
+    array_init(return_value);
+
+    if (obj == NULL) {
+        return;
+    }
+
+    std::unordered_set<std::string> _qt_seen;
+    const QMetaObject *_qt_meta = obj->metaObject();
+    const int _qt_meta_count = _qt_meta->propertyCount();
+    for (int _qt_i = 0; _qt_i < _qt_meta_count; ++_qt_i) {
+        auto _qt_property = _qt_meta->property(_qt_i);
+        const char *_qt_name = _qt_property.name();
+        if (_qt_name == NULL || *_qt_name == '\0') {
+            continue;
+        }
+
+        if (_qt_seen.insert(std::string(_qt_name)).second) {
+            add_next_index_string(return_value, _qt_name);
+        }
+    }
+
+    const QList<QByteArray> _qt_dynamic_names = obj->dynamicPropertyNames();
+    for (const QByteArray &_qt_name : _qt_dynamic_names) {
+        std::string _qt_key(_qt_name.constData(), (size_t) _qt_name.size());
+        if (_qt_seen.insert(_qt_key).second) {
+            add_next_index_stringl(return_value, _qt_name.constData(), _qt_name.size());
+        }
+    }
+}
+
+static bool qt_qobject_property_info(QObject *obj, zend_string *name, zval *return_value)
+{
+    if (obj == NULL || name == NULL) {
+        return false;
+    }
+
+    const int _qt_property_index = qt_qobject_meta_property_index(obj, name);
+    if (_qt_property_index >= 0) {
+        auto _qt_property = obj->metaObject()->property(_qt_property_index);
+        array_init(return_value);
+        add_assoc_stringl(return_value, "name", ZSTR_VAL(name), ZSTR_LEN(name));
+
+        const char *_qt_type_name = _qt_property.typeName();
+        if (_qt_type_name == NULL || *_qt_type_name == '\0') {
+            _qt_type_name = _qt_property.metaType().name();
+        }
+        if (_qt_type_name != NULL && *_qt_type_name != '\0') {
+            add_assoc_string(return_value, "type_name", const_cast<char *>(_qt_type_name));
+        } else {
+            add_assoc_string(return_value, "type_name", "QVariant");
+        }
+
+        add_assoc_bool(return_value, "readable", _qt_property.isReadable());
+        add_assoc_bool(return_value, "writable", _qt_property.isWritable());
+        add_assoc_bool(return_value, "resettable", _qt_property.isResettable());
+        add_assoc_bool(return_value, "constant", _qt_property.isConstant());
+        add_assoc_bool(return_value, "final", _qt_property.isFinal());
+        add_assoc_bool(return_value, "required", _qt_property.isRequired());
+    add_assoc_bool(return_value, "designable", _qt_property.isDesignable());
+    add_assoc_bool(return_value, "scriptable", _qt_property.isScriptable());
+    add_assoc_bool(return_value, "stored", _qt_property.isStored());
+    add_assoc_bool(return_value, "user", _qt_property.isUser());
+        add_assoc_bool(return_value, "enum", _qt_property.isEnumType());
+        add_assoc_bool(return_value, "flag", _qt_property.isFlagType());
+        add_assoc_bool(return_value, "dynamic", false);
+
+        auto _qt_notify = _qt_property.notifySignal();
+        if (_qt_notify.isValid()) {
+            QByteArray _qt_signature = _qt_notify.methodSignature();
+            add_assoc_bool(return_value, "has_notify", true);
+            add_assoc_stringl(return_value, "notify_signal", _qt_signature.constData(), _qt_signature.size());
+        } else {
+            add_assoc_bool(return_value, "has_notify", false);
+            add_assoc_null(return_value, "notify_signal");
+        }
+
+        return true;
+    }
+
+    if (!qt_qobject_has_dynamic_property(obj, name)) {
+        return false;
+    }
+
+    array_init(return_value);
+    add_assoc_stringl(return_value, "name", ZSTR_VAL(name), ZSTR_LEN(name));
+    QVariant _qt_value = obj->property(QByteArray(ZSTR_VAL(name), (int) ZSTR_LEN(name)).constData());
+    const char *_qt_type_name = _qt_value.metaType().name();
+    if (_qt_type_name != NULL && *_qt_type_name != '\0') {
+        add_assoc_string(return_value, "type_name", const_cast<char *>(_qt_type_name));
+    } else {
+        add_assoc_string(return_value, "type_name", "QVariant");
+    }
+    add_assoc_bool(return_value, "readable", true);
+    add_assoc_bool(return_value, "writable", true);
+    add_assoc_bool(return_value, "resettable", false);
+    add_assoc_bool(return_value, "constant", false);
+    add_assoc_bool(return_value, "final", false);
+    add_assoc_bool(return_value, "required", false);
+    add_assoc_bool(return_value, "designable", true);
+    add_assoc_bool(return_value, "scriptable", true);
+    add_assoc_bool(return_value, "stored", true);
+    add_assoc_bool(return_value, "user", false);
+    add_assoc_bool(return_value, "enum", false);
+    add_assoc_bool(return_value, "flag", false);
+    add_assoc_bool(return_value, "has_notify", false);
+    add_assoc_null(return_value, "notify_signal");
+    add_assoc_bool(return_value, "dynamic", true);
+
+    return true;
+}
+
+static bool qt_qobject_notify_signature(QObject *obj, zend_string *name, zend_string **out)
+{
+    if (obj == NULL || name == NULL || out == NULL) {
+        return false;
+    }
+
+    const int _qt_property_index = qt_qobject_meta_property_index(obj, name);
+    if (_qt_property_index < 0) {
+        return false;
+    }
+
+    auto _qt_property = obj->metaObject()->property(_qt_property_index);
+    auto _qt_notify = _qt_property.notifySignal();
+    if (!_qt_notify.isValid()) {
+        return false;
+    }
+
+    QByteArray _qt_signature = _qt_notify.methodSignature();
+    if (_qt_signature.isEmpty()) {
+        return false;
+    }
+
+    *out = zend_string_init(_qt_signature.constData(), _qt_signature.size(), 0);
+    return true;
+}
+
+static zval *{!! $ctx->filePrefix !!}_read_property(zend_object *object, zend_string *member, int type, void **cache_slot, zval *rv)
+{
+    if (qt_qobject_should_delegate_to_std_property(object, member)) {
+        return zend_std_read_property(object, member, type, cache_slot, rv);
+    }
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
+    QObject *_qt_obj = qt_native_qobject(intern);
+    if (_qt_obj == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        return &EG(uninitialized_zval);
+    }
+
+    if (qt_qobject_read_property_mixed(_qt_obj, member, rv)) {
+        return rv;
+    }
+
+    return zend_std_read_property(object, member, type, cache_slot, rv);
+}
+
+static zval *{!! $ctx->filePrefix !!}_write_property(zend_object *object, zend_string *member, zval *value, void **cache_slot)
+{
+    if (qt_qobject_should_delegate_to_std_property(object, member)) {
+        return zend_std_write_property(object, member, value, cache_slot);
+    }
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
+    QObject *_qt_obj = qt_native_qobject(intern);
+    if (_qt_obj == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        return &EG(uninitialized_zval);
+    }
+
+    if (!qt_qobject_write_property_mixed(_qt_obj, member, value, NULL)) {
+        return &EG(uninitialized_zval);
+    }
+
+    return value;
+}
+
+static zval *{!! $ctx->filePrefix !!}_get_property_ptr_ptr(zend_object *object, zend_string *member, int type, void **cache_slot)
+{
+    if (qt_qobject_should_delegate_to_std_property(object, member)) {
+        return zend_std_get_property_ptr_ptr(object, member, type, cache_slot);
+    }
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
+    QObject *_qt_obj = qt_native_qobject(intern);
+    if (_qt_obj != NULL && qt_qobject_has_property_name(_qt_obj, member)) {
+        return NULL;
+    }
+
+    return zend_std_get_property_ptr_ptr(object, member, type, cache_slot);
+}
+
+static int {!! $ctx->filePrefix !!}_has_property(zend_object *object, zend_string *member, int has_set_exists, void **cache_slot)
+{
+    if (qt_qobject_should_delegate_to_std_property(object, member)) {
+        return zend_std_has_property(object, member, has_set_exists, cache_slot);
+    }
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
+    QObject *_qt_obj = qt_native_qobject(intern);
+    if (_qt_obj == NULL) {
+        return zend_std_has_property(object, member, has_set_exists, cache_slot);
+    }
+
+    if (!qt_qobject_has_property_name(_qt_obj, member)) {
+        return zend_std_has_property(object, member, has_set_exists, cache_slot);
+    }
+
+    if (has_set_exists == ZEND_PROPERTY_EXISTS) {
+        return 1;
+    }
+
+    zval rv;
+    ZVAL_NULL(&rv);
+    if (!qt_qobject_read_property_mixed(_qt_obj, member, &rv)) {
+        return 0;
+    }
+
+    const int _qt_result = (has_set_exists == ZEND_PROPERTY_NOT_EMPTY)
+        ? zend_is_true(&rv)
+        : (Z_TYPE(rv) != IS_NULL);
+    zval_ptr_dtor(&rv);
+
+    return _qt_result;
+}
+
+static zend_array *{!! $ctx->filePrefix !!}_get_properties_for(zend_object *object, zend_prop_purpose purpose)
+{
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
+    QObject *_qt_obj = qt_native_qobject(intern);
+    zend_array *_qt_props = zend_std_get_properties_for(object, purpose);
+    if (_qt_obj == NULL) {
+        return _qt_props;
+    }
+
+    std::unordered_set<std::string> _qt_seen;
+
+    if (_qt_props == NULL) {
+        _qt_props = zend_new_array(8);
+    } else {
+        zend_string *_qt_existing_key;
+        zval *_qt_existing_value;
+        ZEND_HASH_FOREACH_STR_KEY_VAL(_qt_props, _qt_existing_key, _qt_existing_value) {
+            (void) _qt_existing_value;
+            if (_qt_existing_key != NULL) {
+                _qt_seen.insert(std::string(ZSTR_VAL(_qt_existing_key), ZSTR_LEN(_qt_existing_key)));
+            }
+        } ZEND_HASH_FOREACH_END();
+    }
+
+    const QMetaObject *_qt_meta = _qt_obj->metaObject();
+    const int _qt_meta_count = _qt_meta->propertyCount();
+    for (int _qt_i = 0; _qt_i < _qt_meta_count; ++_qt_i) {
+        auto _qt_property = _qt_meta->property(_qt_i);
+        const char *_qt_name = _qt_property.name();
+        if (_qt_name == NULL || *_qt_name == '\0') {
+            continue;
+        }
+
+        std::string _qt_key(_qt_name);
+        if (!_qt_seen.insert(_qt_key).second) {
+            continue;
+        }
+
+        zval _qt_value;
+        ZVAL_NULL(&_qt_value);
+        zend_string *_qt_member = zend_string_init(_qt_name, strlen(_qt_name), 0);
+        if (qt_qobject_read_property_mixed(_qt_obj, _qt_member, &_qt_value)) {
+            zend_hash_update(_qt_props, _qt_member, &_qt_value);
+        } else {
+            zval_ptr_dtor(&_qt_value);
+        }
+        zend_string_release(_qt_member);
+    }
+
+    const QList<QByteArray> _qt_dynamic_names = _qt_obj->dynamicPropertyNames();
+    for (const QByteArray &_qt_name : _qt_dynamic_names) {
+        std::string _qt_key(_qt_name.constData(), (size_t) _qt_name.size());
+        if (!_qt_seen.insert(_qt_key).second) {
+            continue;
+        }
+
+        zval _qt_value;
+        ZVAL_NULL(&_qt_value);
+        zend_string *_qt_member = zend_string_init(_qt_name.constData(), _qt_name.size(), 0);
+        if (qt_qobject_read_property_mixed(_qt_obj, _qt_member, &_qt_value)) {
+            zend_hash_update(_qt_props, _qt_member, &_qt_value);
+        } else {
+            zval_ptr_dtor(&_qt_value);
+        }
+        zend_string_release(_qt_member);
+    }
+
+    return _qt_props;
+}
+
+@endif
+
+@if($ctx->hasSignals())
+/* ------------------------------------------------------------------ */
+/* Signal callback runtime                                             */
+/* ------------------------------------------------------------------ */
+
+struct qt_signal_callback_t {
+    zend_fcall_info fci;
+    zend_fcall_info_cache fci_cache;
+};
+
+static inline void qt_signal_callback_clear(const std::shared_ptr<qt_signal_callback_t> &callback)
+{
+    if (!callback) {
+        return;
+    }
+
+    callback->fci.params = NULL;
+    callback->fci.param_count = 0;
+    callback->fci.retval = NULL;
+    if (!Z_ISUNDEF(callback->fci.function_name)) {
+        zval_ptr_dtor(&callback->fci.function_name);
+        ZVAL_UNDEF(&callback->fci.function_name);
+    }
+}
+
+static inline std::shared_ptr<qt_signal_callback_t> qt_signal_callback_create(const QObject *sender, zval *callback)
+{
+    auto handle = std::make_shared<qt_signal_callback_t>();
+    memset(&handle->fci, 0, sizeof(handle->fci));
+    memset(&handle->fci_cache, 0, sizeof(handle->fci_cache));
+    ZVAL_UNDEF(&handle->fci.function_name);
+
+    char *error = NULL;
+    if (zend_fcall_info_init(callback, 0, &handle->fci, &handle->fci_cache, NULL, &error) != SUCCESS) {
+        if (error != NULL) {
+            zend_throw_exception_ex(zend_ce_type_error, 0, "Invalid signal callback: %s", error);
+            efree(error);
+        } else {
+            zend_throw_exception_ex(zend_ce_type_error, 0, "Invalid signal callback.");
+        }
+        return nullptr;
+    }
+
+    Z_TRY_ADDREF(handle->fci.function_name);
+
+    if (sender != NULL) {
+        QObject::connect(sender, &QObject::destroyed, [handle]() {
+            qt_signal_callback_clear(handle);
+        });
+    }
+
+    return handle;
+}
+
+static inline bool qt_signal_callback_invoke(const std::shared_ptr<qt_signal_callback_t> &callback, uint32_t param_count, zval *params)
+{
+    zval retval;
+    ZVAL_NULL(&retval);
+
+    zval *previousRetval = callback->fci.retval;
+    zval *previousParams = callback->fci.params;
+    uint32_t previousParamCount = callback->fci.param_count;
+
+    callback->fci.retval = &retval;
+    callback->fci.params = params;
+    callback->fci.param_count = param_count;
+
+    bool ok = zend_call_function(&callback->fci, &callback->fci_cache) == SUCCESS;
+    callback->fci.retval = previousRetval;
+    callback->fci.params = previousParams;
+    callback->fci.param_count = previousParamCount;
+    zval_ptr_dtor(&retval);
+
+    return ok;
+}
+
+template <typename InvokeCallback>
+static inline void qt_signal_dispatch(InvokeCallback invoke)
+{
+    QCoreApplication *_qt_app = QCoreApplication::instance();
+    if (_qt_app != NULL && QThread::currentThread() != _qt_app->thread()) {
+        QMetaObject::invokeMethod(_qt_app, [invoke]() mutable {
+            invoke();
+        }, Qt::QueuedConnection);
+        return;
+    }
+
+    invoke();
+}
+
+@endif
+
+@if($ctx->requiresAccessShim)
+/* ------------------------------------------------------------------ */
+/* Protected access shim                                               */
+/* ------------------------------------------------------------------ */
+
+class {!! $ctx->accessShimTypeName !!} : public {!! $ctx->nativeCppType !!}
+{
+public:
+    using {!! $ctx->nativeCppType !!}::{!! $ctx->nativeCppType !!};
+
+@foreach($ctx->methodsWithCallableProtectedOverloads() as $method)
+@foreach($method->overloads as $overloadIndex => $overload)
+@if($overload->access === 'protected' && !$overload->isPureVirtual)
+@php
+    $paramDecls = [];
+    $paramArgs = [];
+    foreach ($overload->params as $paramIndex => $param) {
+        $paramVar = sprintf('_qt_p%d', $paramIndex);
+        $paramDecls[] = sprintf(
+            '%s %s',
+            $ctx->typeBridge->accessShimBoundaryType($param->phpType, $param->cppType),
+            $paramVar,
+        );
+        $paramArgs[] = $ctx->typeBridge->accessShimBoundaryExpr($param->phpType, $param->cppType, $paramVar);
+    }
+    $declaringClass = $overload->declaringClass !== '' ? $overload->declaringClass : $ctx->nativeCppType;
+    $helperReturnType = $ctx->typeBridge->accessShimBoundaryType($overload->phpReturnType, $overload->cppReturnType, true);
+    $helperSignature = implode(', ', $paramDecls);
+    $helperArgs = implode(', ', $paramArgs);
+    $helperCall = $overload->isStatic
+        ? sprintf('%s::%s(%s)', $declaringClass, $method->cppName, $helperArgs)
+        : sprintf('this->%s::%s(%s)', $declaringClass, $method->cppName, $helperArgs);
+    $helperConst = !$overload->isStatic && $overload->isConst ? ' const' : '';
+    $helperPrefix = $overload->isStatic ? 'static inline ' : 'inline ';
+@endphp
+    {!! $helperPrefix !!}{!! $helperReturnType !!} {!! $method->accessShimHelperName($overloadIndex) !!}({!! $helperSignature !!}){!! $helperConst !!}
+    {
+@if($overload->returnStrategy === 'void')
+        {!! $helperCall !!};
+@else
+        return {!! $ctx->typeBridge->accessShimBoundaryReturnExpr($overload->phpReturnType, $overload->cppReturnType, $helperCall) !!};
+@endif
+    }
+
+@endif
+@endforeach
+@endforeach
+};
+
+@endif
+@if($ctx->requiresVirtualTrampoline)
+/* ------------------------------------------------------------------ */
+/* Native virtual trampoline                                           */
+/* ------------------------------------------------------------------ */
+
+class {!! $ctx->trampolineTypeName !!} : public @if($ctx->requiresAccessShim){!! $ctx->accessShimTypeName !!}@else{!! $ctx->nativeCppType !!}@endif
+{
+public:
+    using @if($ctx->requiresAccessShim){!! $ctx->accessShimTypeName !!}@else{!! $ctx->nativeCppType !!}@endif::@if($ctx->requiresAccessShim){!! $ctx->accessShimTypeName !!}@else{!! $ctx->nativeCppType !!}@endif;
+
+    zend_object *php_object = nullptr;
+
+@foreach($ctx->virtualMethods() as $method)
+@foreach($method->overloads as $overloadIndex => $overload)
+@if($overload->isVirtual || $overload->isPureVirtual)
+@php
+    $paramDecls = [];
+    $paramArgs = [];
+    foreach ($overload->params as $paramIndex => $param) {
+        $paramDecls[] = sprintf('%s _qt_p%d', $param->cppType, $paramIndex);
+        $paramArgs[] = sprintf('_qt_p%d', $paramIndex);
+    }
+    $overrideSignature = implode(', ', $paramDecls);
+    $overrideArgs = implode(', ', $paramArgs);
+    $declaringClass = $overload->declaringClass !== '' ? $overload->declaringClass : $ctx->nativeCppType;
+    $constQualifier = $overload->isConst ? ' const' : '';
+    $baseCall = sprintf('%s::%s(%s)', $declaringClass, $method->cppName, $overrideArgs);
+    $returnSetup = $ctx->typeBridge->nativeReturnFromZvalSetup($overload->phpReturnType, $overload->cppReturnType, '&_qt_retval', '_qt_native_return');
+@endphp
+@if($method->access === 'protected')
+protected:
+@else
+public:
+@endif
+    {!! $overload->cppReturnType !!} {!! $method->cppName !!}({!! $overrideSignature !!}){!! $constQualifier !!} override
+    {
+        if (this->php_object == nullptr) {
+            zend_throw_error(NULL, "Missing PHP object for {!! $ctx->phpClassName !!}::{!! $method->name !!}() virtual dispatch.");
+@if($overload->returnStrategy === 'void')
+            return;
+@else
+            return {!! $ctx->typeBridge->defaultNativeReturnExpr($overload->phpReturnType, $overload->cppReturnType) !!};
+@endif
+        }
+
+        if (!qt_method_is_overridden(this->php_object, {!! $ctx->ceVarName !!}, "{!! $method->name !!}")) {
+@if($overload->isPureVirtual)
+            zend_throw_error(NULL, "Pure virtual method {!! $ctx->phpClassName !!}::{!! $method->name !!}() must be overridden in PHP.");
+@if($overload->returnStrategy === 'void')
+            return;
+@else
+            return {!! $ctx->typeBridge->defaultNativeReturnExpr($overload->phpReturnType, $overload->cppReturnType) !!};
+@endif
+@else
+@if($overload->returnStrategy === 'void')
+            {!! $baseCall !!};
+            return;
+@else
+            return {!! $baseCall !!};
+@endif
+@endif
+        }
+
+        zval _qt_retval;
+        ZVAL_NULL(&_qt_retval);
+@if(count($overload->params) > 0)
+        zval _qt_params[{!! count($overload->params) !!}];
+@foreach($overload->params as $paramIndex => $param)
+        {!! $ctx->typeBridge->signalArgToZvalBlock(sprintf('&_qt_params[%d]', $paramIndex), $param->phpType, $param->cppType, sprintf('_qt_p%d', $paramIndex), $paramIndex) !!}
+@endforeach
+        if (!qt_call_php_method(this->php_object, "{!! $method->name !!}", &_qt_retval, {!! count($overload->params) !!}, _qt_params)) {
+@else
+        if (!qt_call_php_method(this->php_object, "{!! $method->name !!}", &_qt_retval, 0, NULL)) {
+@endif
+            zval_ptr_dtor(&_qt_retval);
+@foreach($overload->params as $paramIndex => $param)
+        zval_ptr_dtor(&_qt_params[{!! $paramIndex !!}]);
+@endforeach
+@if($overload->isPureVirtual)
+            zend_throw_error(NULL, "Pure virtual method {!! $ctx->phpClassName !!}::{!! $method->name !!}() failed during PHP override dispatch.");
+@if($overload->returnStrategy === 'void')
+            return;
+@else
+            return {!! $ctx->typeBridge->defaultNativeReturnExpr($overload->phpReturnType, $overload->cppReturnType) !!};
+@endif
+@else
+@if($overload->returnStrategy === 'void')
+            {!! $baseCall !!};
+            return;
+@else
+            return {!! $baseCall !!};
+@endif
+@endif
+        }
+
+@foreach($returnSetup['lines'] as $line)
+        {!! $line !!}
+@endforeach
+@if($overload->returnStrategy === 'void')
+        zval_ptr_dtor(&_qt_retval);
+@foreach($overload->params as $paramIndex => $param)
+        zval_ptr_dtor(&_qt_params[{!! $paramIndex !!}]);
+@endforeach
+        return;
+@else
+        auto _qt_native_result = {!! $returnSetup['expr'] !!};
+@foreach($returnSetup['cleanup_lines'] as $line)
+        {!! $line !!}
+@endforeach
+        zval_ptr_dtor(&_qt_retval);
+@foreach($overload->params as $paramIndex => $param)
+        zval_ptr_dtor(&_qt_params[{!! $paramIndex !!}]);
+@endforeach
+        return _qt_native_result;
+@endif
+    }
+
+@endif
+@endforeach
+@endforeach
+};
+
+@endif
+
+@if($ctx->hasPreventDestroy)
+/* ------------------------------------------------------------------ */
+/* Ownership helpers                                                   */
+/* ------------------------------------------------------------------ */
+
+template <typename T>
+static inline typename std::enable_if<std::is_base_of<QObject, T>::value, bool>::type
+qt_should_delete_native(T *ptr, bool prevent_destroy);
+
+template <typename T>
+static inline std::unordered_set<void *> &qt_native_registry()
+{
+    static std::unordered_set<void *> registry;
+    return registry;
+}
+
+template <typename T>
+static inline std::mutex &qt_native_registry_mutex()
+{
+    static std::mutex registryMutex;
+    return registryMutex;
+}
+
+template <typename T>
+static inline typename std::enable_if<std::is_base_of<QObject, T>::value, void>::type
+qt_track_native_instance(T *ptr)
+{
+    if (ptr == NULL) {
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(qt_native_registry_mutex<T>());
+        qt_native_registry<T>().insert(static_cast<void *>(ptr));
+    }
+
+    QObject::connect(ptr, &QObject::destroyed, [ptr]() {
+        std::lock_guard<std::mutex> lock(qt_native_registry_mutex<T>());
+        qt_native_registry<T>().erase(static_cast<void *>(ptr));
+    });
+}
+
+template <typename T>
+static inline typename std::enable_if<!std::is_base_of<QObject, T>::value, void>::type
+qt_track_native_instance(T *ptr)
+{
+    (void) ptr;
+}
+
+template <typename T>
+static inline typename std::enable_if<std::is_base_of<QObject, T>::value, bool>::type
+qt_should_delete_native(T *ptr, bool prevent_destroy)
+{
+    if (ptr == NULL || prevent_destroy) {
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(qt_native_registry_mutex<T>());
+        if (qt_native_registry<T>().find(static_cast<void *>(ptr)) == qt_native_registry<T>().end()) {
+            return false;
+        }
+    }
+
+    return static_cast<QObject *>(ptr)->parent() == NULL;
+}
+
+template <typename T>
+static inline typename std::enable_if<!std::is_base_of<QObject, T>::value, bool>::type
+qt_should_delete_native(T *ptr, bool prevent_destroy)
+{
+    return ptr != NULL && !prevent_destroy;
+}
+
+@endif
+/* ------------------------------------------------------------------ */
 /* create_object                                                       */
 /* ------------------------------------------------------------------ */
 
@@ -40,12 +1138,18 @@ static zend_object *{!! $ctx->filePrefix !!}_create_object(zend_class_entry *ce)
         sizeof({!! $ctx->objectStructName !!}), ce
     );
     intern->native_ptr = NULL;
+@if($ctx->tracksGeneratedNativeSubclass)
+    intern->native_is_generated_subclass = false;
+@if($ctx->requiresVirtualTrampoline)
+    intern->native_is_virtual_trampoline = false;
+@endif
+@endif
 @if($ctx->hasPreventDestroy)
     intern->prevent_destroy = false;
+    intern->extra_storage = NULL;
 @endif
 @if($ctx->needsArgvStorage)
-    new (&intern->argv_storage) std::vector<QByteArray>();
-    new (&intern->argv_pointers) std::vector<char *>();
+    intern->extra_storage = new {!! $ctx->argvStorageStructName !!}();
 @endif
 
     zend_object_std_init(&intern->std, ce);
@@ -64,21 +1168,69 @@ static void {!! $ctx->filePrefix !!}_free_object(zend_object *object)
 
 @if($ctx->hasPreventDestroy)
 @if($ctx->hasPublicDestructor)
-    if (intern->native_ptr && !intern->prevent_destroy) {
+    if (qt_should_delete_native(intern->native_ptr, intern->prevent_destroy)) {
+@if($ctx->tracksGeneratedNativeSubclass)
+        if (intern->native_is_generated_subclass) {
+@if($ctx->requiresVirtualTrampoline)
+            if (intern->native_is_virtual_trampoline) {
+                delete static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr);
+            } else {
+@if($ctx->plainInstantiationUsesGeneratedType())
+                delete static_cast<{!! $ctx->plainNativeInstantiationType !!} *>(intern->native_ptr);
+@else
+                delete intern->native_ptr;
+@endif
+            }
+        } else {
+            delete intern->native_ptr;
+        }
+@else
+            delete static_cast<{!! $ctx->plainNativeInstantiationType !!} *>(intern->native_ptr);
+        } else {
+            delete intern->native_ptr;
+        }
+@endif
+@else
         delete intern->native_ptr;
+@endif
     }
 @endif
 @else
 @if($ctx->hasPublicDestructor)
     if (intern->native_ptr) {
+@if($ctx->tracksGeneratedNativeSubclass)
+        if (intern->native_is_generated_subclass) {
+@if($ctx->requiresVirtualTrampoline)
+            if (intern->native_is_virtual_trampoline) {
+                delete static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr);
+            } else {
+@if($ctx->plainInstantiationUsesGeneratedType())
+                delete static_cast<{!! $ctx->plainNativeInstantiationType !!} *>(intern->native_ptr);
+@else
+                delete intern->native_ptr;
+@endif
+            }
+        } else {
+            delete intern->native_ptr;
+        }
+@else
+            delete static_cast<{!! $ctx->plainNativeInstantiationType !!} *>(intern->native_ptr);
+        } else {
+            delete intern->native_ptr;
+        }
+@endif
+@else
         delete intern->native_ptr;
+@endif
     }
 @endif
 @endif
     intern->native_ptr = NULL;
 @if($ctx->needsArgvStorage)
-    intern->argv_pointers.~vector();
-    intern->argv_storage.~vector();
+    if (intern->extra_storage != NULL) {
+        delete static_cast<{!! $ctx->argvStorageStructName !!} *>(intern->extra_storage);
+        intern->extra_storage = NULL;
+    }
 @endif
 
     zend_object_std_dtor(&intern->std);
@@ -136,7 +1288,14 @@ void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativeCppType !!
     object_init_ex(return_value, ce);
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(return_value);
     intern->native_ptr = native;
+    qt_track_native_instance(intern->native_ptr);
     intern->prevent_destroy = prevent_destroy;
+@if($ctx->tracksGeneratedNativeSubclass)
+    intern->native_is_generated_subclass = false;
+@if($ctx->requiresVirtualTrampoline)
+    intern->native_is_virtual_trampoline = false;
+@endif
+@endif
 }
 
 @endif
@@ -147,12 +1306,258 @@ void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativeCppType !!
 @foreach($ctx->methods as $method)
 @if($method->isConstructor)
 @include('generation.method.constructor', ['ctx' => $ctx, 'method' => $method])
+@elseif($method->isAbstractMethod)
 @elseif($method->isOverloaded)
 @include('generation.method.overloaded', ['ctx' => $ctx, 'method' => $method])
 @else
 @include('generation.method.simple', ['ctx' => $ctx, 'method' => $method])
 @endif
 @endforeach
+@if($ctx->isQObjectClass)
+
+/* property */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, property)
+{
+    zend_string *name;
+
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_STR(name)
+    ZEND_PARSE_PARAMETERS_END();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    QObject *_qt_obj = qt_native_qobject(intern);
+    if (_qt_obj == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+    if (!qt_qobject_read_property_mixed(_qt_obj, name, return_value)) {
+        RETURN_NULL();
+    }
+}
+
+/* setProperty */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, setProperty)
+{
+    zend_string *name;
+    zval *value;
+    bool _qt_result = false;
+
+    ZEND_PARSE_PARAMETERS_START(2, 2)
+        Z_PARAM_STR(name)
+        Z_PARAM_ZVAL(value)
+    ZEND_PARSE_PARAMETERS_END();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    QObject *_qt_obj = qt_native_qobject(intern);
+    if (_qt_obj == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+    if (!qt_qobject_write_property_mixed(_qt_obj, name, value, &_qt_result)) {
+        RETURN_THROWS();
+    }
+
+    RETURN_BOOL(_qt_result);
+}
+
+/* hasProperty */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, hasProperty)
+{
+    zend_string *name;
+
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_STR(name)
+    ZEND_PARSE_PARAMETERS_END();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    QObject *_qt_obj = qt_native_qobject(intern);
+    if (_qt_obj == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+    RETURN_BOOL(qt_qobject_has_property_name(_qt_obj, name));
+}
+
+/* propertyNames */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, propertyNames)
+{
+    ZEND_PARSE_PARAMETERS_NONE();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    QObject *_qt_obj = qt_native_qobject(intern);
+    if (_qt_obj == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+    qt_qobject_property_names(_qt_obj, return_value);
+}
+
+/* propertyInfo */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, propertyInfo)
+{
+    zend_string *name;
+
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_STR(name)
+    ZEND_PARSE_PARAMETERS_END();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    QObject *_qt_obj = qt_native_qobject(intern);
+    if (_qt_obj == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+    if (!qt_qobject_property_info(_qt_obj, name, return_value)) {
+        zend_value_error("Unknown property %s.", ZSTR_VAL(name));
+        RETURN_THROWS();
+    }
+}
+
+/* connectPropertyNotify */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connectPropertyNotify)
+{
+    zend_string *name;
+    zval *callback;
+
+    ZEND_PARSE_PARAMETERS_START(2, 2)
+        Z_PARAM_STR(name)
+        Z_PARAM_ZVAL(callback)
+    ZEND_PARSE_PARAMETERS_END();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    QObject *_qt_obj = qt_native_qobject(intern);
+    if (_qt_obj == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+    if (qt_qobject_meta_property_index(_qt_obj, name) < 0) {
+        if (qt_qobject_has_dynamic_property(_qt_obj, name)) {
+            zend_value_error("Dynamic property %s does not provide a NOTIFY signal.", ZSTR_VAL(name));
+        } else {
+            zend_value_error("Unknown property %s.", ZSTR_VAL(name));
+        }
+        RETURN_THROWS();
+    }
+
+    const int _qt_property_index = qt_qobject_meta_property_index(_qt_obj, name);
+    auto _qt_property = _qt_obj->metaObject()->property(_qt_property_index);
+    auto _qt_notify = _qt_property.notifySignal();
+    if (!_qt_notify.isValid()) {
+        zend_value_error("Property %s does not provide a NOTIFY signal.", ZSTR_VAL(name));
+        RETURN_THROWS();
+    }
+
+    auto _qt_callback = qt_signal_callback_create(_qt_obj, callback);
+    if (_qt_callback == nullptr) {
+        RETURN_THROWS();
+    }
+
+    struct _qt_property_notify_handler_t {
+        std::shared_ptr<qt_signal_callback_t> callback;
+
+        void operator()() const
+        {
+            auto _qt_callback_copy = callback;
+            qt_signal_dispatch([_qt_callback_copy]() mutable {
+                qt_signal_callback_invoke(_qt_callback_copy, 0, nullptr);
+            });
+        }
+    };
+
+    QMetaObject::Connection _qt_connection = QMetaObject::connect(
+        _qt_obj,
+        _qt_notify,
+        _qt_obj,
+        _qt_property_notify_handler_t{_qt_callback}
+    );
+
+    qt_qmetaobjectconnection_wrap(return_value, _qt_connection);
+}
+@endif
+@if($ctx->hasSignals())
+
+/* connect */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connect)
+{
+    zend_string *signalSignature;
+    zval *callback;
+
+    ZEND_PARSE_PARAMETERS_START(2, 2)
+        Z_PARAM_STR(signalSignature)
+        Z_PARAM_ZVAL(callback)
+    ZEND_PARSE_PARAMETERS_END();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (intern->native_ptr == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+@foreach($ctx->signalOverloads as $signal)
+    if (zend_string_equals_literal(signalSignature, "{!! $signal->signatureLiteral() !!}")) {
+@include('generation.method.signal_bind', ['ctx' => $ctx, 'signal' => $signal])
+    }
+@endforeach
+
+    zend_throw_error(NULL, "Unknown signal signature for {!! $ctx->phpClassName !!}::connect().");
+    RETURN_THROWS();
+}
+
+/* disconnect */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, disconnect)
+{
+    zval *connection;
+
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_OBJECT_OF_CLASS(connection, qt_ce_QMetaObjectConnection)
+    ZEND_PARSE_PARAMETERS_END();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (intern->native_ptr == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+    qt_qmetaobjectconnection_object *connection_intern = qt_qmetaobjectconnection_from_obj(Z_OBJ_P(connection));
+    if (connection_intern->native_ptr == NULL) {
+        RETURN_FALSE;
+    }
+
+    bool disconnected = QObject::disconnect(*connection_intern->native_ptr);
+    if (disconnected) {
+        *connection_intern->native_ptr = QMetaObject::Connection();
+    }
+
+    RETURN_BOOL(disconnected);
+}
+
+@foreach($ctx->signalOverloads as $signal)
+/* {!! $signal->phpMethodName !!} */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $signal->phpMethodName !!})
+{
+    zval *callback;
+
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_ZVAL(callback)
+    ZEND_PARSE_PARAMETERS_END();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (intern->native_ptr == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+@include('generation.method.signal_bind', ['ctx' => $ctx, 'signal' => $signal])
+}
+
+@endforeach
+@endif
 
 /* ------------------------------------------------------------------ */
 /* Function entry table                                                */
@@ -160,8 +1565,27 @@ void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativeCppType !!
 
 static const zend_function_entry {!! $ctx->filePrefix !!}_methods[] = {
 @foreach($ctx->methods as $method)
+@if($method->isAbstractMethod)
+    ZEND_RAW_FENTRY("{!! $method->name !!}", NULL, {!! $method->arginfoName !!}, {!! $method->accessFlags !!} | ZEND_ACC_ABSTRACT, NULL, NULL)
+@else
     ZEND_ME({!! $ctx->zendClassSymbol !!}, {!! $method->name !!}, {!! $method->arginfoName !!}, {!! $method->accessFlags !!})
+@endif
 @endforeach
+@if($ctx->isQObjectClass)
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, property, {!! $ctx->propertyArginfoName !!}, ZEND_ACC_PUBLIC)
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, setProperty, {!! $ctx->setPropertyArginfoName !!}, ZEND_ACC_PUBLIC)
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, hasProperty, {!! $ctx->hasPropertyArginfoName !!}, ZEND_ACC_PUBLIC)
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, propertyNames, {!! $ctx->propertyNamesArginfoName !!}, ZEND_ACC_PUBLIC)
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, propertyInfo, {!! $ctx->propertyInfoArginfoName !!}, ZEND_ACC_PUBLIC)
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, connectPropertyNotify, {!! $ctx->connectPropertyNotifyArginfoName !!}, ZEND_ACC_PUBLIC)
+@endif
+@if($ctx->hasSignals())
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, connect, {!! $ctx->signalConnectArginfoName !!}, ZEND_ACC_PUBLIC)
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, disconnect, {!! $ctx->signalDisconnectArginfoName !!}, ZEND_ACC_PUBLIC)
+@foreach($ctx->signalOverloads as $signal)
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, {!! $signal->phpMethodName !!}, {!! $signal->arginfoName !!}, ZEND_ACC_PUBLIC)
+@endforeach
+@endif
     ZEND_FE_END
 };
 
@@ -188,6 +1612,33 @@ PHP_MINIT_FUNCTION({!! $ctx->minitName !!})
 @if($ctx->isAbstract)
     {!! $ctx->ceVarName !!}->ce_flags |= ZEND_ACC_ABSTRACT;
 @endif
+@if($ctx->hasQObjectPropertySupport())
+    {
+        const QMetaObject &_qt_meta = {!! $ctx->nativeCppType !!}::staticMetaObject;
+        const int _qt_property_offset = _qt_meta.propertyOffset();
+        const int _qt_property_count = _qt_meta.propertyCount();
+        for (int _qt_i = _qt_property_offset; _qt_i < _qt_property_count; ++_qt_i) {
+            auto _qt_property = _qt_meta.property(_qt_i);
+            const char *_qt_property_name_cstr = _qt_property.name();
+            if (_qt_property_name_cstr == NULL || *_qt_property_name_cstr == '\0') {
+                continue;
+            }
+
+            zend_string *_qt_property_name = zend_string_init(_qt_property_name_cstr, strlen(_qt_property_name_cstr), 1);
+            zval _qt_property_default_value;
+            ZVAL_NULL(&_qt_property_default_value);
+            zend_declare_typed_property(
+                {!! $ctx->ceVarName !!},
+                _qt_property_name,
+                &_qt_property_default_value,
+                ZEND_ACC_PUBLIC | ZEND_ACC_VIRTUAL,
+                NULL,
+                (zend_type) ZEND_TYPE_INIT_MASK(MAY_BE_ANY)
+            );
+            zend_string_release_ex(_qt_property_name, 1);
+        }
+    }
+@endif
 
     memcpy(&{!! $ctx->handlersVarName !!}, &std_object_handlers, sizeof(zend_object_handlers));
     {!! $ctx->handlersVarName !!}.offset   = XtOffsetOf({!! $ctx->objectStructName !!}, std);
@@ -198,6 +1649,13 @@ PHP_MINIT_FUNCTION({!! $ctx->minitName !!})
     {!! $ctx->handlersVarName !!}.clone_obj = NULL;
 @endif
     {!! $ctx->handlersVarName !!}.get_gc   = {!! $ctx->filePrefix !!}_get_gc;
+@if($ctx->hasQObjectPropertySupport())
+    {!! $ctx->handlersVarName !!}.read_property = {!! $ctx->filePrefix !!}_read_property;
+    {!! $ctx->handlersVarName !!}.write_property = {!! $ctx->filePrefix !!}_write_property;
+    {!! $ctx->handlersVarName !!}.get_property_ptr_ptr = {!! $ctx->filePrefix !!}_get_property_ptr_ptr;
+    {!! $ctx->handlersVarName !!}.has_property = {!! $ctx->filePrefix !!}_has_property;
+    {!! $ctx->handlersVarName !!}.get_properties_for = {!! $ctx->filePrefix !!}_get_properties_for;
+@endif
     {!! $ctx->ceVarName !!}->default_object_handlers = &{!! $ctx->handlersVarName !!};
 
     return SUCCESS;

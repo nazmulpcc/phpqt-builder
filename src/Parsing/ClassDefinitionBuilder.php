@@ -29,13 +29,14 @@ class ClassDefinitionBuilder
     /**
      * Build a PhpClass from the array produced by QtClassInspector::inspect().
      *
-     * @param array{name: string, is_abstract: bool, is_copy_constructible?: bool, has_public_destructor?: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>} $classData
+     * @param array{name: string, is_abstract: bool, is_copy_constructible?: bool, has_public_destructor?: bool, is_qobject_derived?: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, signals?: list<array<string, mixed>>} $classData
      */
     public function build(array $classData): PhpClass
     {
         $className = $classData['name'];
         $properties = $this->buildProperties($classData['properties']);
         $methods = $this->buildMethods($classData['methods'], $className);
+        $signals = $this->buildMethods($classData['signals'] ?? [], $className);
 
         // Use the first base class as the PHP parent (single inheritance).
         $parent = $classData['bases'][0] ?? null;
@@ -46,8 +47,10 @@ class ClassDefinitionBuilder
             isAbstract: $classData['is_abstract'],
             isCopyConstructible: (bool) ($classData['is_copy_constructible'] ?? true),
             hasPublicDestructor: (bool) ($classData['has_public_destructor'] ?? true),
+            isQObjectDerived: (bool) ($classData['is_qobject_derived'] ?? false),
             properties: $properties,
             methods: $methods,
+            signals: $signals,
         );
     }
 
@@ -85,7 +88,7 @@ class ClassDefinitionBuilder
     // ------------------------------------------------------------------
 
     /**
-     * @param list<array{name: string, return_type: string, access: string, parameters: list<array{name: string, type: string, has_default: bool}>, is_static: bool, is_const: bool, is_virtual: bool, is_pure_virtual: bool, is_override: bool}> $methods
+     * @param list<array{name: string, return_type: string, access: string, parameters: list<array{name: string, type: string, has_default: bool}>, is_static: bool, is_const: bool, is_virtual: bool, is_pure_virtual: bool, is_override: bool, is_signal?: bool, is_slot?: bool}> $methods
      * @return list<PhpMethod>
      */
     private function buildMethods(array $methods, string $className): array
@@ -162,9 +165,13 @@ class ClassDefinitionBuilder
             name: $name,
             access: $access,
             isStatic: $isStatic,
+            isSignal: $this->allFlagged($variants, 'is_signal'),
+            isSlot: $this->allFlagged($variants, 'is_slot'),
+            isAbstractMethod: $name !== '__construct' && $this->allFlagged($variants, 'is_pure_virtual'),
             returnType: $returnType,
             parameters: $parameters,
             overloads: $overloads,
+            cppName: $name,
         );
     }
 
@@ -185,6 +192,7 @@ class ClassDefinitionBuilder
                     isReference: $metadata['is_reference'],
                     isConstReference: $metadata['is_const_reference'],
                     isNonConstReference: $metadata['is_non_const_reference'],
+                    isRvalueReference: $metadata['is_rvalue_reference'],
                     pointerDepth: $metadata['pointer_depth'],
                 );
             },
@@ -192,13 +200,33 @@ class ClassDefinitionBuilder
         );
 
         return new MethodOverload(
+            declaringClass: (string) ($variant['declaring_class'] ?? ''),
             returnType: $variant['return_type'],
             parameters: $params,
+            access: (string) ($variant['access'] ?? 'public'),
             isConst: $variant['is_const'],
             isStatic: $variant['is_static'],
             isVirtual: $variant['is_virtual'],
             isPureVirtual: $variant['is_pure_virtual'],
         );
+    }
+
+    /**
+     * @param list<array<string, mixed>> $variants
+     */
+    private function allFlagged(array $variants, string $key): bool
+    {
+        if ($variants === []) {
+            return false;
+        }
+
+        foreach ($variants as $variant) {
+            if (($variant[$key] ?? false) !== true) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     // ------------------------------------------------------------------
@@ -245,12 +273,21 @@ class ClassDefinitionBuilder
     private function mergeParameters(array $variants): array
     {
         $maxParams = 0;
-        $minParams = PHP_INT_MAX;
+        $minRequiredCount = PHP_INT_MAX;
 
         foreach ($variants as $v) {
-            $count = \count($this->normalizeWritableParameterDefaults($v['parameters']));
+            $params = $this->normalizeWritableParameterDefaults($v['parameters']);
+            $count = \count($params);
             $maxParams = max($maxParams, $count);
-            $minParams = min($minParams, $count);
+
+            $requiredCount = 0;
+            foreach ($params as $param) {
+                if (($param['has_default'] ?? false) !== true) {
+                    $requiredCount++;
+                }
+            }
+
+            $minRequiredCount = min($minRequiredCount, $requiredCount);
         }
 
         if ($maxParams === 0) {
@@ -286,7 +323,7 @@ class ClassDefinitionBuilder
                 }
             }
 
-            $hasDefault = $someVariantsShorter || $allHaveDefault;
+            $hasDefault = $i >= $minRequiredCount || $someVariantsShorter || $allHaveDefault;
 
             // Pick a unique name. Try names from the variants first, then fallback.
             $name = $this->pickUniqueName($names, $i, $usedNames);
@@ -328,18 +365,20 @@ class ClassDefinitionBuilder
     }
 
     /**
-     * @return array{is_reference: bool, is_const_reference: bool, is_non_const_reference: bool, pointer_depth: int}
+     * @return array{is_reference: bool, is_const_reference: bool, is_non_const_reference: bool, is_rvalue_reference: bool, pointer_depth: int}
      */
     private function analyzeCppParameterType(string $cppType): array
     {
         $normalized = trim($cppType);
-        $isReference = str_contains($normalized, '&');
-        $isConstReference = $isReference && preg_match('/^\s*const\b/', $normalized) === 1;
+        $isRvalueReference = str_contains($normalized, '&&');
+        $isReference = $isRvalueReference || str_contains($normalized, '&');
+        $isConstReference = !$isRvalueReference && $isReference && preg_match('/^\s*const\b/', $normalized) === 1;
 
         return [
             'is_reference' => $isReference,
             'is_const_reference' => $isConstReference,
-            'is_non_const_reference' => $isReference && !$isConstReference,
+            'is_non_const_reference' => !$isRvalueReference && $isReference && !$isConstReference,
+            'is_rvalue_reference' => $isRvalueReference,
             'pointer_depth' => substr_count($normalized, '*'),
         ];
     }

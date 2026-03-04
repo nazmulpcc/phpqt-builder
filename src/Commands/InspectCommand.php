@@ -131,6 +131,12 @@ class InspectCommand extends Command
                 if ($method['is_override']) {
                     $qualifiers[] = 'override';
                 }
+                if (($method['is_signal'] ?? false) === true) {
+                    $qualifiers[] = 'signal';
+                }
+                if (($method['is_slot'] ?? false) === true) {
+                    $qualifiers[] = 'slot';
+                }
 
                 $qualifierStr = \count($qualifiers) > 0 ? ' {' . implode(', ', $qualifiers) . '}' : '';
                 $params = array_map(

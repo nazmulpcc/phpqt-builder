@@ -12,14 +12,17 @@ class GenerateWorkerPool
 
     /**
      * @param list<GenerateTask> $tasks
+     * @param null|callable(int, int, GenerateResult): void $onProgress
      * @return list<GenerateResult>
      */
-    public function run(array $tasks, int $jobs): array
+    public function run(array $tasks, int $jobs, ?callable $onProgress = null): array
     {
         $jobs = max(1, $jobs);
         $queue = array_values($tasks);
         $active = [];
         $results = [];
+        $total = count($queue);
+        $completed = 0;
 
         while ($queue !== [] || $active !== []) {
             while (count($active) < $jobs && $queue !== []) {
@@ -44,7 +47,7 @@ class GenerateWorkerPool
                 $stderr = trim($process->getErrorOutput());
 
                 if (!$process->isSuccessful()) {
-                    $results[] = GenerateResult::error(
+                    $result = GenerateResult::error(
                         $task->className,
                         $task->headerPath,
                         $stderr !== '' ? $stderr : $stdout,
@@ -53,15 +56,21 @@ class GenerateWorkerPool
                 } else {
                     $payload = json_decode($stdout, true);
                     if (!is_array($payload)) {
-                        $results[] = GenerateResult::error(
+                        $result = GenerateResult::error(
                             $task->className,
                             $task->headerPath,
                             'Worker did not return valid JSON output.',
                             $stderr,
                         );
                     } else {
-                        $results[] = GenerateResult::fromPayload($payload, $stderr);
+                        $result = GenerateResult::fromPayload($payload, $stderr);
                     }
+                }
+
+                $results[] = $result;
+                $completed++;
+                if ($onProgress !== null) {
+                    $onProgress($completed, $total, $result);
                 }
 
                 unset($active[$index]);

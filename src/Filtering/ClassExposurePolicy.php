@@ -21,6 +21,7 @@ class ClassExposurePolicy
         'QGenericReturnArgument',
         'QFlag',
         'QFlags',
+        'QQmlTypeNotAvailable',
         'QArrayData',
         'QArrayDataPointer',
         'QArrayDataOps',
@@ -48,7 +49,6 @@ class ClassExposurePolicy
     private const array SUFFIX_SKIP = [
         'Iterator',
         'Iterable',
-        'View',
         'List',
         'Map',
         'Hash',

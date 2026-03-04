@@ -41,6 +41,33 @@ final class ExtensionScaffolderTest extends TestCase
         self::assertStringContainsString('classes/qt_qpoint.cpp', $config);
     }
 
+    public function testPrepareDoesNotWriteCoreFilesBeforeFinalize(): void
+    {
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-scaffolder-' . bin2hex(random_bytes(4)) . '/ext';
+        $installation = new QtInstallation(
+            rootPath: '/opt/qt',
+            osFamily: 'Darwin',
+            includeRoots: ['/opt/qt/include'],
+            libraryRoots: ['/opt/qt/lib'],
+            moduleHeaderRoots: ['QtCore' => '/opt/qt/include/QtCore'],
+            tools: [],
+        );
+        $context = new ExtensionBuildContext('qt', '0.1.0', $outputDir, $installation, ['QtCore'], ['QPoint']);
+
+        $scaffolder = new ExtensionScaffolder();
+        $scaffolder->prepare($context);
+
+        self::assertFileDoesNotExist($outputDir . '/config.m4');
+        self::assertFileDoesNotExist($outputDir . '/php_qt.h');
+        self::assertFileDoesNotExist($outputDir . '/qt.cpp');
+
+        $scaffolder->finalize($context);
+
+        self::assertFileExists($outputDir . '/config.m4');
+        self::assertFileExists($outputDir . '/php_qt.h');
+        self::assertFileExists($outputDir . '/qt.cpp');
+    }
+
     public function testConfigM4LinksAllRequestedDarwinFrameworkModules(): void
     {
         $outputDir = sys_get_temp_dir() . '/qtbuilder-scaffolder-' . bin2hex(random_bytes(4)) . '/ext';
@@ -183,6 +210,7 @@ final class ExtensionScaffolderTest extends TestCase
             hasPublicDestructor: true,
             properties: [],
             methods: [],
+            signals: [],
         );
 
         $generator->generate($phpClass, 'Qt\\Core', $outputDir);
@@ -207,14 +235,19 @@ final class ExtensionScaffolderTest extends TestCase
             methods: [
                 new PhpMethod(
                     name: 'label',
-                    returnType: 'string',
                     access: 'public',
                     isStatic: false,
+                    isSignal: false,
+                    isSlot: false,
+                    isAbstractMethod: false,
+                    returnType: 'string',
                     parameters: [],
                     overloads: [
                         new MethodOverload(
+                            declaringClass: 'QStringEmitter',
                             returnType: 'QString',
                             parameters: [],
+                            access: 'public',
                             isConst: true,
                             isStatic: false,
                             isVirtual: false,
@@ -223,6 +256,7 @@ final class ExtensionScaffolderTest extends TestCase
                     ],
                 ),
             ],
+            signals: [],
         );
 
         $generator->generate($phpClass, 'Qt\\Core', $outputDir);
@@ -247,14 +281,19 @@ final class ExtensionScaffolderTest extends TestCase
             methods: [
                 new PhpMethod(
                     name: 'focusObject',
-                    returnType: 'QObject',
                     access: 'public',
                     isStatic: true,
+                    isSignal: false,
+                    isSlot: false,
+                    isAbstractMethod: false,
+                    returnType: 'QObject',
                     parameters: [],
                     overloads: [
                         new MethodOverload(
+                            declaringClass: 'QGuiApplication',
                             returnType: 'QObject *',
                             parameters: [],
+                            access: 'public',
                             isConst: false,
                             isStatic: true,
                             isVirtual: false,
@@ -263,6 +302,7 @@ final class ExtensionScaffolderTest extends TestCase
                     ],
                 ),
             ],
+            signals: [],
         );
 
         $generator->generate($phpClass, 'Qt\\Gui', $outputDir, [
@@ -289,6 +329,7 @@ final class ExtensionScaffolderTest extends TestCase
             hasPublicDestructor: true,
             properties: [],
             methods: [],
+            signals: [],
         );
 
         $generator->generate($phpClass, 'Qt\\Core', $outputDir);
@@ -297,5 +338,30 @@ final class ExtensionScaffolderTest extends TestCase
 
         self::assertStringNotContainsString('static zend_object *qt_qpoint_clone_object', $source);
         self::assertStringContainsString('qt_qpoint_handlers.clone_obj = NULL;', $source);
+    }
+
+    public function testGeneratedValueTypeStubIsNotMarkedFinal(): void
+    {
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generator-' . bin2hex(random_bytes(4));
+        $generator = new ExtensionGenerator();
+        $phpClass = new PhpClass(
+            name: 'QPixmap',
+            parent: 'QPaintDevice',
+            isAbstract: false,
+            isCopyConstructible: true,
+            hasPublicDestructor: true,
+            properties: [],
+            methods: [],
+            signals: [],
+        );
+
+        $generator->generate($phpClass, 'Qt\\Gui', $outputDir);
+
+        $stub = (string) file_get_contents($outputDir . '/qt_qpixmap.stub.php');
+        $source = (string) file_get_contents($outputDir . '/qt_qpixmap.cpp');
+
+        self::assertStringContainsString('class QPixmap extends QPaintDevice', $stub);
+        self::assertStringNotContainsString('final class QPixmap', $stub);
+        self::assertStringNotContainsString('ce_flags |= ZEND_ACC_FINAL;', $source);
     }
 }

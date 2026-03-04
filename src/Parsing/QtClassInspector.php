@@ -23,10 +23,13 @@ use CParser\TranslationUnitFlags;
 class QtClassInspector
 {
     private TranslationUnit $tu;
+    private readonly bool $supportsAnnotations;
 
     public function __construct(
         private readonly ClangArgumentBuilder $argBuilder,
-    ) {}
+    ) {
+        $this->supportsAnnotations = method_exists(Cursor::class, 'getAnnotations');
+    }
 
     /**
      * Parse the given header file into a translation unit.
@@ -35,10 +38,16 @@ class QtClassInspector
      */
     public function parse(string $headerPath): void
     {
+        $flags = TranslationUnitFlags::SkipFunctionBodies | TranslationUnitFlags::KeepGoing;
+        if ($this->supportsAnnotations) {
+            // Only request implicit attributes when the extension can surface them.
+            $flags |= TranslationUnitFlags::VisitImplicitAttributes;
+        }
+
         $this->tu = TranslationUnit::fromFile(
             $headerPath,
             $this->argBuilder->build(),
-            TranslationUnitFlags::SkipFunctionBodies | TranslationUnitFlags::KeepGoing,
+            $flags,
         );
     }
 
@@ -153,6 +162,7 @@ class QtClassInspector
 
             $methods[] = [
                 'name' => $className,
+                'declaring_class' => $className,
                 'return_type' => 'void',
                 'access' => 'public',
                 'parameters' => $parameters,
@@ -161,6 +171,8 @@ class QtClassInspector
                 'is_virtual' => false,
                 'is_pure_virtual' => false,
                 'is_override' => false,
+                'is_signal' => false,
+                'is_slot' => false,
             ];
         }
 
@@ -258,7 +270,7 @@ class QtClassInspector
     }
 
     /**
-     * @return array{name: string, return_type: string, access: string, parameters: list<array<string, mixed>>, is_static: bool, is_const: bool, is_virtual: bool, is_pure_virtual: bool, is_override: bool}
+     * @return array{name: string, declaring_class: string, return_type: string, access: string, parameters: list<array<string, mixed>>, is_static: bool, is_const: bool, is_virtual: bool, is_pure_virtual: bool, is_override: bool, is_final: bool, is_signal: bool, is_slot: bool}
      */
     public function extractMethod(MethodCursor $method): array
     {
@@ -267,8 +279,11 @@ class QtClassInspector
             $parameters[] = $this->extractParameter($param);
         }
 
+        $annotations = $this->methodAnnotations($method);
+
         return [
             'name' => $method->getSpelling(),
+            'declaring_class' => $method->getParent()?->getSpelling() ?? '',
             'return_type' => $method->getReturnType()->toString(),
             'access' => self::accessLabel($method->getAccessSpecifier()),
             'parameters' => $parameters,
@@ -277,6 +292,9 @@ class QtClassInspector
             'is_virtual' => $method->isVirtual(),
             'is_pure_virtual' => $method->isPureVirtual(),
             'is_override' => $method->isOverride(),
+            'is_final' => $this->methodHasFinalAttr($method),
+            'is_signal' => \in_array('qt_signal', $annotations, true),
+            'is_slot' => \in_array('qt_slot', $annotations, true),
         ];
     }
 
@@ -299,7 +317,7 @@ class QtClassInspector
      * Constructors are CXXConstructor cursors that must be fetched via getChildren().
      * We deduplicate by display name since Qt headers may produce duplicate entries.
      *
-     * @return list<array{name: string, return_type: string, access: string, parameters: list<array<string, mixed>>, is_static: bool, is_const: bool, is_virtual: bool, is_pure_virtual: bool, is_override: bool}>
+     * @return list<array{name: string, declaring_class: string, return_type: string, access: string, parameters: list<array<string, mixed>>, is_static: bool, is_const: bool, is_virtual: bool, is_pure_virtual: bool, is_override: bool, is_final: bool, is_signal: bool, is_slot: bool}>
      */
     private function extractConstructors(ClassCursor $class): array
     {
@@ -325,6 +343,7 @@ class QtClassInspector
             // will rename it to __construct.
             $constructors[] = [
                 'name' => $ctor->getSpelling(),
+                'declaring_class' => $class->getSpelling(),
                 'return_type' => 'void',
                 'access' => 'public', // generic Cursor lacks getAccessSpecifier()
                 'parameters' => $parameters,
@@ -333,10 +352,40 @@ class QtClassInspector
                 'is_virtual' => false,
                 'is_pure_virtual' => false,
                 'is_override' => false,
+                'is_final' => false,
+                'is_signal' => false,
+                'is_slot' => false,
             ];
         }
 
         return $constructors;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function methodAnnotations(MethodCursor $method): array
+    {
+        if (!$this->supportsAnnotations) {
+            return [];
+        }
+
+        /** @var list<string> $annotations */
+        $annotations = $method->getAnnotations();
+
+        return $annotations;
+    }
+
+    private function methodHasFinalAttr(MethodCursor $method): bool
+    {
+        foreach ($method->getChildren() as $child) {
+            // 404 is libclang's CXCursor_CXXFinalAttr.
+            if ($child->getKind() === 404) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public static function accessLabel(?int $access): string

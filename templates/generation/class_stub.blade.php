@@ -28,9 +28,30 @@ namespace {!! $ctx->phpNamespace !!};
 @if($method->isConstructor)
     {!! $modifiers !!} function __construct(@foreach($method->params as $param){!! $ctx->stubParamType($param) !!} ${!! $param->name !!}@if($param->isOptional) = {!! $ctx->stubDefault($param) !!}@endif @if(!$loop->last), @endif @endforeach) {}
 
+@elseif($method->isAbstractMethod)
+    abstract {!! $modifiers !!} function {!! $method->name !!}(@foreach($method->params as $param){!! $ctx->stubParamType($param) !!} ${!! $param->name !!}@if($param->isOptional) = {!! $ctx->stubDefault($param) !!}@endif @if(!$loop->last), @endif @endforeach): {!! $method->stubReturnType !!};
+
 @else
     {!! $modifiers !!} function {!! $method->name !!}(@foreach($method->params as $param){!! $ctx->stubParamType($param) !!} ${!! $param->name !!}@if($param->isOptional) = {!! $ctx->stubDefault($param) !!}@endif @if(!$loop->last), @endif @endforeach): {!! $method->stubReturnType !!} {}
 
 @endif
 @endforeach
+@if($ctx->isQObjectClass)
+
+    public function property(string $name): mixed {}
+    public function setProperty(string $name, mixed $value): bool {}
+    public function hasProperty(string $name): bool {}
+    public function propertyNames(): array {}
+    public function propertyInfo(string $name): array {}
+    public function connectPropertyNotify(string $name, callable $callback): \Qt\Core\QMetaObjectConnection {}
+@endif
+@if($ctx->hasSignals())
+
+    public function connect(string $signalSignature, callable $callback): \Qt\Core\QMetaObjectConnection {}
+    public function disconnect(\Qt\Core\QMetaObjectConnection $connection): bool {}
+@foreach($ctx->signalOverloads as $signal)
+
+    public function {!! $signal->phpMethodName !!}(callable $callback): \Qt\Core\QMetaObjectConnection {}
+@endforeach
+@endif
 }

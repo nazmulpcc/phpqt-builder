@@ -49,6 +49,8 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
 @include('generation.return.value_object', ['ctx' => $ctx, 'method' => $method])
 @elseif($method->returnStrategy === 'qobject_pointer')
 @include('generation.return.qobject_pointer', ['ctx' => $ctx, 'method' => $method])
+@elseif($method->returnStrategy === 'array')
+@include('generation.return.array', ['ctx' => $ctx, 'method' => $method])
 @else
     /* TODO: unsupported return strategy '{!! $method->returnStrategy !!}' */
 @endif

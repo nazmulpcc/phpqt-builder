@@ -17,6 +17,7 @@ readonly class PhpClass
     /**
      * @param list<PhpProperty> $properties
      * @param list<PhpMethod> $methods
+     * @param list<PhpMethod> $signals
      */
     public function __construct(
         public string $name,
@@ -26,6 +27,8 @@ readonly class PhpClass
         public bool $hasPublicDestructor,
         public array $properties,
         public array $methods,
+        public array $signals,
+        public bool $isQObjectDerived = false,
     ) {}
 
     /**
@@ -59,7 +62,7 @@ readonly class PhpClass
     }
 
     /**
-     * @return array{name: string, parent: ?string, is_abstract: bool, is_copy_constructible: bool, has_public_destructor: bool, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, summary: array{total_methods: int, public_methods: int, protected_methods: int, overloaded_methods: int, total_properties: int}}
+     * @return array{name: string, parent: ?string, is_abstract: bool, is_copy_constructible: bool, has_public_destructor: bool, is_qobject_derived: bool, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, signals: list<array<string, mixed>>, summary: array{total_methods: int, public_methods: int, protected_methods: int, overloaded_methods: int, total_signals: int, total_properties: int}}
      */
     public function toArray(): array
     {
@@ -69,6 +72,7 @@ readonly class PhpClass
             'is_abstract' => $this->isAbstract,
             'is_copy_constructible' => $this->isCopyConstructible,
             'has_public_destructor' => $this->hasPublicDestructor,
+            'is_qobject_derived' => $this->isQObjectDerived,
             'properties' => array_map(
                 static fn(PhpProperty $p): array => $p->toArray(),
                 $this->properties,
@@ -77,11 +81,16 @@ readonly class PhpClass
                 static fn(PhpMethod $m): array => $m->toArray(),
                 $this->methods,
             ),
+            'signals' => array_map(
+                static fn(PhpMethod $m): array => $m->toArray(),
+                $this->signals,
+            ),
             'summary' => [
                 'total_methods' => \count($this->methods),
                 'public_methods' => \count($this->publicMethods()),
                 'protected_methods' => \count($this->protectedMethods()),
                 'overloaded_methods' => \count($this->overloadedMethods()),
+                'total_signals' => \count($this->signals),
                 'total_properties' => \count($this->properties),
             ],
         ];

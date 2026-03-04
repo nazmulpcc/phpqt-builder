@@ -19,6 +19,7 @@ final class BuildCommandTest extends TestCase
         $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-' . bin2hex(random_bytes(4));
         $outputDir = $buildRoot . '/ext';
         $metadataDir = $buildRoot . '/generated';
+        $classCacheDir = $buildRoot . '/classes';
         $bootstrapper = new FakeExtensionBootstrapper();
 
         $command = new BuildCommand(FakeSystemInformation::passing(), $bootstrapper);
@@ -46,11 +47,14 @@ final class BuildCommandTest extends TestCase
         self::assertFileExists($metadataDir . '/allowed_classes.json');
         self::assertFileExists($metadataDir . '/discovery_cache.json');
         self::assertFileExists($metadataDir . '/accepted_candidates.json');
+        self::assertFileExists($classCacheDir . '/QPoint.json');
         self::assertFileExists($metadataDir . '/phpize.stdout.log');
         self::assertFileExists($metadataDir . '/gen_stub.stdout.log');
         self::assertFileExists($metadataDir . '/configure.stdout.log');
         self::assertFileExists($metadataDir . '/make.stdout.log');
         self::assertStringContainsString('Running 2 parallel discovery worker(s)...', $tester->getDisplay());
+        self::assertStringContainsString('Class structure cache:', $tester->getDisplay());
+        self::assertStringContainsString('Discovery pass 1', $tester->getDisplay());
         self::assertCount(1, $bootstrapper->contexts);
 
         $summary = json_decode((string) file_get_contents($metadataDir . '/build_summary.json'), true, 512, JSON_THROW_ON_ERROR);
@@ -120,6 +124,44 @@ final class BuildCommandTest extends TestCase
 
         $classmap = json_decode((string) file_get_contents($metadataDir . '/classmap.json'), true, 512, JSON_THROW_ON_ERROR);
         self::assertSame(['QPoint'], array_column($classmap, 'class'));
+    }
+
+    public function testBuildGeneratesAbstractShellsAndConcreteChildren(): void
+    {
+        $fixtureRoot = dirname(__DIR__) . '/Fixtures/abstract-qt';
+        $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-abstract-' . bin2hex(random_bytes(4));
+        $outputDir = $buildRoot . '/ext';
+        $metadataDir = $buildRoot . '/generated';
+        $bootstrapper = new FakeExtensionBootstrapper();
+
+        $command = new BuildCommand(FakeSystemInformation::passing(), $bootstrapper);
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            '--qt-path' => $fixtureRoot,
+            '--modules' => 'QtCore',
+            '--output' => $outputDir,
+            '--jobs' => '2',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+        self::assertFileExists($outputDir . '/classes/qt_qabstractshell.cpp');
+        self::assertFileExists($outputDir . '/classes/qt_qabstractparentthing.cpp');
+        self::assertFileExists($outputDir . '/classes/qt_qconcretechildthing.cpp');
+
+        $classmap = json_decode((string) file_get_contents($metadataDir . '/classmap.json'), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(
+            ['QAbstractParentThing', 'QAbstractShell', 'QConcreteChildThing'],
+            array_column($classmap, 'class'),
+        );
+
+        $allowedClasses = json_decode((string) file_get_contents($metadataDir . '/allowed_classes.json'), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(['QAbstractParentThing', 'QAbstractShell', 'QConcreteChildThing'], $allowedClasses);
+
+        $skippedClasses = json_decode((string) file_get_contents($metadataDir . '/skipped_classes.json'), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame([], $skippedClasses);
+
+        $abstractStub = (string) file_get_contents($outputDir . '/classes/qt_qabstractparentthing.stub.php');
+        self::assertStringContainsString('abstract class QAbstractParentThing', $abstractStub);
     }
 
     public function testBuildFailsWhenBootstrapStepFails(): void
@@ -194,7 +236,7 @@ final class BuildCommandTest extends TestCase
 
         self::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
         self::assertStringContainsString('Using cached build metadata:', $tester->getDisplay());
-        self::assertStringContainsString('Regenerating against actual generated dependency set', $tester->getDisplay());
+        self::assertStringContainsString('Re-evaluating generated dependency set', $tester->getDisplay());
 
         $allowedClasses = json_decode((string) file_get_contents($metadataDir . '/allowed_classes.json'), true, 512, JSON_THROW_ON_ERROR);
         self::assertSame(['QCStringHolder'], $allowedClasses);

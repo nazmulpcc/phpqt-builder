@@ -18,11 +18,12 @@ readonly class OverloadParameter
         public bool $isReference = false,
         public bool $isConstReference = false,
         public bool $isNonConstReference = false,
+        public bool $isRvalueReference = false,
         public int $pointerDepth = 0,
     ) {}
 
     /**
-     * @return array{name: string, cpp_type: string, has_default: bool, is_reference: bool, is_const_reference: bool, is_non_const_reference: bool, pointer_depth: int}
+     * @return array{name: string, cpp_type: string, has_default: bool, is_reference: bool, is_const_reference: bool, is_non_const_reference: bool, is_rvalue_reference: bool, pointer_depth: int}
      */
     public function toArray(): array
     {
@@ -33,6 +34,7 @@ readonly class OverloadParameter
             'is_reference' => $this->isReference,
             'is_const_reference' => $this->isConstReference,
             'is_non_const_reference' => $this->isNonConstReference,
+            'is_rvalue_reference' => $this->isRvalueReference,
             'pointer_depth' => $this->pointerDepth,
         ];
     }

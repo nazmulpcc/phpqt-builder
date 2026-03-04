@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace QtBuilder\Filtering;
 
+use QtBuilder\CodeGen\ContainerBridge;
 use QtBuilder\CodeGen\TypeBridge;
 use QtBuilder\Parsing\CppToPhpTypeMapper;
 
@@ -11,6 +12,8 @@ class MethodExposurePolicy
 {
     /** @var list<string> */
     private const array NAME_SKIP = [
+        'connect',
+        'disconnect',
         'metaObject',
         'qt_metacall',
         'qt_metacast',
@@ -24,13 +27,16 @@ class MethodExposurePolicy
 
     private CppToPhpTypeMapper $typeMapper;
     private TypeBridge $typeBridge;
+    private ContainerBridge $containerBridge;
 
     public function __construct(
         ?CppToPhpTypeMapper $typeMapper = null,
         ?TypeBridge $typeBridge = null,
+        ?ContainerBridge $containerBridge = null,
     ) {
         $this->typeMapper = $typeMapper ?? new CppToPhpTypeMapper();
         $this->typeBridge = $typeBridge ?? new TypeBridge();
+        $this->containerBridge = $containerBridge ?? new ContainerBridge(typeMapper: $this->typeMapper);
     }
 
     /**
@@ -61,9 +67,10 @@ class MethodExposurePolicy
         $hasPublicConstructor = (bool) ($classData['has_public_constructor'] ?? true);
         $hasPublicDefaultConstructor = (bool) ($classData['has_public_default_constructor'] ?? true);
         $hasPublicDestructor = (bool) ($classData['has_public_destructor'] ?? true);
+        $isAbstractClass = (bool) ($classData['is_abstract'] ?? false);
 
         foreach ($grouped as $methodName => $variants) {
-            $result = $this->selectVariant(
+            $result = $this->selectVariants(
                 $classData['name'],
                 $methodName,
                 $variants,
@@ -74,9 +81,10 @@ class MethodExposurePolicy
                 $hasPublicConstructor,
                 $hasPublicDefaultConstructor,
                 $hasPublicDestructor,
+                $isAbstractClass,
             );
-            if ($result['selected'] !== null) {
-                $selectedMethods[] = $result['selected'];
+            foreach ($result['selected'] as $selectedVariant) {
+                $selectedMethods[] = $selectedVariant;
             }
             foreach ($result['skipped'] as $skipped) {
                 $skippedMethods[] = $skipped;
@@ -94,9 +102,9 @@ class MethodExposurePolicy
      * @param list<string> $allowedClasses
      * @param array<string, string> $flagAliases
      * @param list<string> $enumNames
-     * @return array{selected: ?array<string, mixed>, skipped: list<array<string, string>>}
+     * @return array{selected: list<array<string, mixed>>, skipped: list<array<string, string>>}
      */
-    private function selectVariant(
+    private function selectVariants(
         string $className,
         string $methodName,
         array $variants,
@@ -107,11 +115,12 @@ class MethodExposurePolicy
         bool $hasPublicConstructor,
         bool $hasPublicDefaultConstructor,
         bool $hasPublicDestructor,
+        bool $isAbstractClass,
     ): array
     {
         if (str_starts_with($methodName, '~') || str_starts_with($methodName, 'operator') || in_array($methodName, self::NAME_SKIP, true)) {
             return [
-                'selected' => null,
+                'selected' => [],
                 'skipped' => [[
                     'name' => $methodName,
                     'reason_code' => 'method_name_filtered',
@@ -121,7 +130,8 @@ class MethodExposurePolicy
         }
 
         $seenSignatures = [];
-        $ranked = [];
+        /** @var array<string, array{variant: array<string, mixed>, score: list<int>}> $selectedByDispatch */
+        $selectedByDispatch = [];
         $skipped = [];
 
         foreach ($variants as $variant) {
@@ -141,6 +151,7 @@ class MethodExposurePolicy
                 $hasPublicConstructor,
                 $hasPublicDefaultConstructor,
                 $hasPublicDestructor,
+                $isAbstractClass,
             );
             if ($unsupportedReason !== null) {
                 $skipped[] = [
@@ -151,30 +162,50 @@ class MethodExposurePolicy
                 continue;
             }
 
-            $ranked[] = [
-                'variant' => $variant,
-                'score' => $this->score($variant),
-            ];
-        }
+            $normalizedVariant = $this->normalizeSpecialTypes($className, $variant, $flagAliases, $enumNames, $isAbstractClass);
+            $dispatchSignature = $this->dispatchSignature($normalizedVariant);
+            $score = $this->score($normalizedVariant);
+            $existing = $selectedByDispatch[$dispatchSignature] ?? null;
 
-        if ($ranked === []) {
-            return ['selected' => null, 'skipped' => $skipped];
-        }
+            if ($existing === null) {
+                $selectedByDispatch[$dispatchSignature] = [
+                    'variant' => $normalizedVariant,
+                    'score' => $score,
+                ];
+                continue;
+            }
 
-        usort($ranked, fn(array $a, array $b): int => $this->compareScores($a['score'], $b['score']));
+            if ($this->compareScores($score, $existing['score']) < 0) {
+                $skipped[] = [
+                    'name' => $methodName,
+                    'reason_code' => 'indistinguishable_overload',
+                    'reason_message' => 'Overload collapses to the same PHP runtime signature as a preferred variant.',
+                ];
+                $selectedByDispatch[$dispatchSignature] = [
+                    'variant' => $normalizedVariant,
+                    'score' => $score,
+                ];
+                continue;
+            }
 
-        if (count($ranked) > 1 && $this->compareScores($ranked[0]['score'], $ranked[1]['score']) === 0) {
             $skipped[] = [
                 'name' => $methodName,
-                'reason_code' => 'ambiguous_overload',
-                'reason_message' => sprintf('Method %s has multiple equally-ranked overloads.', $methodName),
+                'reason_code' => 'indistinguishable_overload',
+                'reason_message' => 'Overload collapses to the same PHP runtime signature as a preferred variant.',
             ];
+        }
 
-            return ['selected' => null, 'skipped' => $skipped];
+        $selected = array_values(array_map(
+            static fn(array $entry): array => $entry['variant'],
+            $selectedByDispatch,
+        ));
+
+        if ($selected === []) {
+            return ['selected' => [], 'skipped' => $skipped];
         }
 
         return [
-            'selected' => $this->normalizeSpecialTypes($className, $ranked[0]['variant'], $flagAliases, $enumNames),
+            'selected' => $selected,
             'skipped' => $skipped,
         ];
     }
@@ -196,14 +227,30 @@ class MethodExposurePolicy
         bool $hasPublicConstructor = true,
         bool $hasPublicDefaultConstructor = true,
         bool $hasPublicDestructor = true,
+        bool $isAbstractClass = false,
     ): ?array
     {
         $access = (string) ($variant['access'] ?? 'unknown');
-        if ($access !== 'public') {
+        $isConstructor = $this->isConstructor($className, $variant);
+        if ($isConstructor) {
+            if ($isAbstractClass) {
+                if ($access !== 'public' && $access !== 'protected') {
+                    return ['code' => 'non_public_constructor', 'message' => sprintf('Constructors with %s access are not exposed.', $access)];
+                }
+            } elseif ($access !== 'public') {
+                return ['code' => 'non_public_constructor', 'message' => sprintf('Constructors with %s access are not exposed.', $access)];
+            }
+        }
+
+        if (!$isConstructor && ($access === 'private' || $access === 'unknown')) {
             return ['code' => 'non_public_method', 'message' => sprintf('Methods with %s access are not exposed.', $access)];
         }
 
-        if ($this->isConstructor($className, $variant)) {
+        if ($isConstructor) {
+            if (($variant['is_deleted'] ?? false) === true) {
+                return ['code' => 'deleted_constructor', 'message' => 'Deleted constructors are not exposed.'];
+            }
+
             if ($this->isCopyConstructor($className, $variant)) {
                 return ['code' => 'copy_constructor_filtered', 'message' => 'Copy constructors are not exposed as PHP constructors.'];
             }
@@ -212,21 +259,17 @@ class MethodExposurePolicy
                 return ['code' => 'non_public_destructor', 'message' => 'Classes with non-public destructors cannot be directly instantiated.'];
             }
 
-            if (!$hasPublicConstructor) {
+            if (!$isAbstractClass && !$hasPublicConstructor) {
                 return ['code' => 'non_public_constructor', 'message' => 'Class does not provide a public constructor for direct instantiation.'];
             }
 
-            if ($this->isDefaultConstructor($variant) && !$hasPublicDefaultConstructor) {
+            if (!$isAbstractClass && $this->isDefaultConstructor($variant) && !$hasPublicDefaultConstructor) {
                 return ['code' => 'non_public_constructor', 'message' => 'Default constructor is not publicly accessible.'];
             }
         }
 
         if (!$isCopyConstructible && $this->isCopyConstructor($className, $variant)) {
             return ['code' => 'noncopyable_copy_constructor', 'message' => 'Copy constructor is disabled by the native class definition.'];
-        }
-
-        if (($variant['is_pure_virtual'] ?? false) === true) {
-            return ['code' => 'pure_virtual_method', 'message' => 'Pure virtual methods are not exposed.'];
         }
 
         $returnType = (string) $variant['return_type'];
@@ -326,12 +369,20 @@ class MethodExposurePolicy
     private function isUnsupportedOutParameter(string $cppType, string $className, array $flagAliases = [], array $enumNames = []): bool
     {
         $trimmed = trim($cppType);
+        if ($this->containerBridge->isSupported($trimmed) && str_contains($trimmed, '&') && !str_starts_with($trimmed, 'const ')) {
+            return true;
+        }
+
         if (!str_contains($trimmed, '*') || str_starts_with($trimmed, 'const ')) {
             return false;
         }
 
         if ($this->isSupportedArrayType($trimmed)) {
             return false;
+        }
+
+        if ($this->hasMultiplePointerIndirection($trimmed)) {
+            return true;
         }
 
         if ($this->isEnumOrFlagType($trimmed, $className, $flagAliases, $enumNames)) {
@@ -374,6 +425,10 @@ class MethodExposurePolicy
             return false;
         }
 
+        if ($this->hasMultiplePointerIndirection($trimmed) && !$this->isSupportedArrayType($trimmed)) {
+            return false;
+        }
+
         if ($this->isUnsupportedScalarPointerType($trimmed)) {
             return false;
         }
@@ -396,7 +451,21 @@ class MethodExposurePolicy
         }
 
         if ($phpType === 'array') {
-            return $this->isSupportedArrayType($trimmed);
+            if ($this->isSupportedArrayType($trimmed)) {
+                return true;
+            }
+
+            if (!$this->containerBridge->isSupported($trimmed)) {
+                return false;
+            }
+
+            foreach ($this->containerBridge->classRefs($trimmed) as $classRef) {
+                if ($classRef !== $className && !in_array($classRef, $allowedClasses, true)) {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         if ($phpType === 'mixed') {
@@ -414,9 +483,19 @@ class MethodExposurePolicy
         return false;
     }
 
+    private function hasMultiplePointerIndirection(string $cppType): bool
+    {
+        $normalized = preg_replace('/\bconst\b/', '', $cppType) ?? $cppType;
+        $normalized = trim(preg_replace('/\s+/', ' ', $normalized) ?? $normalized);
+
+        return preg_match('/\*\s*\*/', $normalized) === 1;
+    }
+
     private function isSupportedTemplateType(string $cppType): bool
     {
-        return str_starts_with(trim($cppType), 'QFlags<');
+        $trimmed = trim($cppType);
+
+        return str_starts_with($trimmed, 'QFlags<') || $this->containerBridge->isSupported($trimmed);
     }
 
     private function isEnumOrFlagType(string $cppType, string $className, array $flagAliases = [], array $enumNames = []): bool
@@ -467,7 +546,7 @@ class MethodExposurePolicy
      * @param list<string> $enumNames
      * @return array<string, mixed>
      */
-    private function normalizeSpecialTypes(string $className, array $variant, array $flagAliases, array $enumNames = []): array
+    private function normalizeSpecialTypes(string $className, array $variant, array $flagAliases, array $enumNames = [], bool $isAbstractClass = false): array
     {
         $variant['return_type'] = $this->normalizeEnumType($className, (string) $variant['return_type'], $flagAliases, $enumNames);
         $variant['parameters'] = array_map(
@@ -478,6 +557,10 @@ class MethodExposurePolicy
             },
             $variant['parameters'],
         );
+
+        if ($isAbstractClass && $this->isConstructor($className, $variant)) {
+            $variant['access'] = 'protected';
+        }
 
         return $variant;
     }
@@ -644,6 +727,24 @@ class MethodExposurePolicy
         foreach ($variant['parameters'] as $parameter) {
             $parts[] = $parameter['type'];
             $parts[] = $parameter['has_default'] ? '1' : '0';
+        }
+
+        return implode('|', $parts);
+    }
+
+    /**
+     * @param array<string, mixed> $variant
+     */
+    private function dispatchSignature(array $variant): string
+    {
+        $parts = [
+            $variant['name'],
+            (($variant['is_static'] ?? false) === true) ? 'static' : 'instance',
+        ];
+
+        foreach ($variant['parameters'] as $parameter) {
+            $parts[] = $this->typeMapper->map((string) ($parameter['type'] ?? ''));
+            $parts[] = (($parameter['has_default'] ?? false) === true) ? '1' : '0';
         }
 
         return implode('|', $parts);

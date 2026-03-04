@@ -30,8 +30,6 @@ class ExtensionScaffolder
         @mkdir($context->metadataDir(), 0755, true);
 
         $this->clearTransientClassBuildArtifacts($context->outputDir . '/classes');
-
-        $this->writeCoreFiles($context);
     }
 
     /**

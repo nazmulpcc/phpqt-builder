@@ -77,6 +77,42 @@ class ClassContext
     /** Whether the generated object wrapper needs persistent argv backing storage */
     public readonly bool $needsArgvStorage;
 
+    /** Whether this class inherits QObject and participates in runtime property support */
+    public readonly bool $isQObjectDerived;
+
+    /** Whether this class is QObject itself */
+    public readonly bool $isQObjectClass;
+
+    /** Whether this class needs an access shim for protected native calls */
+    public readonly bool $requiresAccessShim;
+
+    /** Whether this class needs a native trampoline subclass for virtual dispatch */
+    public readonly bool $requiresVirtualTrampoline;
+
+    /** Whether constructors allocate a generated native subclass */
+    public readonly bool $usesGeneratedNativeSubclass;
+
+    /** Whether wrapper/runtime paths track generated-subclass instances */
+    public readonly bool $tracksGeneratedNativeSubclass;
+
+    /** Generated access shim type name */
+    public readonly string $accessShimTypeName;
+
+    /** Generated trampoline type name */
+    public readonly string $trampolineTypeName;
+
+    /** Native C++ type used for plain internal-class constructor allocation */
+    public readonly string $plainNativeInstantiationType;
+
+    /** Native C++ type used for userland subclass constructor allocation */
+    public readonly string $nativeInstantiationType;
+
+    /** Native C++ type used for protected-helper receiver casts */
+    public readonly string $protectedCallReceiverType;
+
+    /** Helper struct name for argv-backed application wrappers */
+    public readonly ?string $argvStorageStructName;
+
     /** Qt include directive (e.g. "<QWidget>") */
     public readonly string $qtInclude;
 
@@ -94,6 +130,12 @@ class ClassContext
 
     /** @var list<MethodContext> */
     public readonly array $methods;
+
+    /** @var list<MethodContext> */
+    public readonly array $signals;
+
+    /** @var list<SignalOverloadContext> */
+    public readonly array $signalOverloads;
 
     /** @var list<PropertyContext> */
     public readonly array $properties;
@@ -116,6 +158,23 @@ class ClassContext
     /** Fully-qualified parent class name for stub generation or null */
     public readonly ?string $stubParentClassName;
 
+    /** Arginfo symbol for generated signal connect() */
+    public readonly string $signalConnectArginfoName;
+    /** Arginfo symbol for generated signal disconnect() */
+    public readonly string $signalDisconnectArginfoName;
+    /** Arginfo symbol for generated QObject::property() */
+    public readonly string $propertyArginfoName;
+    /** Arginfo symbol for generated QObject::setProperty() */
+    public readonly string $setPropertyArginfoName;
+    /** Arginfo symbol for generated QObject::hasProperty() */
+    public readonly string $hasPropertyArginfoName;
+    /** Arginfo symbol for generated QObject::propertyNames() */
+    public readonly string $propertyNamesArginfoName;
+    /** Arginfo symbol for generated QObject::propertyInfo() */
+    public readonly string $propertyInfoArginfoName;
+    /** Arginfo symbol for generated QObject::connectPropertyNotify() */
+    public readonly string $connectPropertyNotifyArginfoName;
+
     public function __construct(
         PhpClass $phpClass,
         string $namespace,
@@ -127,6 +186,8 @@ class ClassContext
         $this->classNamespaces = $classNamespaces;
         $this->phpClassName = $phpClass->name;
         $this->nativeCppType = $phpClass->name;
+        $this->isQObjectDerived = $phpClass->isQObjectDerived;
+        $this->isQObjectClass = $phpClass->name === 'QObject';
 
         // Naming
         $this->zendClassSymbol = $typeBridge->zendClassSymbol($namespace, $phpClass->name);
@@ -144,9 +205,8 @@ class ClassContext
         $this->isValueType = $typeBridge->isValueType($phpClass->name);
         $this->isCopyConstructible = $phpClass->isCopyConstructible;
         $this->hasPublicDestructor = $phpClass->hasPublicDestructor;
-        $this->isCloneable = $this->isValueType && $this->isCopyConstructible;
         $this->isAbstract = $phpClass->isAbstract;
-        $this->isFinal = !$phpClass->isAbstract && $this->isValueType;
+        $this->isFinal = false;
         $this->hasPreventDestroy = !$this->isValueType;
 
         // Parent
@@ -174,7 +234,73 @@ class ClassContext
             $methods[] = new MethodContext($method, $this, $typeBridge);
         }
         $this->methods = $methods;
+        $this->requiresAccessShim = $this->computeRequiresAccessShim($methods);
+        $this->requiresVirtualTrampoline = $this->computeRequiresVirtualTrampoline($methods);
+        $this->usesGeneratedNativeSubclass = $this->requiresVirtualTrampoline || $this->computeUsesGeneratedNativeSubclass($methods);
+        $this->tracksGeneratedNativeSubclass = $this->usesGeneratedNativeSubclass;
+        $this->accessShimTypeName = 'qt_access_' . $phpClass->name;
+        $this->trampolineTypeName = 'qt_php_' . $phpClass->name;
+        $this->plainNativeInstantiationType = $this->computeUsesGeneratedNativeSubclass($methods)
+            ? $this->accessShimTypeName
+            : $this->nativeCppType;
+        $this->nativeInstantiationType = $this->requiresVirtualTrampoline
+            ? $this->trampolineTypeName
+            : $this->plainNativeInstantiationType;
+        $this->protectedCallReceiverType = $this->requiresAccessShim
+            ? $this->accessShimTypeName
+            : $this->nativeCppType;
+        $this->isCloneable = !$this->usesGeneratedNativeSubclass && $this->isValueType && $this->isCopyConstructible;
+
+        $signals = [];
+        foreach ($phpClass->signals as $signal) {
+            $signals[] = new MethodContext($signal, $this, $typeBridge);
+        }
+        $this->signals = $signals;
+        $this->signalOverloads = $this->buildSignalOverloads($signals, $typeBridge);
+        $this->signalConnectArginfoName = $typeBridge->arginfoName(
+            $this->phpNamespace,
+            $this->phpClassName,
+            'connect',
+        );
+        $this->signalDisconnectArginfoName = $typeBridge->arginfoName(
+            $this->phpNamespace,
+            $this->phpClassName,
+            'disconnect',
+        );
+        $this->propertyArginfoName = $typeBridge->arginfoName(
+            $this->phpNamespace,
+            $this->phpClassName,
+            'property',
+        );
+        $this->setPropertyArginfoName = $typeBridge->arginfoName(
+            $this->phpNamespace,
+            $this->phpClassName,
+            'setProperty',
+        );
+        $this->hasPropertyArginfoName = $typeBridge->arginfoName(
+            $this->phpNamespace,
+            $this->phpClassName,
+            'hasProperty',
+        );
+        $this->propertyNamesArginfoName = $typeBridge->arginfoName(
+            $this->phpNamespace,
+            $this->phpClassName,
+            'propertyNames',
+        );
+        $this->propertyInfoArginfoName = $typeBridge->arginfoName(
+            $this->phpNamespace,
+            $this->phpClassName,
+            'propertyInfo',
+        );
+        $this->connectPropertyNotifyArginfoName = $typeBridge->arginfoName(
+            $this->phpNamespace,
+            $this->phpClassName,
+            'connectPropertyNotify',
+        );
         $this->needsArgvStorage = $this->computeNeedsArgvStorage($methods);
+        $this->argvStorageStructName = $this->needsArgvStorage
+            ? 'qt_argv_storage'
+            : null;
 
         // Build property contexts
         $properties = [];
@@ -251,6 +377,32 @@ class ClassContext
             foreach ($method->parameters as $param) {
                 $this->collectClassRefs($param->phpType, $typeBridge, $classes);
             }
+
+            foreach ($method->overloads as $overload) {
+                foreach ($typeBridge->containerClassRefs($overload->returnType) as $classRef) {
+                    $classes[$classRef] = true;
+                }
+
+                foreach ($overload->parameters as $param) {
+                    foreach ($typeBridge->containerClassRefs($param->cppType) as $classRef) {
+                        $classes[$classRef] = true;
+                    }
+                }
+            }
+        }
+
+        foreach ($phpClass->signals as $signal) {
+            foreach ($signal->parameters as $param) {
+                $this->collectClassRefs($param->phpType, $typeBridge, $classes);
+            }
+
+            foreach ($signal->overloads as $overload) {
+                foreach ($overload->parameters as $param) {
+                    foreach ($typeBridge->containerClassRefs($param->cppType) as $classRef) {
+                        $classes[$classRef] = true;
+                    }
+                }
+            }
         }
 
         // Remove self
@@ -297,6 +449,154 @@ class ClassContext
                         return true;
                     }
                 }
+            }
+        }
+
+        return false;
+    }
+
+    public function hasSignals(): bool
+    {
+        return $this->signalOverloads !== [];
+    }
+
+    public function hasQObjectPropertySupport(): bool
+    {
+        return $this->isQObjectDerived;
+    }
+
+    public function hasVirtualMethods(): bool
+    {
+        return $this->requiresVirtualTrampoline;
+    }
+
+    public function plainInstantiationUsesGeneratedType(): bool
+    {
+        return $this->plainNativeInstantiationType !== $this->nativeCppType;
+    }
+
+    public function hasPostCallOwnershipHandling(): bool
+    {
+        foreach ($this->methods as $method) {
+            if ($method->postCallLines($this) !== []) {
+                return true;
+            }
+
+            foreach ($method->overloads as $overload) {
+                if ($method->postCallLines($this, $overload) !== []) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @return list<MethodContext>
+     */
+    public function methodsWithCallableProtectedOverloads(): array
+    {
+        return array_values(array_filter(
+            $this->methods,
+            static fn(MethodContext $method): bool => $method->hasCallableProtectedOverloads,
+        ));
+    }
+
+    /**
+     * @return list<MethodContext>
+     */
+    public function virtualMethods(): array
+    {
+        return array_values(array_filter(
+            $this->methods,
+            static fn(MethodContext $method): bool => $method->hasVirtualOverloads,
+        ));
+    }
+
+    /**
+     * @param list<MethodContext> $signals
+     * @return list<SignalOverloadContext>
+     */
+    private function buildSignalOverloads(array $signals, TypeBridge $typeBridge): array
+    {
+        $signalOverloads = [];
+        $usedMethodNames = [];
+
+        foreach ($signals as $signal) {
+            $baseMethodName = 'on' . ucfirst($signal->name);
+
+            foreach ($signal->overloads as $overload) {
+                $phpMethodName = $baseMethodName;
+                if (\count($signal->overloads) > 1) {
+                    $phpMethodName .= $typeBridge->signalMethodSuffix($overload->params);
+                }
+
+                if (isset($usedMethodNames[$phpMethodName])) {
+                    $usedMethodNames[$phpMethodName]++;
+                    $phpMethodName .= (string) $usedMethodNames[$phpMethodName];
+                } else {
+                    $usedMethodNames[$phpMethodName] = 1;
+                }
+
+                $signalOverloads[] = new SignalOverloadContext(
+                    name: $signal->name,
+                    phpMethodName: $phpMethodName,
+                    signature: $typeBridge->signalSignature($signal->name, $overload),
+                    arginfoName: $typeBridge->arginfoName(
+                        $this->phpNamespace,
+                        $this->phpClassName,
+                        $phpMethodName,
+                    ),
+                    memberPointerExpr: $typeBridge->signalMemberPointerExpr(
+                        $overload->declaringClass !== '' ? $overload->declaringClass : $this->phpClassName,
+                        $signal->name,
+                        $overload,
+                    ),
+                    params: $overload->params,
+                );
+            }
+        }
+
+        return $signalOverloads;
+    }
+
+    /**
+     * @param list<MethodContext> $methods
+     */
+    private function computeRequiresAccessShim(array $methods): bool
+    {
+        foreach ($methods as $method) {
+            if ($method->hasCallableProtectedOverloads) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param list<MethodContext> $methods
+     */
+    private function computeRequiresVirtualTrampoline(array $methods): bool
+    {
+        foreach ($methods as $method) {
+            if ($method->hasVirtualOverloads) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param list<MethodContext> $methods
+     */
+    private function computeUsesGeneratedNativeSubclass(array $methods): bool
+    {
+        foreach ($methods as $method) {
+            if ($method->hasInstanceProtectedCallPath()) {
+                return true;
             }
         }
 

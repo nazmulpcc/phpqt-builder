@@ -82,6 +82,7 @@ class CppToPhpTypeMapper
         'QStringList',
         'QVariantList',
         'QVariantMap',
+        'QModelIndexList',
         'QHash',
         'QMap',
         'QSet',
@@ -96,6 +97,10 @@ class CppToPhpTypeMapper
 
         if ($this->isCharPointerArrayType($trimmed)) {
             return 'array';
+        }
+
+        if ($this->isVoidPointerType($trimmed)) {
+            return 'mixed';
         }
 
         $normalized = $this->normalize($cppType);
@@ -173,6 +178,14 @@ class CppToPhpTypeMapper
         $normalized = trim(preg_replace('/\s+/', ' ', $normalized) ?? $normalized);
 
         return preg_match('/^char\s*\*\s*\*$/', $normalized) === 1;
+    }
+
+    private function isVoidPointerType(string $cppType): bool
+    {
+        $normalized = preg_replace('/\bconst\b/', '', $cppType) ?? $cppType;
+        $normalized = trim(preg_replace('/\s+/', ' ', $normalized) ?? $normalized);
+
+        return preg_match('/^void(\s*\*)+$/', $normalized) === 1;
     }
 
     /**

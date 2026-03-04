@@ -24,12 +24,14 @@ readonly class ExtensionBuildContext
         public array $generatedClasses = [],
         public array $generatedClassParents = [],
         public array $generatedClassDependencies = [],
+        public bool $includeSignalConnectionSupport = false,
     ) {}
 
     public function withGeneratedClasses(
         array $generatedClasses,
         array $generatedClassParents = [],
         array $generatedClassDependencies = [],
+        bool $includeSignalConnectionSupport = false,
     ): self
     {
         return new self(
@@ -41,6 +43,7 @@ readonly class ExtensionBuildContext
             $generatedClasses,
             $generatedClassParents,
             $generatedClassDependencies,
+            $includeSignalConnectionSupport,
         );
     }
 
@@ -114,50 +117,87 @@ readonly class ExtensionBuildContext
      */
     private function orderedGeneratedClasses(): array
     {
-        $classes = array_values(array_unique($this->generatedClasses));
+        $classes = array_values(array_unique([
+            ...$this->generatedClasses,
+            ...($this->includeSignalConnectionSupport ? ['QMetaObjectConnection'] : []),
+        ]));
         if ($classes === []) {
             return [];
         }
 
         $generatedSet = array_fill_keys($classes, true);
-        $ordered = [];
-        $orderedSet = [];
-        $visiting = [];
-        $visited = [];
+        $originalIndex = array_flip($classes);
+        /** @var array<string, list<string>> $outgoing */
+        $outgoing = [];
+        /** @var array<string, int> $hardIndegree */
+        $hardIndegree = array_fill_keys($classes, 0);
+        /** @var array<string, int> $softIndegree */
+        $softIndegree = array_fill_keys($classes, 0);
 
-        $visit = function (string $className) use (&$visit, &$ordered, &$orderedSet, &$visiting, &$visited, $generatedSet): void {
-            if (isset($visited[$className])) {
-                return;
-            }
-
-            if (isset($visiting[$className])) {
-                return;
-            }
-
-            $visiting[$className] = true;
-
+        foreach ($classes as $className) {
             $parentClass = $this->generatedClassParents[$className] ?? null;
             if (is_string($parentClass) && isset($generatedSet[$parentClass])) {
-                $visit($parentClass);
+                $outgoing[$parentClass][] = $className;
+                $hardIndegree[$className]++;
             }
 
             foreach ($this->generatedClassDependencies[$className] ?? [] as $dependencyClass) {
-                if (isset($generatedSet[$dependencyClass])) {
-                    $visit($dependencyClass);
+                if (!isset($generatedSet[$dependencyClass]) || $dependencyClass === $parentClass) {
+                    continue;
                 }
+
+                $outgoing[$dependencyClass][] = $className;
+                $softIndegree[$className]++;
+            }
+        }
+
+        $ordered = [];
+        /** @var array<string, bool> $emitted */
+        $emitted = [];
+
+        while (count($ordered) < count($classes)) {
+            $ready = array_values(array_filter(
+                $classes,
+                static fn(string $className): bool => !isset($emitted[$className])
+                    && ($hardIndegree[$className] ?? 0) === 0
+                    && ($softIndegree[$className] ?? 0) === 0,
+            ));
+
+            if ($ready === []) {
+                // Break dependency-only cycles, but never violate parent-before-child ordering.
+                $ready = array_values(array_filter(
+                    $classes,
+                    static fn(string $className): bool => !isset($emitted[$className])
+                        && ($hardIndegree[$className] ?? 0) === 0,
+                ));
             }
 
-            unset($visiting[$className]);
-            $visited[$className] = true;
-
-            if (!isset($orderedSet[$className])) {
-                $ordered[] = $className;
-                $orderedSet[$className] = true;
+            if ($ready === []) {
+                // Defensive fallback for malformed parent cycles; preserve deterministic output.
+                $ready = array_values(array_filter(
+                    $classes,
+                    static fn(string $className): bool => !isset($emitted[$className]),
+                ));
             }
-        };
 
-        foreach ($classes as $className) {
-            $visit($className);
+            usort(
+                $ready,
+                static fn(string $left, string $right): int => ($originalIndex[$left] ?? PHP_INT_MAX) <=> ($originalIndex[$right] ?? PHP_INT_MAX),
+            );
+
+            $className = $ready[0];
+            $ordered[] = $className;
+            $emitted[$className] = true;
+
+            foreach ($outgoing[$className] ?? [] as $dependentClass) {
+                $parentClass = $this->generatedClassParents[$dependentClass] ?? null;
+                if ($parentClass === $className) {
+                    $hardIndegree[$dependentClass] = max(0, ($hardIndegree[$dependentClass] ?? 0) - 1);
+                    continue;
+                }
+
+                $softIndegree[$dependentClass] = max(0, ($softIndegree[$dependentClass] ?? 0) - 1);
+            }
         }
 
         return $ordered;

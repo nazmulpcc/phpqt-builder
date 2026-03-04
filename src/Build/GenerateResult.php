@@ -15,6 +15,7 @@ readonly class GenerateResult
         public string $status,
         public string $className,
         public string $headerPath,
+        public ?array $classData = null,
         public ?string $parentClassName = null,
         public array $classDependencies = [],
         public array $generatedFiles = [],
@@ -34,6 +35,7 @@ readonly class GenerateResult
             status: (string) ($payload['status'] ?? 'error'),
             className: (string) ($payload['class'] ?? ''),
             headerPath: (string) ($payload['header'] ?? ''),
+            classData: is_array($payload['class_data'] ?? null) ? $payload['class_data'] : null,
             parentClassName: is_string($payload['parent_class'] ?? null) ? $payload['parent_class'] : null,
             classDependencies: array_values(array_filter(
                 array_map(
@@ -53,7 +55,7 @@ readonly class GenerateResult
 
     public static function error(string $className, string $headerPath, string $reasonMessage, string $stderr = ''): self
     {
-        return new self('error', $className, $headerPath, null, [], [], [], [], 'worker_error', $reasonMessage, $stderr);
+        return new self('error', $className, $headerPath, null, null, [], [], [], [], 'worker_error', $reasonMessage, $stderr);
     }
 
     public function isOk(): bool
