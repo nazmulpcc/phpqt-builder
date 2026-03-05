@@ -27,3 +27,7 @@
 #ifndef Q_OBJECT
 #define Q_OBJECT
 #endif
+
+#ifndef QPrivateSignal
+class QPrivateSignal {};
+#endif

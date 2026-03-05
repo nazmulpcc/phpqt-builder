@@ -809,7 +809,7 @@ class ClassGenerationService
         array $preparedClassDataByClass,
         array &$parameterClassFactsCache,
     ): ?array {
-        $parameters = is_array($method['parameters'] ?? null) ? $method['parameters'] : [];
+        $parameters = $this->effectiveSignalCallbackParameters($method);
 
         foreach ($parameters as $parameter) {
             $cppType = is_string($parameter['type'] ?? null) ? $parameter['type'] : '';
@@ -863,6 +863,29 @@ class ClassGenerationService
         }
 
         return null;
+    }
+
+    /**
+     * @param array<string, mixed> $method
+     * @return list<array<string, mixed>>
+     */
+    private function effectiveSignalCallbackParameters(array $method): array
+    {
+        $parameters = is_array($method['parameters'] ?? null) ? $method['parameters'] : [];
+        if (($method['is_signal'] ?? false) !== true || $parameters === []) {
+            return $parameters;
+        }
+
+        $lastIndex = count($parameters) - 1;
+        $lastType = is_string($parameters[$lastIndex]['type'] ?? null)
+            ? trim((string) $parameters[$lastIndex]['type'])
+            : '';
+
+        if ($lastType === 'QPrivateSignal') {
+            array_pop($parameters);
+        }
+
+        return $parameters;
     }
 
     /**

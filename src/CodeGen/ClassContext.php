@@ -431,6 +431,9 @@ class ClassContext
         $parts = explode('|', $phpType);
 
         foreach ($parts as $part) {
+            if ($part === 'QPrivateSignal') {
+                continue;
+            }
             if ($typeBridge->isObjectType($part)) {
                 $classes[$part] = true;
             }
@@ -576,9 +579,10 @@ class ClassContext
             $baseMethodName = 'on' . ucfirst($signal->name);
 
             foreach ($signal->overloads as $overload) {
+                $callbackParams = $typeBridge->signalCallbackParams($overload->params);
                 $phpMethodName = $baseMethodName;
                 if (\count($signal->overloads) > 1) {
-                    $phpMethodName .= $typeBridge->signalMethodSuffix($overload->params);
+                    $phpMethodName .= $typeBridge->signalMethodSuffix($callbackParams);
                 }
 
                 if (isset($usedMethodNames[$phpMethodName])) {
@@ -602,7 +606,7 @@ class ClassContext
                         $signal->name,
                         $overload,
                     ),
-                    params: $overload->params,
+                    params: $callbackParams,
                 );
             }
         }

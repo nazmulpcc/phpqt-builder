@@ -285,7 +285,7 @@ class MethodExposurePolicy
             return ['code' => 'unsupported_return_type', 'message' => sprintf('Return type %s is not supported.', $returnType)];
         }
 
-        foreach ($variant['parameters'] as $parameter) {
+        foreach ($this->effectiveSignalParameters($variant) as $parameter) {
             $type = (string) $parameter['type'];
             if ($this->isUnsupportedOutParameter($type, $className, $flagAliases, $enumNames, $parameter)) {
                 return ['code' => 'unsupported_output_parameter', 'message' => sprintf('Parameter type %s looks like an output parameter.', $type)];
@@ -296,6 +296,29 @@ class MethodExposurePolicy
         }
 
         return null;
+    }
+
+    /**
+     * @param array<string, mixed> $variant
+     * @return list<array<string, mixed>>
+     */
+    private function effectiveSignalParameters(array $variant): array
+    {
+        $parameters = is_array($variant['parameters'] ?? null) ? $variant['parameters'] : [];
+        if (($variant['is_signal'] ?? false) !== true || $parameters === []) {
+            return $parameters;
+        }
+
+        $lastIndex = count($parameters) - 1;
+        $lastType = is_string($parameters[$lastIndex]['type'] ?? null)
+            ? trim((string) $parameters[$lastIndex]['type'])
+            : '';
+
+        if ($lastType === 'QPrivateSignal') {
+            array_pop($parameters);
+        }
+
+        return $parameters;
     }
 
     /**

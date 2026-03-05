@@ -1017,6 +1017,7 @@ class TypeBridge
 
     public function signalMethodSuffix(array $params): string
     {
+        $params = $this->signalCallbackParams($params);
         if ($params === []) {
             return 'NoArgs';
         }
@@ -1031,9 +1032,10 @@ class TypeBridge
 
     public function signalSignature(string $signalName, OverloadContext $overload): string
     {
+        $params = $this->signalCallbackParams($overload->params);
         $types = array_map(
             fn(OverloadParamContext $param): string => $this->normalizedSignalType($param->cppType),
-            $overload->params,
+            $params,
         );
 
         return sprintf('%s(%s)', $signalName, implode(',', $types));
@@ -1041,6 +1043,11 @@ class TypeBridge
 
     public function signalMemberPointerExpr(string $declaringClass, string $methodName, OverloadContext $overload): string
     {
+        $callbackParams = $this->signalCallbackParams($overload->params);
+        if (count($callbackParams) !== count($overload->params)) {
+            return sprintf('&%s::%s', $declaringClass, $methodName);
+        }
+
         $parameterTypes = array_map(
             static fn(OverloadParamContext $param): string => $param->cppType,
             $overload->params,
@@ -2092,5 +2099,23 @@ class TypeBridge
         $normalized = preg_replace('/[^A-Za-z0-9]/', '', $normalized) ?? $normalized;
 
         return $normalized !== '' ? ucfirst($normalized) : 'Value';
+    }
+
+    /**
+     * @param list<OverloadParamContext> $params
+     * @return list<OverloadParamContext>
+     */
+    public function signalCallbackParams(array $params): array
+    {
+        if ($params === []) {
+            return $params;
+        }
+
+        $lastIndex = count($params) - 1;
+        if ($this->normalizedSignalType($params[$lastIndex]->cppType) === 'QPrivateSignal') {
+            array_pop($params);
+        }
+
+        return $params;
     }
 }
