@@ -11,6 +11,7 @@ $returnCe = $ctx->typeBridge->ceVarName($returnClass);
 $returnFromObj = $ctx->typeBridge->fromObjFuncName($returnClass);
 $returnStruct = $ctx->typeBridge->objectStructName($returnClass);
 $callPlan = $method->callPlan($ctx, $overload);
+$writebackLines = $method->writebackLines($ctx, $overload);
 $declaringClass = $overload?->declaringClass !== '' ? $overload->declaringClass : $ctx->nativeCppType;
 $callExpr = null;
 if ($overload?->isPureVirtual) {
@@ -44,6 +45,9 @@ if ($overload?->isPureVirtual) {
 @endforeach
 @endif
     {!! $returnClass !!} _result = {!! $callExpr !!};
+@foreach($writebackLines as $line)
+    {!! $line !!}
+@endforeach
     object_init_ex(return_value, {!! $returnCe !!});
     if (UNEXPECTED(Z_TYPE_P(return_value) != IS_OBJECT)) {
         if (!EG(exception)) {

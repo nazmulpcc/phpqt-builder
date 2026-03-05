@@ -6,7 +6,8 @@ require dirname(__DIR__) . '/bootstrap.php';
 
 qt_runtime_require_class(\Qt\Qml\QQmlEngine::class, 'QtQml classes are unavailable in this build.');
 
-$app = new \Qt\Core\QCoreApplication(0, []);
+$argc = 0;
+$app = new \Qt\Core\QCoreApplication($argc, []);
 $sales = new \Qt\Core\QObject();
 $sales->objectName = 'sales-1';
 

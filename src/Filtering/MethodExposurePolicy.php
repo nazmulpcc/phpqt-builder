@@ -310,7 +310,7 @@ class MethodExposurePolicy
 
         foreach ($this->effectiveSignalParameters($variant) as $parameter) {
             $type = (string) $parameter['type'];
-            if ($this->isUnsupportedOutParameter($type, $className, $flagAliases, $enumNames, $parameter)) {
+            if ($this->isUnsupportedWritableByRefParameter($type)) {
                 return ['code' => 'unsupported_output_parameter', 'message' => sprintf('Parameter type %s looks like an output parameter.', $type)];
             }
             if (!$this->isSupportedType($type, $className, $allowedClasses, false, $flagAliases, $enumNames)) {
@@ -413,72 +413,6 @@ class MethodExposurePolicy
     }
 
     /**
-     * @param array<string, mixed> $parameter
-     */
-    private function isUnsupportedOutParameter(string $cppType, string $className, array $flagAliases = [], array $enumNames = [], array $parameter = []): bool
-    {
-        $trimmed = trim($cppType);
-        if ($this->isSupportedInputStringPointerParameter($trimmed, $parameter)) {
-            return false;
-        }
-
-        if ($this->containerBridge->isSupported($trimmed) && str_contains($trimmed, '&') && !str_starts_with($trimmed, 'const ')) {
-            return true;
-        }
-
-        if (!str_contains($trimmed, '*') || str_starts_with($trimmed, 'const ')) {
-            return false;
-        }
-
-        if ($this->isSupportedArrayType($trimmed)) {
-            return false;
-        }
-
-        if ($this->hasMultiplePointerIndirection($trimmed)) {
-            return true;
-        }
-
-        if ($this->isEnumOrFlagType($trimmed, $className, $flagAliases, $enumNames)) {
-            return true;
-        }
-
-        $phpType = $this->typeMapper->map($trimmed);
-        if (in_array($phpType, ['int', 'float', 'bool', 'string', 'array', 'mixed'], true)) {
-            return true;
-        }
-
-        return false;
-    }
-
-    /**
-     * Allow optional `QString *` / `QByteArray *` parameters as input-only bridges.
-     *
-     * These are frequently declared as output pointers in Qt APIs (e.g.
-     * selectedFilter), but for PHP we intentionally treat them as one-way
-     * optional input values.
-     *
-     * @param array<string, mixed> $parameter
-     */
-    private function isSupportedInputStringPointerParameter(string $cppType, array $parameter): bool
-    {
-        if (str_starts_with($cppType, 'const ')) {
-            return false;
-        }
-
-        if (!str_contains($cppType, '*') || $this->hasMultiplePointerIndirection($cppType)) {
-            return false;
-        }
-
-        if (!(bool) ($parameter['has_default'] ?? false)) {
-            return false;
-        }
-
-        $baseType = $this->normalizeSelfType($cppType);
-
-        return $baseType === 'QString' || $baseType === 'QByteArray';
-    }
-
-    /**
      * @param list<string> $allowedClasses
      * @param array<string, string> $flagAliases
      * @param list<string> $enumNames
@@ -510,7 +444,10 @@ class MethodExposurePolicy
             return false;
         }
 
-        if ($this->isUnsupportedScalarPointerType($trimmed)) {
+        if (
+            $this->isUnsupportedScalarPointerType($trimmed)
+            && !(!$isReturn && $this->isSupportedWritableScalarPointerType($trimmed))
+        ) {
             return false;
         }
 
@@ -767,6 +704,61 @@ class MethodExposurePolicy
         $phpType = $this->typeMapper->map($cppType);
 
         return in_array($phpType, ['int', 'float', 'bool'], true);
+    }
+
+    private function isSupportedWritableScalarPointerType(string $cppType): bool
+    {
+        $trimmed = trim($cppType);
+        if (substr_count($trimmed, '*') !== 1 || str_contains($trimmed, '&')) {
+            return false;
+        }
+
+        if (preg_match('/^\s*const\b/', $trimmed) === 1) {
+            return false;
+        }
+
+        $phpType = $this->typeMapper->map($trimmed);
+
+        return in_array($phpType, ['int', 'float', 'bool'], true);
+    }
+
+    private function isUnsupportedWritableByRefParameter(string $cppType): bool
+    {
+        $trimmed = trim($cppType);
+        if ($trimmed === '') {
+            return false;
+        }
+
+        $pointerDepth = substr_count($trimmed, '*');
+        $isRvalueReference = str_contains($trimmed, '&&');
+        $isReference = !$isRvalueReference && str_contains($trimmed, '&');
+        $isConstReference = $isReference && preg_match('/^\s*const\b/', $trimmed) === 1;
+        $isNonConstReference = $isReference && !$isConstReference;
+        $isNonConstPointer = $pointerDepth === 1 && !$isReference && preg_match('/^\s*const\b/', $trimmed) !== 1;
+
+        if (!$isNonConstReference && !$isNonConstPointer) {
+            return false;
+        }
+
+        if ($pointerDepth > 1) {
+            return true;
+        }
+
+        $phpType = $this->typeMapper->map($trimmed);
+        if (in_array($phpType, ['int', 'float', 'bool'], true)) {
+            return false;
+        }
+
+        if ($this->typeBridge->isObjectType($phpType)) {
+            return false;
+        }
+
+        $baseType = $this->normalizeSelfType($trimmed);
+        if ($phpType === 'string' && ($baseType === 'QString' || $baseType === 'QByteArray')) {
+            return false;
+        }
+
+        return true;
     }
 
     private function isSupportedArrayType(string $cppType): bool

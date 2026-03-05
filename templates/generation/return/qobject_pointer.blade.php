@@ -16,6 +16,7 @@ $returnStruct = $ctx->typeBridge->objectStructName($returnClass);
 $wrapFunc = $ctx->typeBridge->wrapNativeFuncName($returnClass);
 $isValueType = $ctx->typeBridge->isValueType($returnClass);
 $callPlan = $method->callPlan($ctx, $overload);
+$writebackLines = $method->writebackLines($ctx, $overload);
 $declaringClass = $overload?->declaringClass !== '' ? $overload->declaringClass : $ctx->nativeCppType;
 $callExpr = null;
 if ($overload?->isPureVirtual) {
@@ -49,6 +50,9 @@ if ($overload?->isPureVirtual) {
 @endforeach
 @endif
     {!! $resultDeclType !!} _result = {!! $callExpr !!};
+@foreach($writebackLines as $line)
+    {!! $line !!}
+@endforeach
 @if($isValueType)
     if (_result == NULL) {
         RETURN_NULL();

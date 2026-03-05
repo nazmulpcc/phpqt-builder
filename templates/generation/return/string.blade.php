@@ -8,6 +8,7 @@
 $overload = $method->overloads[0] ?? null;
 $cppReturnType = $overload ? $overload->cppReturnType : 'QString';
 $callPlan = $method->callPlan($ctx, $overload);
+$writebackLines = $method->writebackLines($ctx, $overload);
 $declaringClass = $overload?->declaringClass !== '' ? $overload->declaringClass : $ctx->nativeCppType;
 $callExpr = null;
 if ($overload?->isPureVirtual) {
@@ -41,5 +42,8 @@ if ($overload?->isPureVirtual) {
 @endforeach
 @endif
     auto _result = {!! $callExpr !!};
+@foreach($writebackLines as $line)
+    {!! $line !!}
+@endforeach
     {!! $ctx->typeBridge->nativeStringToPhpReturn($cppReturnType, '_result') !!};
 @endif

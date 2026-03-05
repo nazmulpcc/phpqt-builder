@@ -326,6 +326,9 @@ class MethodContext
                 isRvalueReference: $param->isRvalueReference,
                 persistentStorageVar: $persistentStorageVar,
                 pairedCountVarName: $pairedCountVarName,
+                isWritableByRef: $mergedParam?->isByRef ?? false,
+                isWritableByRefPointer: ($mergedParam?->isByRef ?? false) && $param->isWritableByRefPointer,
+                isWritableQtString: ($mergedParam?->isByRef ?? false) && $param->isWritableQtString,
             );
 
             foreach ($setup['lines'] as $line) {
@@ -340,6 +343,60 @@ class MethodContext
             'setup_lines' => $setupLines,
             'args' => $args,
         ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function writebackLines(ClassContext $classCtx, ?OverloadContext $overload = null): array
+    {
+        $overload ??= $this->overloads[0] ?? null;
+        if ($overload === null) {
+            return [];
+        }
+
+        $lines = [];
+
+        foreach ($overload->params as $i => $param) {
+            $mergedParam = $this->params[$i] ?? null;
+            if ($mergedParam === null || !$mergedParam->isByRef || !$param->isWritableByRef) {
+                continue;
+            }
+
+            $targetVar = $mergedParam->cVarName;
+            $sourceExpr = $param->isWritableByRefPointer ? sprintf('(*_qt_arg_%d)', $i) : sprintf('_qt_arg_%d', $i);
+            $guardExpr = $param->isWritableByRefPointer ? sprintf('_qt_arg_%d != NULL', $i) : 'true';
+
+            $lines[] = sprintf('if (%s != NULL && %s) {', $targetVar, $guardExpr);
+            $lines[] = sprintf('    ZEND_ASSERT(Z_TYPE_P(%s) == IS_REFERENCE);', $targetVar);
+
+            if ($param->phpType === 'int') {
+                $lines[] = sprintf('    ZEND_TRY_ASSIGN_REF_LONG(%s, (zend_long)(%s));', $targetVar, $sourceExpr);
+            } elseif ($param->phpType === 'float') {
+                $lines[] = sprintf('    ZEND_TRY_ASSIGN_REF_DOUBLE(%s, (double)(%s));', $targetVar, $sourceExpr);
+            } elseif ($param->phpType === 'bool') {
+                $lines[] = sprintf('    ZEND_TRY_ASSIGN_REF_BOOL(%s, (bool)(%s));', $targetVar, $sourceExpr);
+            } elseif ($param->phpType === 'string' && $param->isWritableQtString) {
+                if (str_contains($param->cppType, 'QByteArray')) {
+                    $sizeExpr = sprintf('%s.size()', $sourceExpr);
+                    $lines[] = sprintf('    zend_string *_qt_ref_str_%1$d = zend_string_alloc((size_t)%2$s, 0);', $i, $sizeExpr);
+                    $lines[] = sprintf('    memcpy(ZSTR_VAL(_qt_ref_str_%d), %s.constData(), (size_t)%s);', $i, $sourceExpr, $sizeExpr);
+                    $lines[] = sprintf('    ZSTR_VAL(_qt_ref_str_%1$d)[(size_t)%2$s] = \'\\0\';', $i, $sizeExpr);
+                    $lines[] = sprintf('    ZEND_TRY_ASSIGN_REF_NEW_STR(%s, _qt_ref_str_%d);', $targetVar, $i);
+                } else {
+                    $lines[] = sprintf('    QByteArray _qt_ref_utf8_%d = %s.toUtf8();', $i, $sourceExpr);
+                    $sizeExpr = sprintf('_qt_ref_utf8_%d.size()', $i);
+                    $lines[] = sprintf('    zend_string *_qt_ref_str_%1$d = zend_string_alloc((size_t)%2$s, 0);', $i, $sizeExpr);
+                    $lines[] = sprintf('    memcpy(ZSTR_VAL(_qt_ref_str_%d), _qt_ref_utf8_%d.constData(), (size_t)%s);', $i, $i, $sizeExpr);
+                    $lines[] = sprintf('    ZSTR_VAL(_qt_ref_str_%1$d)[(size_t)%2$s] = \'\\0\';', $i, $sizeExpr);
+                    $lines[] = sprintf('    ZEND_TRY_ASSIGN_REF_NEW_STR(%s, _qt_ref_str_%d);', $targetVar, $i);
+                }
+            }
+
+            $lines[] = '}';
+        }
+
+        return $lines;
     }
 
     /**
@@ -474,7 +531,11 @@ class MethodContext
         }
 
         if ($mergedParam->isParsedAsZval) {
-            return $this->typeBridge->zvalTypeMatchExpr($mergedParam->cVarName, $param->phpType);
+            $matchVar = $mergedParam->isByRef
+                ? $this->typeBridge->dereferencedZvalExpr($mergedParam->cVarName)
+                : $mergedParam->cVarName;
+
+            return $this->typeBridge->zvalTypeMatchExpr($matchVar, $param->phpType);
         }
 
         return $mergedParam->phpType === $param->phpType ? 'true' : 'false';
@@ -488,7 +549,11 @@ class MethodContext
         }
 
         if ($mergedParam->isParsedAsZval) {
-            return $this->typeBridge->zvalTypeMatchScoreExpr($mergedParam->cVarName, $param->phpType);
+            $matchVar = $mergedParam->isByRef
+                ? $this->typeBridge->dereferencedZvalExpr($mergedParam->cVarName)
+                : $mergedParam->cVarName;
+
+            return $this->typeBridge->zvalTypeMatchScoreExpr($matchVar, $param->phpType);
         }
 
         return $mergedParam->phpType === $param->phpType ? '500' : '-1';

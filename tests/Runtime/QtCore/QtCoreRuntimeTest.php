@@ -48,3 +48,12 @@ it('covers abstract item model row insertion and data access', function (): void
         ->and($payload['list_rows'])->toBe(3)
         ->and($payload['list_item'])->toBe('Order synced');
 });
+
+it('writes back by-reference scalar out parameters', function (): void {
+    $payload = qt_runtime_payload('QtCore/byref_writeback.php');
+
+    expect($payload['ok_is_bool'])->toBeTrue()
+        ->and($payload['ok_type'])->toBe('bool')
+        ->and($payload['ok_value'])->toBeTrue()
+        ->and($payload['value'])->toBeInt();
+});

@@ -1579,6 +1579,8 @@ class ClassGenerationService
                     phpType: $normalizedType,
                     hasDefault: $normalizedDefault,
                     position: $childParameter->position,
+                    isByRef: $childParameter->isByRef,
+                    isNullableByRef: $childParameter->isNullableByRef,
                 );
             }
 
@@ -1593,6 +1595,8 @@ class ClassGenerationService
                     phpType: $childParameter->phpType,
                     hasDefault: true,
                     position: $childParameter->position,
+                    isByRef: $childParameter->isByRef,
+                    isNullableByRef: $childParameter->isNullableByRef,
                 );
             }
         }

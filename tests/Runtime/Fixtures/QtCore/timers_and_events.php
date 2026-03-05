@@ -61,7 +61,8 @@ final class RuntimeTimerDriver extends \Qt\Core\QObject
     }
 }
 
-$app = new \Qt\Core\QCoreApplication(0, ['qt-runtime']);
+$argc = 0;
+$app = new \Qt\Core\QCoreApplication($argc, ['qt-runtime']);
 $receiver = new RuntimeLoggingReceiver();
 $filter = new RuntimeLoggingFilter();
 $receiver->installEventFilter($filter);

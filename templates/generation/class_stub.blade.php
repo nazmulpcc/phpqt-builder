@@ -32,13 +32,13 @@ namespace {!! $ctx->phpNamespace !!};
     if ($method->isStatic) $modifiers .= ' static';
 @endphp
 @if($method->isConstructor)
-    {!! $modifiers !!} function __construct(@foreach($method->params as $param){!! $ctx->stubParamType($param) !!} ${!! $param->name !!}@if($param->isOptional) = {!! $ctx->stubDefault($param) !!}@endif @if(!$loop->last), @endif @endforeach) {}
+    {!! $modifiers !!} function __construct(@foreach($method->params as $param){!! $ctx->stubParamType($param) !!} @if($param->isByRef)&@endif${!! $param->name !!}@if($param->isOptional) = {!! $ctx->stubDefault($param) !!}@endif @if(!$loop->last), @endif @endforeach) {}
 
 @elseif($method->isAbstractMethod)
-    abstract {!! $modifiers !!} function {!! $method->name !!}(@foreach($method->params as $param){!! $ctx->stubParamType($param) !!} ${!! $param->name !!}@if($param->isOptional) = {!! $ctx->stubDefault($param) !!}@endif @if(!$loop->last), @endif @endforeach): {!! $method->stubReturnType !!};
+    abstract {!! $modifiers !!} function {!! $method->name !!}(@foreach($method->params as $param){!! $ctx->stubParamType($param) !!} @if($param->isByRef)&@endif${!! $param->name !!}@if($param->isOptional) = {!! $ctx->stubDefault($param) !!}@endif @if(!$loop->last), @endif @endforeach): {!! $method->stubReturnType !!};
 
 @else
-    {!! $modifiers !!} function {!! $method->name !!}(@foreach($method->params as $param){!! $ctx->stubParamType($param) !!} ${!! $param->name !!}@if($param->isOptional) = {!! $ctx->stubDefault($param) !!}@endif @if(!$loop->last), @endif @endforeach): {!! $method->stubReturnType !!} {}
+    {!! $modifiers !!} function {!! $method->name !!}(@foreach($method->params as $param){!! $ctx->stubParamType($param) !!} @if($param->isByRef)&@endif${!! $param->name !!}@if($param->isOptional) = {!! $ctx->stubDefault($param) !!}@endif @if(!$loop->last), @endif @endforeach): {!! $method->stubReturnType !!} {}
 
 @endif
 @endforeach

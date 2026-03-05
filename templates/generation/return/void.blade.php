@@ -8,6 +8,7 @@
 $overload = $method->overloads[0] ?? null;
 $callPlan = $method->callPlan($ctx, $overload);
 $postCallLines = $method->postCallLines($ctx, $overload);
+$writebackLines = $method->writebackLines($ctx, $overload);
 $declaringClass = $overload?->declaringClass !== '' ? $overload->declaringClass : $ctx->nativeCppType;
 $callExpr = null;
 if ($overload?->isPureVirtual) {
@@ -40,12 +41,18 @@ if ($overload?->isPureVirtual) {
 @foreach($postCallLines as $line)
     {!! $line !!}
 @endforeach
+@foreach($writebackLines as $line)
+    {!! $line !!}
+@endforeach
 @else
 @foreach($callPlan['setup_lines'] as $line)
     {!! $line !!}
 @endforeach
     {!! $callExpr !!};
 @foreach($postCallLines as $line)
+    {!! $line !!}
+@endforeach
+@foreach($writebackLines as $line)
     {!! $line !!}
 @endforeach
 @endif

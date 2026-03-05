@@ -262,6 +262,11 @@ class TypeBridge
         };
     }
 
+    public function dereferencedZvalExpr(string $varName): string
+    {
+        return $this->zvalDerefExpr($varName);
+    }
+
     // ------------------------------------------------------------------
     // Zend type constants (for arginfo)
     // ------------------------------------------------------------------
@@ -604,6 +609,9 @@ class TypeBridge
         bool $isRvalueReference = false,
         ?string $persistentStorageVar = null,
         ?string $pairedCountVarName = null,
+        bool $isWritableByRef = false,
+        bool $isWritableByRefPointer = false,
+        bool $isWritableQtString = false,
     ): array {
         if (
             $persistentStorageVar !== null
@@ -646,7 +654,40 @@ class TypeBridge
             ];
         }
 
-        if ($phpType === 'string' && $this->isQtStringPointerType($cppType)) {
+        // Input-only scalar pointers still need native storage materialization
+        // even when not writable-by-ref at the merged PHP signature level.
+        if (
+            !$isWritableByRef
+            && $this->isPointerType($cppType)
+            && in_array($phpType, ['int', 'float', 'bool'], true)
+        ) {
+            $valueVar = $nativeVarName . '_value';
+            $baseType = $this->normalizeCppType($cppType);
+            $valueExpr = $sourceIsZval ? $this->zvalDerefExpr($sourceVarName) : $sourceVarName;
+            $initExpr = $sourceIsZval
+                ? $this->zvalToNativeExpr($phpType, $cppType, $valueExpr, false)
+                : $this->directPhpToNativeExpr($phpType, $cppType, $sourceVarName, false);
+            $guardExpr = $nullable
+                ? ($sourceIsZval
+                    ? sprintf('(%s != NULL && Z_TYPE_P(%s) != IS_NULL)', $sourceVarName, $valueExpr)
+                    : sprintf('(%s != NULL)', $sourceVarName))
+                : 'true';
+
+            return [
+                'lines' => [
+                    sprintf('%s %s;', $baseType, $valueVar),
+                    sprintf('%s *%s = NULL;', $baseType, $nativeVarName),
+                    sprintf('if (%s) {', $guardExpr),
+                    sprintf('    %s = %s;', $valueVar, $initExpr),
+                    sprintf('    %s = &%s;', $nativeVarName, $valueVar),
+                    '}',
+                ],
+                'expr' => $nativeVarName,
+                'local_var' => $nativeVarName,
+            ];
+        }
+
+        if (!$isWritableByRef && $phpType === 'string' && $this->isQtStringPointerType($cppType)) {
             $storageVar = $nativeVarName . '_value';
             $baseType = $this->normalizeCppType($cppType);
             $sourceExpr = $sourceIsZval ? sprintf('Z_STR_P(%s)', $sourceVarName) : $sourceVarName;
@@ -661,6 +702,46 @@ class TypeBridge
                     sprintf('if (%s) {', $guardExpr),
                     sprintf('    %s = %s;', $storageVar, $this->phpStringToNativeExpr($cppType, $sourceExpr)),
                     sprintf('    %s = &%s;', $nativeVarName, $storageVar),
+                    '}',
+                ],
+                'expr' => $nativeVarName,
+                'local_var' => $nativeVarName,
+            ];
+        }
+
+        if ($isWritableByRef && !$isWritableByRefPointer) {
+            $sourceExpr = $sourceIsZval ? $this->zvalDerefExpr($sourceVarName) : $sourceVarName;
+            $initExpr = $sourceIsZval
+                ? $this->zvalToNativeExpr($phpType, $cppType, $sourceExpr, false)
+                : $this->directPhpToNativeExpr($phpType, $cppType, $sourceVarName, false);
+
+            return [
+                'lines' => [sprintf('%s %s = %s;', $this->localValueType($phpType, $cppType), $nativeVarName, $initExpr)],
+                'expr' => $nativeVarName,
+                'local_var' => $nativeVarName,
+            ];
+        }
+
+        if ($isWritableByRef && $isWritableByRefPointer) {
+            $valueVar = $nativeVarName . '_value';
+            $valueExpr = $sourceIsZval ? $this->zvalDerefExpr($sourceVarName) : $sourceVarName;
+            $baseType = $this->normalizeCppType($cppType);
+            $initExpr = $sourceIsZval
+                ? $this->zvalToNativeExpr($phpType, $cppType, $valueExpr, false)
+                : $this->directPhpToNativeExpr($phpType, $cppType, $sourceVarName, false);
+            $guardExpr = $nullable
+                ? ($sourceIsZval
+                    ? sprintf('(%s != NULL && Z_TYPE_P(%s) != IS_NULL)', $sourceVarName, $valueExpr)
+                    : sprintf('(%s != NULL)', $sourceVarName))
+                : 'true';
+
+            return [
+                'lines' => [
+                    sprintf('%s %s;', $baseType, $valueVar),
+                    sprintf('%s *%s = NULL;', $baseType, $nativeVarName),
+                    sprintf('if (%s) {', $guardExpr),
+                    sprintf('    %s = %s;', $valueVar, $initExpr),
+                    sprintf('    %s = &%s;', $nativeVarName, $valueVar),
                     '}',
                 ],
                 'expr' => $nativeVarName,
@@ -1160,10 +1241,20 @@ class TypeBridge
         }
 
         if ($strategy === 'scalar') {
+            $scalarExpr = $sourceExpr;
+            if ($this->isPointerType($cppType)) {
+                $scalarExpr = match ($phpType) {
+                    'int' => sprintf('(%1$s != NULL ? *%1$s : 0)', $sourceExpr),
+                    'float' => sprintf('(%1$s != NULL ? *%1$s : 0.0)', $sourceExpr),
+                    'bool' => sprintf('(%1$s != NULL ? *%1$s : false)', $sourceExpr),
+                    default => $sourceExpr,
+                };
+            }
+
             return match ($phpType) {
-                'int' => sprintf('ZVAL_LONG(%s, %s);', $zvalVar, $this->nativeScalarToPhpExpr($phpType, $cppType, $sourceExpr)),
-                'float' => sprintf('ZVAL_DOUBLE(%s, %s);', $zvalVar, $this->nativeScalarToPhpExpr($phpType, $cppType, $sourceExpr)),
-                'bool' => sprintf('ZVAL_BOOL(%s, %s);', $zvalVar, $this->nativeScalarToPhpExpr($phpType, $cppType, $sourceExpr)),
+                'int' => sprintf('ZVAL_LONG(%s, %s);', $zvalVar, $this->nativeScalarToPhpExpr($phpType, $cppType, $scalarExpr)),
+                'float' => sprintf('ZVAL_DOUBLE(%s, %s);', $zvalVar, $this->nativeScalarToPhpExpr($phpType, $cppType, $scalarExpr)),
+                'bool' => sprintf('ZVAL_BOOL(%s, %s);', $zvalVar, $this->nativeScalarToPhpExpr($phpType, $cppType, $scalarExpr)),
                 default => sprintf('ZVAL_NULL(%s);', $zvalVar),
             };
         }
@@ -1578,6 +1669,11 @@ class TypeBridge
         }
 
         return trim($type);
+    }
+
+    private function zvalDerefExpr(string $varName): string
+    {
+        return sprintf('((Z_TYPE_P(%1$s) == IS_REFERENCE) ? Z_REFVAL_P(%1$s) : (%1$s))', $varName);
     }
 
     private function typeIncludes(string $phpType, string $needle): bool

@@ -96,7 +96,8 @@ final class RuntimeQuickListDriver extends \Qt\Core\QObject
     }
 }
 
-$app = new \Qt\Gui\QGuiApplication(0, []);
+$argc = 0;
+$app = new \Qt\Gui\QGuiApplication($argc, []);
 $model = new RuntimeQuickListModel();
 $engine = new \Qt\Qml\QQmlApplicationEngine();
 $engine->rootContext()->setContextProperty('salesFeedModel', $model);

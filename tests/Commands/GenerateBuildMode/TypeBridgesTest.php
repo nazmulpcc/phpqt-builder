@@ -156,7 +156,8 @@ it('handles QString pointer parameters', function (): void {
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qstringpointerholder.cpp');
         Assert::assertStringContainsString('QString _qt_arg_1_value;', $cpp);
         Assert::assertStringContainsString('QString *_qt_arg_1 = NULL;', $cpp);
-        Assert::assertStringContainsString('_qt_arg_1_value = QString::fromUtf8(ZSTR_VAL(selectedFilter), (int)ZSTR_LEN(selectedFilter));', $cpp);
+        Assert::assertStringContainsString('_qt_arg_1_value = QString::fromUtf8(', $cpp);
+        Assert::assertStringContainsString('Z_REFVAL_P(selectedFilter)', $cpp);
         Assert::assertStringContainsString('_qt_arg_1 = &_qt_arg_1_value;', $cpp);
         Assert::assertStringContainsString('auto _result = QStringPointerHolder::pickLabel(', $cpp);
         Assert::assertStringContainsString('_qt_arg_1);', $cpp);
@@ -164,7 +165,7 @@ it('handles QString pointer parameters', function (): void {
         Assert::assertStringContainsString('RETURN_STRINGL(_utf8.constData(), _utf8.size());', $cpp);
 });
 
-it('treats qbitarray factories as value returns and skips bool out parameters', function (): void {
+it('treats qbitarray factories as value returns and supports bool out parameters by-ref', function (): void {
         $fixtureRoot = qt_fixture_path('policy-qt');
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
     
@@ -185,14 +186,14 @@ it('treats qbitarray factories as value returns and skips bool out parameters', 
     
         $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
         Assert::assertSame('ok', $payload['status']);
-        Assert::assertContains('toUInt32', array_column($payload['skipped_methods'], 'name'));
-        Assert::assertContains('unsupported_output_parameter', array_column($payload['skipped_methods'], 'reason_code'));
-    
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qbitarray.stub.php');
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qbitarray.cpp');
+        Assert::assertStringContainsString('public function toUInt32(int $endianness, bool|null &$ok = null): int {}', $stub);
         Assert::assertStringContainsString('QBitArray _result = QBitArray::fromBits(ZSTR_VAL(data), (int)len);', $cpp);
         Assert::assertStringContainsString('_ret_intern->native_ptr = new QBitArray(std::move(_result));', $cpp);
         Assert::assertStringNotContainsString('QBitArray *_result = QBitArray::fromBits', $cpp);
-        Assert::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QBitArray, toUInt32)', $cpp);
+        Assert::assertStringContainsString('ZEND_METHOD(Qt_Core_QBitArray, toUInt32)', $cpp);
+        Assert::assertStringContainsString('ZEND_TRY_ASSIGN_REF_BOOL(ok, (bool)((*_qt_arg_1)));', $cpp);
 });
 
 it('skips object double pointer out parameters', function (): void {
@@ -217,14 +218,14 @@ it('skips object double pointer out parameters', function (): void {
         $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
         Assert::assertSame('ok', $payload['status']);
         Assert::assertContains('locate', array_column($payload['skipped_methods'], 'name'));
-        Assert::assertContains('unsupported_output_parameter', array_column($payload['skipped_methods'], 'reason_code'));
+        Assert::assertContains('unsupported_parameter_type', array_column($payload['skipped_methods'], 'reason_code'));
     
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qdoublepointerholder.cpp');
         Assert::assertStringContainsString('ZEND_METHOD(Qt_Core_QDoublePointerHolder, value)', $cpp);
         Assert::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QDoublePointerHolder, locate)', $cpp);
 });
 
-it('keeps optional QString pointer parameters as input-only string pointers', function (): void {
+it('keeps optional QString pointer parameters as writable nullable by-ref pointers', function (): void {
         $fixtureRoot = qt_fixture_path('policy-qt');
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
 
@@ -250,12 +251,14 @@ it('keeps optional QString pointer parameters as input-only string pointers', fu
         $stub = (string) file_get_contents($outputDir . '/classes/qt_qstringpointerholder.stub.php');
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qstringpointerholder.cpp');
 
-        Assert::assertStringContainsString('public static function pickLabel(string $fallback = \'\', string $selectedFilter = \'\'): string {}', $stub);
+        Assert::assertStringContainsString('public static function pickLabel(string $fallback = \'\', string|null &$selectedFilter = null): string {}', $stub);
         Assert::assertStringContainsString('QString _qt_arg_1_value;', $cpp);
         Assert::assertStringContainsString('QString *_qt_arg_1 = NULL;', $cpp);
-        Assert::assertStringContainsString('_qt_arg_1_value = QString::fromUtf8(ZSTR_VAL(selectedFilter), (int)ZSTR_LEN(selectedFilter));', $cpp);
+        Assert::assertStringContainsString('_qt_arg_1_value = QString::fromUtf8(', $cpp);
+        Assert::assertStringContainsString('Z_REFVAL_P(selectedFilter)', $cpp);
         Assert::assertStringContainsString('_qt_arg_1 = &_qt_arg_1_value;', $cpp);
         Assert::assertStringContainsString('QStringPointerHolder::pickLabel(QString::fromUtf8(ZSTR_VAL(fallback), (int)ZSTR_LEN(fallback)), _qt_arg_1)', $cpp);
+        Assert::assertStringContainsString('ZEND_TRY_ASSIGN_REF_NEW_STR(selectedFilter, _qt_ref_str_1);', $cpp);
 });
 
 it('uses fromInt for flag aliases', function (): void {
@@ -288,7 +291,7 @@ it('uses fromInt for flag aliases', function (): void {
         Assert::assertStringContainsString('RETURN_LONG((zend_long)(intern->native_ptr->modes()));', $cpp);
 });
 
-it('handles char strings and skips non const reference parameters', function (): void {
+it('handles char strings and supports writable qt string references', function (): void {
         $fixtureRoot = qt_fixture_path('policy-qt');
     
         $charOutputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
@@ -336,13 +339,14 @@ it('handles char strings and skips non const reference parameters', function ():
         $refStub = (string) file_get_contents($refOutputDir . '/classes/qt_qrefholder.stub.php');
         $refCpp = (string) file_get_contents($refOutputDir . '/classes/qt_qrefholder.cpp');
     
-        Assert::assertStringContainsString('public function swap(string $other): void {}', $refStub);
+        Assert::assertStringContainsString('public function swap(string &$other): void {}', $refStub);
         Assert::assertStringContainsString('ZEND_METHOD(Qt_Core_QRefHolder, swap)', $refCpp);
-        Assert::assertStringContainsString('QByteArray _qt_arg_0 = QByteArray(ZSTR_VAL(other), ZSTR_LEN(other));', $refCpp);
-        Assert::assertStringNotContainsString('&$other', $refStub);
+        Assert::assertStringContainsString('QByteArray _qt_arg_0 = QByteArray(', $refCpp);
+        Assert::assertStringContainsString('Z_REFVAL_P(other)', $refCpp);
+        Assert::assertStringContainsString('ZEND_TRY_ASSIGN_REF_NEW_STR(other, _qt_ref_str_0);', $refCpp);
 });
 
-it('builds an input only argv constructor bridge', function (): void {
+it('builds an argv constructor bridge', function (): void {
         $fixtureRoot = qt_fixture_path('policy-qt');
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
     
@@ -372,7 +376,7 @@ it('builds an input only argv constructor bridge', function (): void {
         Assert::assertStringContainsString('std::vector<QByteArray> argv_storage;', $header);
         Assert::assertStringContainsString('std::vector<char *> argv_pointers;', $header);
         Assert::assertStringContainsString('void *extra_storage;', $header);
-        Assert::assertStringContainsString('public function __construct(int $argc = 0, array $argv = [], int $flags = 0) {}', $stub);
+        Assert::assertStringContainsString('public function __construct(int &$argc = 0, array $argv = [], int $flags = 0) {}', $stub);
         Assert::assertStringContainsString('intern->extra_storage = new qt_argv_storage();', $cpp);
         Assert::assertStringContainsString('if (intern->extra_storage == NULL) {', $cpp);
         Assert::assertStringContainsString('intern->extra_storage = new qt_argv_storage();', $cpp);

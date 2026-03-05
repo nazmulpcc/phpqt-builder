@@ -42,6 +42,15 @@ class OverloadParamContext
     /** Whether this parameter uses the char** argv bridge */
     public readonly bool $isCharPointerArray;
 
+    /** Whether this parameter supports writable PHP by-reference bridging */
+    public readonly bool $isWritableByRef;
+
+    /** Whether writable by-ref uses pointer form (`T *`) */
+    public readonly bool $isWritableByRefPointer;
+
+    /** Whether writable by-ref maps to Qt string classes (QString/QByteArray) */
+    public readonly bool $isWritableQtString;
+
     public function __construct(
         OverloadParameter $param,
         TypeBridge $typeBridge,
@@ -58,5 +67,8 @@ class OverloadParamContext
         $mapper = new CppToPhpTypeMapper();
         $this->phpType = $mapper->map($param->cppType);
         $this->isCharPointerArray = $this->phpType === 'array' && $param->pointerDepth >= 2;
+        $this->isWritableByRef = $param->isWritableByRef;
+        $this->isWritableByRefPointer = $param->isWritableByRefPointer;
+        $this->isWritableQtString = $param->isWritableQtString;
     }
 }

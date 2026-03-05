@@ -350,6 +350,10 @@ class ClassContext
      */
     public function stubDefault(ParamContext $param): string
     {
+        if ($param->isNullableByRef) {
+            return 'null';
+        }
+
         return match ($param->phpType) {
             'int' => '0',
             'float' => '0.0',

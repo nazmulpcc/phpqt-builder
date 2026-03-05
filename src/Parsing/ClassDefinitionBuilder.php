@@ -225,6 +225,13 @@ class ClassDefinitionBuilder
         $params = array_map(
             function (array $p): OverloadParameter {
                 $metadata = $this->analyzeCppParameterType((string) ($p['type'] ?? ''));
+                $phpType = $this->typeMapper->map((string) ($p['type'] ?? ''));
+                $writableByRefMeta = $this->analyzeWritableByRefParameter(
+                    (string) ($p['type'] ?? ''),
+                    $phpType,
+                    $metadata,
+                    (bool) ($p['has_default'] ?? false),
+                );
 
                 return new OverloadParameter(
                     name: (string) ($p['name'] ?? ''),
@@ -235,6 +242,9 @@ class ClassDefinitionBuilder
                     isNonConstReference: $metadata['is_non_const_reference'],
                     isRvalueReference: $metadata['is_rvalue_reference'],
                     pointerDepth: $metadata['pointer_depth'],
+                    isWritableByRef: $writableByRefMeta['is_writable_by_ref'],
+                    isWritableByRefPointer: $writableByRefMeta['is_writable_by_ref_pointer'],
+                    isWritableQtString: $writableByRefMeta['is_writable_qt_string'],
                 );
             },
             $parameters,
@@ -343,6 +353,10 @@ class ClassDefinitionBuilder
             $names = [];
             $allHaveDefault = true;
             $someVariantsShorter = false;
+            $allPresentVariantsWritableByRef = true;
+            $writableKinds = [];
+            $writablePhpTypes = [];
+            $allWritablePointerVariantsHaveDefault = true;
 
             foreach ($variants as $v) {
                 $params = $this->normalizeWritableParameterDefaults($v['parameters']);
@@ -353,6 +367,24 @@ class ClassDefinitionBuilder
                 }
 
                 $phpTypes[] = $this->typeMapper->map($params[$i]['type']);
+                $paramType = (string) ($params[$i]['type'] ?? '');
+                $paramPhpType = $this->typeMapper->map($paramType);
+                $paramMeta = $this->analyzeCppParameterType($paramType);
+                $writableMeta = $this->analyzeWritableByRefParameter(
+                    $paramType,
+                    $paramPhpType,
+                    $paramMeta,
+                    (bool) ($params[$i]['has_default'] ?? false),
+                );
+                if (!$writableMeta['is_writable_by_ref']) {
+                    $allPresentVariantsWritableByRef = false;
+                } else {
+                    $writableKinds[] = $writableMeta['kind'];
+                    $writablePhpTypes[] = $paramPhpType;
+                    if ($writableMeta['is_writable_by_ref_pointer'] && !$writableMeta['has_default']) {
+                        $allWritablePointerVariantsHaveDefault = false;
+                    }
+                }
 
                 $pName = $params[$i]['name'];
                 if ($pName !== '' && !\in_array($pName, $names, true)) {
@@ -365,6 +397,17 @@ class ClassDefinitionBuilder
             }
 
             $hasDefault = $i >= $minRequiredCount || $someVariantsShorter || $allHaveDefault;
+            $uniquePhpTypes = array_values(array_unique($phpTypes));
+            $uniqueWritablePhpTypes = array_values(array_unique($writablePhpTypes));
+            $uniqueWritableKinds = array_values(array_unique($writableKinds));
+            $isByRef = $allPresentVariantsWritableByRef
+                && $uniquePhpTypes !== []
+                && \count($uniquePhpTypes) === 1
+                && \count($uniqueWritablePhpTypes) === 1
+                && \count($uniqueWritableKinds) === 1;
+            $isNullableByRef = $isByRef
+                && $uniqueWritableKinds[0] === 'pointer'
+                && $allWritablePointerVariantsHaveDefault;
 
             // Pick a unique name. Try names from the variants first, then fallback.
             $name = $this->pickUniqueName($names, $i, $usedNames);
@@ -375,6 +418,8 @@ class ClassDefinitionBuilder
                 phpType: $this->unionType($phpTypes),
                 hasDefault: $hasDefault,
                 position: $i,
+                isByRef: $isByRef,
+                isNullableByRef: $isNullableByRef,
             );
         }
 
@@ -435,6 +480,60 @@ class ClassDefinitionBuilder
         $normalized = trim(preg_replace('/\s+/', ' ', $normalized) ?? $normalized);
 
         return preg_match('/^char\s*\*\s*\*$/', $normalized) === 1;
+    }
+
+    /**
+     * @param array{is_reference: bool, is_const_reference: bool, is_non_const_reference: bool, is_rvalue_reference: bool, pointer_depth: int} $paramMetadata
+     * @return array{is_writable_by_ref: bool, is_writable_by_ref_pointer: bool, is_writable_qt_string: bool, has_default: bool, kind: string}
+     */
+    private function analyzeWritableByRefParameter(
+        string $cppType,
+        string $phpType,
+        array $paramMetadata,
+        bool $hasDefault,
+    ): array {
+        $trimmed = trim($cppType);
+        $baseType = $this->normalizeBaseCppType($trimmed);
+        $isScalar = \in_array($phpType, ['int', 'float', 'bool'], true);
+        $isQtString = $phpType === 'string' && \in_array($baseType, ['QString', 'QByteArray'], true);
+        if (!$isScalar && !$isQtString) {
+            return [
+                'is_writable_by_ref' => false,
+                'is_writable_by_ref_pointer' => false,
+                'is_writable_qt_string' => false,
+                'has_default' => $hasDefault,
+                'kind' => 'none',
+            ];
+        }
+
+        $isNonConstPointer = $paramMetadata['pointer_depth'] === 1
+            && !$paramMetadata['is_reference']
+            && preg_match('/^\s*const\b/', $trimmed) !== 1;
+        $isWritableRef = $paramMetadata['is_non_const_reference'] && $paramMetadata['pointer_depth'] === 0;
+        $isWritableByRef = $isWritableRef || $isNonConstPointer;
+
+        return [
+            'is_writable_by_ref' => $isWritableByRef,
+            'is_writable_by_ref_pointer' => $isNonConstPointer,
+            'is_writable_qt_string' => $isQtString,
+            'has_default' => $hasDefault,
+            'kind' => $isNonConstPointer ? 'pointer' : ($isWritableRef ? 'reference' : 'none'),
+        ];
+    }
+
+    private function normalizeBaseCppType(string $cppType): string
+    {
+        $type = trim($cppType);
+        $type = preg_replace('/\bconst\b/', '', $type) ?? $type;
+        $type = trim(preg_replace('/\s+/', ' ', $type) ?? $type);
+        $type = rtrim($type, '& ');
+        if (!str_contains($type, '<')) {
+            while (str_ends_with($type, '*')) {
+                $type = rtrim(substr($type, 0, -1));
+            }
+        }
+
+        return trim($type);
     }
 
     /**
