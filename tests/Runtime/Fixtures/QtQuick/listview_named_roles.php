@@ -120,7 +120,8 @@ final class RuntimeQuickNamedRoleDriver extends \Qt\Core\QObject
     }
 }
 
-$app = new \Qt\Gui\QGuiApplication(0, []);
+$argc = 0;
+$app = new \Qt\Gui\QGuiApplication($argc, []);
 $model = new RuntimeQuickNamedRoleModel();
 $engine = new \Qt\Qml\QQmlApplicationEngine();
 $engine->rootContext()->setContextProperty('salesFeedModel', $model);

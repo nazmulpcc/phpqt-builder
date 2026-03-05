@@ -18,10 +18,12 @@ readonly class PhpParameter
         public string $phpType,
         public bool $hasDefault,
         public int $position,
+        public bool $isByRef = false,
+        public bool $isNullableByRef = false,
     ) {}
 
     /**
-     * @return array{name: string, php_type: string, has_default: bool, position: int}
+     * @return array{name: string, php_type: string, has_default: bool, position: int, is_by_ref: bool, is_nullable_by_ref: bool}
      */
     public function toArray(): array
     {
@@ -30,6 +32,8 @@ readonly class PhpParameter
             'php_type' => $this->phpType,
             'has_default' => $this->hasDefault,
             'position' => $this->position,
+            'is_by_ref' => $this->isByRef,
+            'is_nullable_by_ref' => $this->isNullableByRef,
         ];
     }
 }

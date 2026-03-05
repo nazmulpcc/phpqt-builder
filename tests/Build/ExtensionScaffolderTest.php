@@ -193,6 +193,7 @@ it('uses a generated header guard that does not collide with qt', function (): v
         parent: 'QObject',
         isAbstract: true,
         isCopyConstructible: true,
+        hasPublicConstructor: true,
         hasPublicDestructor: true,
         properties: [],
         methods: [],
@@ -215,6 +216,7 @@ it('includes qstring and qbytearray headers in generated source', function (): v
         parent: null,
         isAbstract: false,
         isCopyConstructible: true,
+        hasPublicConstructor: true,
         hasPublicDestructor: true,
         properties: [],
         methods: [
@@ -259,6 +261,7 @@ it('qualifies cross namespace qt types in generated stubs', function (): void {
         parent: 'QCoreApplication',
         isAbstract: false,
         isCopyConstructible: false,
+        hasPublicConstructor: true,
         hasPublicDestructor: true,
         properties: [],
         methods: [
@@ -310,6 +313,7 @@ it('disables cloning for value types without copy constructors', function (): vo
         parent: null,
         isAbstract: false,
         isCopyConstructible: false,
+        hasPublicConstructor: true,
         hasPublicDestructor: true,
         properties: [],
         methods: [],
@@ -332,6 +336,7 @@ it('does not mark generated value type stubs as final', function (): void {
         parent: 'QPaintDevice',
         isAbstract: false,
         isCopyConstructible: true,
+        hasPublicConstructor: true,
         hasPublicDestructor: true,
         properties: [],
         methods: [],
@@ -346,4 +351,71 @@ it('does not mark generated value type stubs as final', function (): void {
     expect($stub)->toContain('class QPixmap extends QPaintDevice')
         ->not->toContain('final class QPixmap');
     expect($source)->not->toContain('ce_flags |= ZEND_ACC_FINAL;');
+});
+
+it('skips unchanged class outputs on repeated generation', function (): void {
+    $outputDir = qt_temp_dir('qtbuilder-generator-');
+    $generator = new ExtensionGenerator();
+    $phpClass = new PhpClass(
+        name: 'QPoint',
+        parent: null,
+        isAbstract: false,
+        isCopyConstructible: true,
+        hasPublicConstructor: true,
+        hasPublicDestructor: true,
+        properties: [],
+        methods: [],
+        signals: [],
+    );
+
+    $generator->generate($phpClass, 'Qt\\Core', $outputDir);
+    $firstStats = $generator->lastWriteStats()->toArray();
+    expect($firstStats['written'])->toBe(3);
+
+    $headerFile = $outputDir . '/qt_qpoint.h';
+    touch($headerFile, 1_000_000_000);
+    clearstatcache(true, $headerFile);
+    $before = filemtime($headerFile);
+
+    $generator->generate($phpClass, 'Qt\\Core', $outputDir);
+    $secondStats = $generator->lastWriteStats()->toArray();
+    clearstatcache(true, $headerFile);
+    $after = filemtime($headerFile);
+
+    expect($secondStats['unchanged'])->toBe(3)
+        ->and($secondStats['written'])->toBe(0)
+        ->and($after)->toBe($before);
+});
+
+it('skips unchanged core scaffold files on repeated finalize', function (): void {
+    $outputDir = qt_temp_dir('qtbuilder-scaffolder-') . '/ext';
+    $installation = new QtInstallation(
+        rootPath: '/opt/qt',
+        osFamily: 'Darwin',
+        includeRoots: ['/opt/qt/include'],
+        libraryRoots: ['/opt/qt/lib'],
+        moduleHeaderRoots: ['QtCore' => '/opt/qt/include/QtCore'],
+        tools: [],
+    );
+    $context = new ExtensionBuildContext('qt', '0.1.0', dirname($outputDir), $outputDir, $installation, ['QtCore'], ['QPoint']);
+
+    $scaffolder = new ExtensionScaffolder();
+    $scaffolder->prepare($context);
+    $scaffolder->finalize($context);
+    $firstStats = $scaffolder->lastWriteStats()->toArray();
+    expect($firstStats['written'])->toBe(3);
+
+    $moduleSource = $outputDir . '/qt.cpp';
+    touch($moduleSource, 1_000_000_000);
+    clearstatcache(true, $moduleSource);
+    $before = filemtime($moduleSource);
+
+    $scaffolder->finalize($context);
+    $secondStats = $scaffolder->lastWriteStats()->toArray();
+    clearstatcache(true, $moduleSource);
+    $after = filemtime($moduleSource);
+
+    expect($secondStats['unchanged'])->toBe(3)
+        ->and($secondStats['written'])->toBe(0)
+        ->and($after)->toBe($before);
 });

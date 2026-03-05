@@ -35,6 +35,7 @@
 #ifndef QT_ARGV_STORAGE_DEFINED
 #define QT_ARGV_STORAGE_DEFINED
 typedef struct _{!! $ctx->argvStorageStructName !!} {
+    int argc_value = 0;
     std::vector<QByteArray> argv_storage;
     std::vector<char *> argv_pointers;
 } {!! $ctx->argvStorageStructName !!};

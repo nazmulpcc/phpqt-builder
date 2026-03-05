@@ -36,14 +36,43 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
     }
 
 @if($ctx->requiresVirtualTrampoline)
-    bool _qt_use_trampoline = (Z_OBJCE_P(ZEND_THIS) != {!! $ctx->ceVarName !!});
+    zend_class_entry *_qt_actual_ce = Z_OBJCE_P(ZEND_THIS);
+@if($ctx->isAbstract)
+    bool _qt_use_trampoline = (_qt_actual_ce != {!! $ctx->ceVarName !!});
+@else
+    bool _qt_has_virtual_override = false;
+    if (_qt_actual_ce != {!! $ctx->ceVarName !!}) {
+        static const char * const _qt_virtual_methods[] = {
+@foreach($ctx->virtualDispatchMethodNames() as $methodName)
+            "{!! $methodName !!}",
+@endforeach
+        };
+        _qt_has_virtual_override = qt_any_virtual_method_overridden_in_ce(
+            _qt_actual_ce,
+            {!! $ctx->ceVarName !!},
+            _qt_virtual_methods,
+            sizeof(_qt_virtual_methods) / sizeof(_qt_virtual_methods[0])
+        );
+    }
+    bool _qt_use_trampoline = (_qt_actual_ce != {!! $ctx->ceVarName !!}) && _qt_has_virtual_override;
 @endif
+@endif
+@if($method->overloadCount === 0)
+    zend_throw_error(NULL, "{!! $ctx->phpClassName !!} cannot be instantiated directly.");
+    RETURN_THROWS();
+@else
 
 @if($method->hasNoParams())
 @if($ctx->requiresVirtualTrampoline)
     if (_qt_use_trampoline) {
-        intern->native_ptr = new {!! $ctx->nativeInstantiationType !!}();
-        static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr)->php_object = &intern->std;
+        intern->native_ptr = qt_new_default_native<{!! $ctx->nativeInstantiationType !!}>();
+        if (intern->native_ptr == NULL) {
+            zend_throw_error(NULL, "{!! $ctx->phpClassName !!} cannot be instantiated directly.");
+            RETURN_THROWS();
+        }
+        auto *_qt_trampoline = static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr);
+        _qt_trampoline->php_object = &intern->std;
+        _qt_trampoline->qt_cache_virtual_overrides(_qt_actual_ce, {!! $ctx->ceVarName !!});
         intern->native_is_generated_subclass = true;
         intern->native_is_virtual_trampoline = true;
     } else {
@@ -51,13 +80,21 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
         zend_throw_error(NULL, "Abstract class {!! $ctx->phpClassName !!} cannot be instantiated directly.");
         RETURN_THROWS();
 @else
-        intern->native_ptr = new {!! $ctx->plainNativeInstantiationType !!}();
+        intern->native_ptr = qt_new_default_native<{!! $ctx->plainNativeInstantiationType !!}>();
+        if (intern->native_ptr == NULL) {
+            zend_throw_error(NULL, "{!! $ctx->phpClassName !!} cannot be instantiated directly.");
+            RETURN_THROWS();
+        }
         intern->native_is_generated_subclass = {!! $ctx->plainInstantiationUsesGeneratedType() ? 'true' : 'false' !!};
         intern->native_is_virtual_trampoline = false;
 @endif
     }
 @else
-    intern->native_ptr = new {!! $ctx->nativeInstantiationType !!}();
+    intern->native_ptr = qt_new_default_native<{!! $ctx->nativeInstantiationType !!}>();
+    if (intern->native_ptr == NULL) {
+        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} cannot be instantiated directly.");
+        RETURN_THROWS();
+    }
 @if($ctx->tracksGeneratedNativeSubclass)
     intern->native_is_generated_subclass = true;
 @endif
@@ -81,7 +118,9 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
 @if($ctx->requiresVirtualTrampoline)
     if (_qt_use_trampoline) {
         intern->native_ptr = new {!! $ctx->nativeInstantiationType !!}({!! implode(', ', $callPlan['args']) !!});
-        static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr)->php_object = &intern->std;
+        auto *_qt_trampoline = static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr);
+        _qt_trampoline->php_object = &intern->std;
+        _qt_trampoline->qt_cache_virtual_overrides(_qt_actual_ce, {!! $ctx->ceVarName !!});
         intern->native_is_generated_subclass = true;
         intern->native_is_virtual_trampoline = true;
     } else {
@@ -110,6 +149,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
     }
 @endif
 @endforeach
+@endif
 @endif
 @endif
 }

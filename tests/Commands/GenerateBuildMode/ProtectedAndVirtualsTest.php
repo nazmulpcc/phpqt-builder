@@ -36,7 +36,7 @@ it('generates protected methods through access shims', function (): void {
     
         Assert::assertStringContainsString('protected function tweak(): void {}', $stub);
         Assert::assertStringContainsString('class qt_access_QProtectedThing : public QProtectedThing', $cpp);
-        Assert::assertStringContainsString('intern->native_ptr = new qt_access_QProtectedThing()', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr = qt_new_default_native<qt_access_QProtectedThing>()', $cpp);
         Assert::assertStringContainsString('static_cast<qt_access_QProtectedThing *>(intern->native_ptr)->qt_access_tweak_0()', $cpp);
 });
 
@@ -69,9 +69,14 @@ it('generates protected virtual methods with native trampolines', function (): v
         Assert::assertStringContainsString('protected function value(): int {}', $stub);
         Assert::assertStringContainsString('class qt_access_QProtectedVirtualThing : public QProtectedVirtualThing', $cpp);
         Assert::assertStringContainsString('class qt_php_QProtectedVirtualThing : public qt_access_QProtectedVirtualThing', $cpp);
-        Assert::assertStringContainsString('bool _qt_use_trampoline = (Z_OBJCE_P(ZEND_THIS) != qt_ce_QProtectedVirtualThing);', $cpp);
-        Assert::assertStringContainsString('intern->native_ptr = new qt_access_QProtectedVirtualThing();', $cpp);
-        Assert::assertStringContainsString('intern->native_ptr = new qt_php_QProtectedVirtualThing();', $cpp);
+        Assert::assertStringContainsString('zend_class_entry *_qt_actual_ce = Z_OBJCE_P(ZEND_THIS);', $cpp);
+        Assert::assertStringContainsString('bool _qt_has_virtual_override = false;', $cpp);
+        Assert::assertStringContainsString('static const char * const _qt_virtual_methods[] = {', $cpp);
+        Assert::assertStringContainsString('"value",', $cpp);
+        Assert::assertStringContainsString('_qt_has_virtual_override = qt_any_virtual_method_overridden_in_ce(', $cpp);
+        Assert::assertStringContainsString('bool _qt_use_trampoline = (_qt_actual_ce != qt_ce_QProtectedVirtualThing) && _qt_has_virtual_override;', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr = qt_new_default_native<qt_access_QProtectedVirtualThing>();', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr = qt_new_default_native<qt_php_QProtectedVirtualThing>();', $cpp);
         Assert::assertStringContainsString('intern->native_is_virtual_trampoline = true;', $cpp);
         Assert::assertStringContainsString('intern->native_is_virtual_trampoline = false;', $cpp);
         Assert::assertStringContainsString('int value() const override', $cpp);

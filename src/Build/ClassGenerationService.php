@@ -7,6 +7,7 @@ namespace QtBuilder\Build;
 use QtBuilder\CodeGen\TypeBridge;
 use QtBuilder\Definition\PhpClass;
 use QtBuilder\Definition\PhpMethod;
+use QtBuilder\Definition\PhpParameter;
 use QtBuilder\Filtering\ClassExposurePolicy;
 use QtBuilder\Filtering\MethodExposurePolicy;
 use QtBuilder\Parsing\ClassDefinitionBuilder;
@@ -75,12 +76,20 @@ class ClassGenerationService
 
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
         if ($parentClass !== null && !in_array($parentClass, $allowedClasses, true)) {
+            if ($this->canIgnoreUnavailableParent($parentClass)) {
+                $classData['bases'] = array_values(array_filter(
+                    (array) ($classData['bases'] ?? []),
+                    static fn(mixed $base): bool => is_string($base) && $base !== $parentClass,
+                ));
+                $parentClass = null;
+            } else {
             return ClassGenerationResult::skipped(
                 $className,
                 $headerPath,
                 'unsupported_parent_class',
                 sprintf('Parent class %s is not available for generation.', $parentClass),
             );
+            }
         }
 
         $filtered = $this->methodPolicy->filter($classData, $allowedClasses);
@@ -147,6 +156,7 @@ class ClassGenerationService
         );
         $phpClass = $abstractConstructorAdjusted['class'];
         $skippedMethods = [...$skippedMethods, ...$abstractConstructorAdjusted['skipped_methods']];
+        $phpClass = $this->ensureProtectedUnavailableConstructor($phpClass, $sourceClassData);
         $phpClass = $this->stripQObjectRuntimeMethods($phpClass);
 
         if (!$this->shouldGenerateClassShell($phpClass, $classData)) {
@@ -259,12 +269,20 @@ class ClassGenerationService
 
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
         if ($parentClass !== null && !in_array($parentClass, $allowedClasses, true)) {
+            if ($this->canIgnoreUnavailableParent($parentClass)) {
+                $classData['bases'] = array_values(array_filter(
+                    (array) ($classData['bases'] ?? []),
+                    static fn(mixed $base): bool => is_string($base) && $base !== $parentClass,
+                ));
+                $parentClass = null;
+            } else {
             return ClassGenerationResult::skipped(
                 $className,
                 $headerPath,
                 'unsupported_parent_class',
                 sprintf('Parent class %s is not available for generation.', $parentClass),
             );
+            }
         }
 
         $filtered = $this->methodPolicy->filter($classData, $allowedClasses);
@@ -330,6 +348,7 @@ class ClassGenerationService
         );
         $phpClass = $abstractConstructorAdjusted['class'];
         $skippedMethods = [...$skippedMethods, ...$abstractConstructorAdjusted['skipped_methods']];
+        $phpClass = $this->ensureProtectedUnavailableConstructor($phpClass, $sourceClassData);
         $phpClass = $this->stripQObjectRuntimeMethods($phpClass);
 
         if (!$this->shouldGenerateClassShell($phpClass, $classData)) {
@@ -403,10 +422,27 @@ class ClassGenerationService
 
         foreach ($phpClass->methods as $method) {
             $parentMethod = $parentMethods[$method->name] ?? null;
-            if ($parentMethod === null || $this->isCompatibleInheritedMethod($method, $parentMethod)) {
+            if ($parentMethod !== null && $this->isCompatibleInheritedMethod($method, $parentMethod)) {
                 $normalizedMethod = $this->normalizeAbstractMethodAgainstParent($method, $parentMethod);
                 $methods[] = $normalizedMethod;
                 $usedMethodNames[$normalizedMethod->name] = true;
+                continue;
+            }
+
+            $canonicalParentMethod = $this->findCanonicalContractParentMethod($method, $parentMethods);
+            if ($canonicalParentMethod !== null) {
+                $normalizedMethod = $this->normalizeAbstractMethodAgainstParent(
+                    $this->withMethodName($method, $canonicalParentMethod->name),
+                    $canonicalParentMethod,
+                );
+                $methods[] = $normalizedMethod;
+                $usedMethodNames[$normalizedMethod->name] = true;
+                continue;
+            }
+
+            if ($parentMethod === null) {
+                $methods[] = $method;
+                $usedMethodNames[$method->name] = true;
                 continue;
             }
 
@@ -434,11 +470,13 @@ class ClassGenerationService
                 parent: $phpClass->parent,
                 isAbstract: $phpClass->isAbstract,
                 isCopyConstructible: $phpClass->isCopyConstructible,
+                hasPublicConstructor: $phpClass->hasPublicConstructor,
                 hasPublicDestructor: $phpClass->hasPublicDestructor,
                 isQObjectDerived: $phpClass->isQObjectDerived,
                 properties: $phpClass->properties,
                 methods: $methods,
                 signals: $phpClass->signals,
+                classConstants: $phpClass->classConstants,
             ),
             'skipped_methods' => $skippedMethods,
         ];
@@ -809,7 +847,7 @@ class ClassGenerationService
         array $preparedClassDataByClass,
         array &$parameterClassFactsCache,
     ): ?array {
-        $parameters = is_array($method['parameters'] ?? null) ? $method['parameters'] : [];
+        $parameters = $this->effectiveSignalCallbackParameters($method);
 
         foreach ($parameters as $parameter) {
             $cppType = is_string($parameter['type'] ?? null) ? $parameter['type'] : '';
@@ -863,6 +901,29 @@ class ClassGenerationService
         }
 
         return null;
+    }
+
+    /**
+     * @param array<string, mixed> $method
+     * @return list<array<string, mixed>>
+     */
+    private function effectiveSignalCallbackParameters(array $method): array
+    {
+        $parameters = is_array($method['parameters'] ?? null) ? $method['parameters'] : [];
+        if (($method['is_signal'] ?? false) !== true || $parameters === []) {
+            return $parameters;
+        }
+
+        $lastIndex = count($parameters) - 1;
+        $lastType = is_string($parameters[$lastIndex]['type'] ?? null)
+            ? trim((string) $parameters[$lastIndex]['type'])
+            : '';
+
+        if ($lastType === 'QPrivateSignal') {
+            array_pop($parameters);
+        }
+
+        return $parameters;
     }
 
     /**
@@ -1188,13 +1249,25 @@ class ClassGenerationService
 
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
         if ($parentClass !== null && !in_array($parentClass, $allowedClasses, true)) {
-            return null;
+            if ($this->canIgnoreUnavailableParent($parentClass)) {
+                $classData['bases'] = array_values(array_filter(
+                    (array) ($classData['bases'] ?? []),
+                    static fn(mixed $base): bool => is_string($base) && $base !== $parentClass,
+                ));
+            } else {
+                return null;
+            }
         }
 
         $filtered = $this->methodPolicy->filter($classData, $allowedClasses);
         $classData['selected_methods'] = $filtered['selected_methods'];
 
         return $classData;
+    }
+
+    private function canIgnoreUnavailableParent(string $parentClass): bool
+    {
+        return $parentClass === 'QIODeviceBase';
     }
 
     /**
@@ -1304,10 +1377,27 @@ class ClassGenerationService
 
         foreach ($phpClass->methods as $method) {
             $parentMethod = $parentMethods[$method->name] ?? null;
-            if ($parentMethod === null || $this->isCompatibleInheritedMethod($method, $parentMethod)) {
+            if ($parentMethod !== null && $this->isCompatibleInheritedMethod($method, $parentMethod)) {
                 $normalizedMethod = $this->normalizeAbstractMethodAgainstParent($method, $parentMethod);
                 $methods[] = $normalizedMethod;
                 $usedMethodNames[$normalizedMethod->name] = true;
+                continue;
+            }
+
+            $canonicalParentMethod = $this->findCanonicalContractParentMethod($method, $parentMethods);
+            if ($canonicalParentMethod !== null) {
+                $normalizedMethod = $this->normalizeAbstractMethodAgainstParent(
+                    $this->withMethodName($method, $canonicalParentMethod->name),
+                    $canonicalParentMethod,
+                );
+                $methods[] = $normalizedMethod;
+                $usedMethodNames[$normalizedMethod->name] = true;
+                continue;
+            }
+
+            if ($parentMethod === null) {
+                $methods[] = $method;
+                $usedMethodNames[$method->name] = true;
                 continue;
             }
 
@@ -1335,11 +1425,13 @@ class ClassGenerationService
                 parent: $phpClass->parent,
                 isAbstract: $phpClass->isAbstract,
                 isCopyConstructible: $phpClass->isCopyConstructible,
+                hasPublicConstructor: $phpClass->hasPublicConstructor,
                 hasPublicDestructor: $phpClass->hasPublicDestructor,
                 isQObjectDerived: $phpClass->isQObjectDerived,
                 properties: $phpClass->properties,
                 methods: $methods,
                 signals: $phpClass->signals,
+                classConstants: $phpClass->classConstants,
             ),
             'skipped_methods' => $skippedMethods,
         ];
@@ -1407,7 +1499,7 @@ class ClassGenerationService
             return false;
         }
 
-        if ($parent->access === 'public' && $child->access !== 'public') {
+        if ($parent->access === 'public' && $child->access !== 'public' && !$parent->isAbstractMethod) {
             return false;
         }
 
@@ -1415,7 +1507,7 @@ class ClassGenerationService
             return false;
         }
 
-        if ($this->requiredParameterCount($child) > $this->requiredParameterCount($parent)) {
+        if ($this->requiredParameterCount($child) > $this->requiredParameterCount($parent) && !$parent->isAbstractMethod) {
             return false;
         }
 
@@ -1425,11 +1517,14 @@ class ClassGenerationService
                 return false;
             }
 
-            if ($childParameter->phpType !== $parentParameter->phpType) {
+            if (
+                !$this->isParentParameterTypeAcceptedByChild($parentParameter->phpType, $childParameter->phpType)
+                && !$parent->isAbstractMethod
+            ) {
                 return false;
             }
 
-            if ($parentParameter->hasDefault && !$childParameter->hasDefault) {
+            if ($parentParameter->hasDefault && !$childParameter->hasDefault && !$parent->isAbstractMethod) {
                 return false;
             }
         }
@@ -1440,7 +1535,10 @@ class ClassGenerationService
             }
         }
 
-        if ($child->returnType !== $parent->returnType) {
+        if (
+            !$this->isChildReturnTypeCompatibleWithParent($child->returnType, $parent->returnType)
+            && !$parent->isAbstractMethod
+        ) {
             return false;
         }
 
@@ -1449,22 +1547,215 @@ class ClassGenerationService
 
     private function normalizeAbstractMethodAgainstParent(PhpMethod $method, ?PhpMethod $parentMethod): PhpMethod
     {
-        if (!$method->isAbstractMethod || $parentMethod === null || $parentMethod->isAbstractMethod) {
+        if ($parentMethod === null) {
+            return $method;
+        }
+
+        $isAbstractMethod = $method->isAbstractMethod;
+        if ($isAbstractMethod && !$parentMethod->isAbstractMethod) {
+            $isAbstractMethod = false;
+        }
+
+        $access = $method->access;
+        if ($parentMethod->isAbstractMethod && $parentMethod->access === 'public' && $access !== 'public') {
+            $access = 'public';
+        }
+
+        $parameters = $method->parameters;
+        if ($parentMethod->isAbstractMethod) {
+            foreach ($parentMethod->parameters as $index => $parentParameter) {
+                $childParameter = $parameters[$index] ?? null;
+                if ($childParameter === null) {
+                    continue;
+                }
+
+                $normalizedType = $this->mergeParentTypesIntoChild($parentParameter->phpType, $childParameter->phpType);
+                $normalizedDefault = $childParameter->hasDefault || $parentParameter->hasDefault;
+                if (
+                    $normalizedType === $childParameter->phpType
+                    && $normalizedDefault === $childParameter->hasDefault
+                ) {
+                    continue;
+                }
+
+                $parameters[$index] = new PhpParameter(
+                    name: $childParameter->name,
+                    phpType: $normalizedType,
+                    hasDefault: $normalizedDefault,
+                    position: $childParameter->position,
+                    isByRef: $childParameter->isByRef,
+                    isNullableByRef: $childParameter->isNullableByRef,
+                );
+            }
+
+            for ($index = count($parentMethod->parameters); $index < count($parameters); $index++) {
+                $childParameter = $parameters[$index] ?? null;
+                if ($childParameter === null || $childParameter->hasDefault) {
+                    continue;
+                }
+
+                $parameters[$index] = new PhpParameter(
+                    name: $childParameter->name,
+                    phpType: $childParameter->phpType,
+                    hasDefault: true,
+                    position: $childParameter->position,
+                    isByRef: $childParameter->isByRef,
+                    isNullableByRef: $childParameter->isNullableByRef,
+                );
+            }
+        }
+
+        $returnType = $method->returnType;
+        if (
+            $parentMethod->isAbstractMethod
+            && !$this->isChildReturnTypeCompatibleWithParent($returnType, $parentMethod->returnType)
+        ) {
+            $returnType = $parentMethod->returnType;
+        }
+
+        if (
+            $isAbstractMethod === $method->isAbstractMethod
+            && $access === $method->access
+            && $parameters === $method->parameters
+            && $returnType === $method->returnType
+        ) {
             return $method;
         }
 
         return new PhpMethod(
             name: $method->name,
+            access: $access,
+            isStatic: $method->isStatic,
+            isSignal: $method->isSignal,
+            isSlot: $method->isSlot,
+            isAbstractMethod: $isAbstractMethod,
+            returnType: $returnType,
+            parameters: $parameters,
+            overloads: $method->overloads,
+            cppName: $method->cppName,
+        );
+    }
+
+    /**
+     * @param array<string, PhpMethod> $parentMethods
+     */
+    private function findCanonicalContractParentMethod(PhpMethod $method, array $parentMethods): ?PhpMethod
+    {
+        $baseName = $method->cppName ?? $method->name;
+        $signatureSuffix = $this->methodSignatureSuffix($method);
+        $candidateNames = array_values(array_unique(array_filter([
+            $baseName,
+            $signatureSuffix !== '' ? $baseName . $signatureSuffix : null,
+            $method->name !== $baseName ? $method->name : null,
+        ], static fn(?string $name): bool => is_string($name) && $name !== '')));
+
+        foreach ($candidateNames as $candidateName) {
+            $candidate = $parentMethods[$candidateName] ?? null;
+            if ($candidate === null || !$candidate->isAbstractMethod) {
+                continue;
+            }
+
+            if (!$this->isCompatibleInheritedMethod($method, $candidate)) {
+                continue;
+            }
+
+            return $candidate;
+        }
+
+        return null;
+    }
+
+    private function withMethodName(PhpMethod $method, string $newName): PhpMethod
+    {
+        if ($newName === $method->name) {
+            return $method;
+        }
+
+        return new PhpMethod(
+            name: $newName,
             access: $method->access,
             isStatic: $method->isStatic,
             isSignal: $method->isSignal,
             isSlot: $method->isSlot,
-            isAbstractMethod: false,
+            isAbstractMethod: $method->isAbstractMethod,
             returnType: $method->returnType,
             parameters: $method->parameters,
             overloads: $method->overloads,
             cppName: $method->cppName,
         );
+    }
+
+    private function isParentParameterTypeAcceptedByChild(string $parentType, string $childType): bool
+    {
+        $parentParts = $this->normalizeUnionTypeParts($parentType);
+        $childParts = $this->normalizeUnionTypeParts($childType);
+
+        if ($childParts === ['mixed'] || $parentParts === []) {
+            return true;
+        }
+
+        if ($childParts === []) {
+            return false;
+        }
+
+        foreach ($parentParts as $part) {
+            if (!in_array($part, $childParts, true)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function isChildReturnTypeCompatibleWithParent(string $childType, string $parentType): bool
+    {
+        $childParts = $this->normalizeUnionTypeParts($childType);
+        $parentParts = $this->normalizeUnionTypeParts($parentType);
+
+        if ($parentParts === ['mixed'] || $childParts === []) {
+            return true;
+        }
+
+        if ($parentParts === []) {
+            return $childParts === [];
+        }
+
+        foreach ($childParts as $part) {
+            if (!in_array($part, $parentParts, true)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function normalizeUnionTypeParts(string $type): array
+    {
+        $parts = array_values(array_filter(
+            array_map(static fn(string $part): string => trim($part), explode('|', $type)),
+            static fn(string $part): bool => $part !== '',
+        ));
+
+        if ($parts === []) {
+            return [];
+        }
+
+        sort($parts);
+
+        return array_values(array_unique($parts));
+    }
+
+    private function mergeParentTypesIntoChild(string $parentType, string $childType): string
+    {
+        $parts = array_values(array_unique(array_merge(
+            $this->normalizeUnionTypeParts($parentType),
+            $this->normalizeUnionTypeParts($childType),
+        )));
+
+        return implode('|', $parts);
     }
 
     /**
@@ -1611,11 +1902,13 @@ class ClassGenerationService
                 parent: $phpClass->parent,
                 isAbstract: $phpClass->isAbstract,
                 isCopyConstructible: $phpClass->isCopyConstructible,
+                hasPublicConstructor: $phpClass->hasPublicConstructor,
                 hasPublicDestructor: $phpClass->hasPublicDestructor,
                 isQObjectDerived: $phpClass->isQObjectDerived,
                 properties: $phpClass->properties,
                 methods: $methods,
                 signals: $phpClass->signals,
+                classConstants: $phpClass->classConstants,
             ),
             'skipped_methods' => [[
                 'name' => '__construct',
@@ -1623,6 +1916,68 @@ class ClassGenerationService
                 'reason_message' => 'Abstract class constructors are only exposed when the generated native subclass can satisfy all pure virtual requirements.',
             ]],
         ];
+    }
+
+    /**
+     * Keep internally-owned, non-instantiable classes concrete in PHP while still
+     * preventing direct construction from userland.
+     *
+     * @param array<string, mixed> $classData
+     */
+    private function ensureProtectedUnavailableConstructor(PhpClass $phpClass, array $classData): PhpClass
+    {
+        if ($phpClass->isAbstract) {
+            return $phpClass;
+        }
+
+        $hasUsableSurface = $phpClass->methods !== []
+            || $phpClass->signals !== []
+            || $phpClass->properties !== []
+            || $phpClass->classConstants !== [];
+        if (!$hasUsableSurface) {
+            return $phpClass;
+        }
+
+        if ((bool) ($classData['has_public_constructor'] ?? true)) {
+            return $phpClass;
+        }
+        if (!(bool) ($classData['has_public_destructor'] ?? true)) {
+            return $phpClass;
+        }
+
+        foreach ($phpClass->methods as $method) {
+            if ($method->name === '__construct') {
+                return $phpClass;
+            }
+        }
+
+        $methods = $phpClass->methods;
+        array_unshift($methods, new PhpMethod(
+            name: '__construct',
+            access: 'protected',
+            isStatic: false,
+            isSignal: false,
+            isSlot: false,
+            isAbstractMethod: false,
+            returnType: 'void',
+            parameters: [],
+            overloads: [],
+            cppName: '__construct',
+        ));
+
+        return new PhpClass(
+            name: $phpClass->name,
+            parent: $phpClass->parent,
+            isAbstract: $phpClass->isAbstract,
+            isCopyConstructible: $phpClass->isCopyConstructible,
+            hasPublicConstructor: $phpClass->hasPublicConstructor,
+            hasPublicDestructor: $phpClass->hasPublicDestructor,
+            isQObjectDerived: $phpClass->isQObjectDerived,
+            properties: $phpClass->properties,
+            methods: $methods,
+            signals: $phpClass->signals,
+            classConstants: $phpClass->classConstants,
+        );
     }
 
     /**
@@ -1885,8 +2240,10 @@ class ClassGenerationService
         }
 
         if (!$hasExplicitConstructor) {
-            $hasPublicConstructor = $defaultAccess === 'public';
-            $hasPublicDefaultConstructor = $defaultAccess === 'public';
+            // Implicitly-declared special members are public even for `class`.
+            // Keep this optimistic unless an explicit constructor says otherwise.
+            $hasPublicConstructor = true;
+            $hasPublicDefaultConstructor = true;
         }
 
         if (!$hasExplicitDestructor) {
@@ -2599,11 +2956,13 @@ class ClassGenerationService
             parent: $phpClass->parent,
             isAbstract: $phpClass->isAbstract,
             isCopyConstructible: $phpClass->isCopyConstructible,
+            hasPublicConstructor: $phpClass->hasPublicConstructor,
             hasPublicDestructor: $phpClass->hasPublicDestructor,
             properties: $phpClass->properties,
             methods: $methods,
             signals: $phpClass->signals,
             isQObjectDerived: $phpClass->isQObjectDerived,
+            classConstants: $phpClass->classConstants,
         );
     }
 

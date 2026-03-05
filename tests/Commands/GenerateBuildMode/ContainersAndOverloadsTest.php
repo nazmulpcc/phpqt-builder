@@ -98,6 +98,43 @@ it('supports common qt container signatures for virtual overrides', function ():
         Assert::assertStringContainsString('QList<QByteArray>()', $cpp);
 });
 
+it('uses QByteArray keys directly when converting map returns to PHP arrays', function (): void {
+        $fixtureRoot = qt_fixture_path('policy-qt');
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+        mkdir($outputDir, 0777, true);
+
+        $header = $outputDir . '/qbytearraykeymapholder.h';
+        file_put_contents($header, <<<'CPP'
+template <typename K, typename V>
+class QHash {};
+class QByteArray {};
+class QVariant {};
+class QByteArrayKeyMapHolder {
+public:
+QHash<QByteArray, QVariant> headers() const;
+};
+CPP);
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $header,
+            'class' => 'QByteArrayKeyMapHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QByteArrayKeyMapHolder,QVariant',
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode);
+
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qbytearraykeymapholder.cpp');
+        Assert::assertStringContainsString('QByteArray _qt_key_utf8 = _qt_it.key();', $cpp);
+        Assert::assertStringNotContainsString('QByteArray _qt_key_utf8 = _qt_it.key().toUtf8();', $cpp);
+});
+
 it('keeps writable container references unsupported', function (): void {
         $fixtureRoot = qt_fixture_path('policy-qt');
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
@@ -185,7 +222,7 @@ it('does not mistake self pointer constructors for copy constructors', function 
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qselfparentthing.cpp');
     
         Assert::assertStringContainsString('public function __construct(QSelfParentThing|null $parent = null)', $stub);
-        Assert::assertStringContainsString('intern->native_ptr = new QSelfParentThing((parent != NULL ? qt_qselfparentthing_from_obj(Z_OBJ_P(parent))->native_ptr : NULL));', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr = new QSelfParentThing((parent != NULL && Z_TYPE_P(parent) == IS_OBJECT ? qt_qselfparentthing_from_obj(Z_OBJ_P(parent))->native_ptr : NULL));', $cpp);
 });
 
 it('keeps supported constructor overloads when one sibling is unsupported', function (): void {
@@ -217,7 +254,7 @@ it('keeps supported constructor overloads when one sibling is unsupported', func
     
         Assert::assertStringContainsString('public function __construct(int $width = 0, int $height = 0) {}', $stub);
         Assert::assertStringContainsString('int _qt_overload_index = -1;', $cpp);
-        Assert::assertStringContainsString('intern->native_ptr = new QSizeLike();', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr = qt_new_default_native<QSizeLike>();', $cpp);
         Assert::assertStringContainsString('intern->native_ptr = new QSizeLike((int)width, (int)height);', $cpp);
         Assert::assertStringNotContainsString('QComplexHost::Iterator', $stub);
 });
@@ -317,7 +354,7 @@ it('skips private reference constructor variants', function (): void {
     
         Assert::assertStringContainsString('public function __construct() {}', $stub);
         Assert::assertStringNotContainsString('QSizeLike $size', $stub);
-        Assert::assertStringContainsString('intern->native_ptr = new QPrivateRefConstructorThing();', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr = qt_new_default_native<QPrivateRefConstructorThing>();', $cpp);
         Assert::assertStringNotContainsString('new QPrivateRefConstructorThing(*qt_qsizelike_from_obj', $cpp);
 });
 
@@ -347,7 +384,7 @@ it('does not emit fallback objects for required reference overload parameters', 
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qrefconstructorthing.cpp');
     
         Assert::assertStringContainsString('public function __construct(QSizeLike|null $size = null) {}', $stub);
-        Assert::assertStringContainsString('intern->native_ptr = new QRefConstructorThing();', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr = qt_new_default_native<QRefConstructorThing>();', $cpp);
         Assert::assertStringContainsString('intern->native_ptr = new QRefConstructorThing(*qt_qsizelike_from_obj(Z_OBJ_P(size))->native_ptr);', $cpp);
         Assert::assertStringNotContainsString('? *qt_qsizelike_from_obj(Z_OBJ_P(size))->native_ptr : QSizeLike()', $cpp);
 });

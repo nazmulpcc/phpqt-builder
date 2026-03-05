@@ -118,7 +118,7 @@ class MethodExposurePolicy
         bool $isAbstractClass,
     ): array
     {
-        if (str_starts_with($methodName, '~') || str_starts_with($methodName, 'operator') || in_array($methodName, self::NAME_SKIP, true)) {
+        if ($this->isFilteredMethodName($methodName)) {
             return [
                 'selected' => [],
                 'skipped' => [[
@@ -210,6 +210,29 @@ class MethodExposurePolicy
         ];
     }
 
+    private function isFilteredMethodName(string $methodName): bool
+    {
+        if (str_starts_with($methodName, '~') || str_starts_with($methodName, 'operator')) {
+            return true;
+        }
+
+        if (in_array($methodName, self::NAME_SKIP, true)) {
+            return true;
+        }
+
+        // Macro artifacts can leak through cparser as pseudo-methods.
+        if (preg_match('/^[A-Z][A-Z0-9_]*$/', $methodName) === 1) {
+            return true;
+        }
+
+        // Qt private helpers frequently use this suffix and are not public API.
+        if (str_ends_with($methodName, '_helper')) {
+            return true;
+        }
+
+        return false;
+    }
+
     /**
      * @param array<string, mixed> $variant
      * @param list<string> $allowedClasses
@@ -285,9 +308,9 @@ class MethodExposurePolicy
             return ['code' => 'unsupported_return_type', 'message' => sprintf('Return type %s is not supported.', $returnType)];
         }
 
-        foreach ($variant['parameters'] as $parameter) {
+        foreach ($this->effectiveSignalParameters($variant) as $parameter) {
             $type = (string) $parameter['type'];
-            if ($this->isUnsupportedOutParameter($type, $className, $flagAliases, $enumNames)) {
+            if ($this->isUnsupportedWritableByRefParameter($type)) {
                 return ['code' => 'unsupported_output_parameter', 'message' => sprintf('Parameter type %s looks like an output parameter.', $type)];
             }
             if (!$this->isSupportedType($type, $className, $allowedClasses, false, $flagAliases, $enumNames)) {
@@ -296,6 +319,29 @@ class MethodExposurePolicy
         }
 
         return null;
+    }
+
+    /**
+     * @param array<string, mixed> $variant
+     * @return list<array<string, mixed>>
+     */
+    private function effectiveSignalParameters(array $variant): array
+    {
+        $parameters = is_array($variant['parameters'] ?? null) ? $variant['parameters'] : [];
+        if (($variant['is_signal'] ?? false) !== true || $parameters === []) {
+            return $parameters;
+        }
+
+        $lastIndex = count($parameters) - 1;
+        $lastType = is_string($parameters[$lastIndex]['type'] ?? null)
+            ? trim((string) $parameters[$lastIndex]['type'])
+            : '';
+
+        if ($lastType === 'QPrivateSignal') {
+            array_pop($parameters);
+        }
+
+        return $parameters;
     }
 
     /**
@@ -366,37 +412,6 @@ class MethodExposurePolicy
         return str_contains($trimmed, '&') && !str_starts_with($trimmed, 'const ');
     }
 
-    private function isUnsupportedOutParameter(string $cppType, string $className, array $flagAliases = [], array $enumNames = []): bool
-    {
-        $trimmed = trim($cppType);
-        if ($this->containerBridge->isSupported($trimmed) && str_contains($trimmed, '&') && !str_starts_with($trimmed, 'const ')) {
-            return true;
-        }
-
-        if (!str_contains($trimmed, '*') || str_starts_with($trimmed, 'const ')) {
-            return false;
-        }
-
-        if ($this->isSupportedArrayType($trimmed)) {
-            return false;
-        }
-
-        if ($this->hasMultiplePointerIndirection($trimmed)) {
-            return true;
-        }
-
-        if ($this->isEnumOrFlagType($trimmed, $className, $flagAliases, $enumNames)) {
-            return true;
-        }
-
-        $phpType = $this->typeMapper->map($trimmed);
-        if (in_array($phpType, ['int', 'float', 'bool', 'string', 'array', 'mixed'], true)) {
-            return true;
-        }
-
-        return false;
-    }
-
     /**
      * @param list<string> $allowedClasses
      * @param array<string, string> $flagAliases
@@ -429,7 +444,10 @@ class MethodExposurePolicy
             return false;
         }
 
-        if ($this->isUnsupportedScalarPointerType($trimmed)) {
+        if (
+            $this->isUnsupportedScalarPointerType($trimmed)
+            && !(!$isReturn && $this->isSupportedWritableScalarPointerType($trimmed))
+        ) {
             return false;
         }
 
@@ -538,6 +556,10 @@ class MethodExposurePolicy
             return true;
         }
 
+        if ($this->looksLikeInheritedOrGlobalEnumName($trimmed)) {
+            return true;
+        }
+
         return false;
     }
 
@@ -594,6 +616,16 @@ class MethodExposurePolicy
             $lastSeparator = (int) strrpos($trimmed, '::');
             $prefix = substr($trimmed, 0, $lastSeparator);
             $nested = substr($trimmed, $lastSeparator + 2);
+            if (
+                $prefix !== ''
+                && $nested !== ''
+                && !str_contains($prefix, '::')
+                && $prefix !== $className
+                && in_array($nested, $enumNames, true)
+            ) {
+                return sprintf('%s::%s::%s', $className, $prefix, $nested);
+            }
+
             if ($prefix !== '' && $nested !== '' && isset($flagAliases[$nested])) {
                 return sprintf('QFlags<%s::%s>', $prefix, $flagAliases[$nested]);
             }
@@ -607,7 +639,42 @@ class MethodExposurePolicy
             return $trimmed;
         }
 
+        // Global Qt enums (e.g. QtMsgType) are already fully named.
+        if (str_starts_with($trimmed, 'Qt')) {
+            return $trimmed;
+        }
+
         return $className . '::' . $trimmed;
+    }
+
+    private function looksLikeInheritedOrGlobalEnumName(string $name): bool
+    {
+        if (str_starts_with($name, 'Qt')) {
+            if ($name === 'QtMsgType') {
+                return true;
+            }
+
+            foreach (['Type', 'Mode', 'Flag', 'Flags', 'Policy'] as $suffix) {
+                if (str_ends_with($name, $suffix)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        // Avoid treating Qt classes as enums by default.
+        if (str_starts_with($name, 'Q')) {
+            return false;
+        }
+
+        foreach (['Mode', 'Modes', 'Flag', 'Flags'] as $suffix) {
+            if (str_ends_with($name, $suffix)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function looksLikeQualifiedEnumName(string $name): bool
@@ -647,6 +714,61 @@ class MethodExposurePolicy
         $phpType = $this->typeMapper->map($cppType);
 
         return in_array($phpType, ['int', 'float', 'bool'], true);
+    }
+
+    private function isSupportedWritableScalarPointerType(string $cppType): bool
+    {
+        $trimmed = trim($cppType);
+        if (substr_count($trimmed, '*') !== 1 || str_contains($trimmed, '&')) {
+            return false;
+        }
+
+        if (preg_match('/^\s*const\b/', $trimmed) === 1) {
+            return false;
+        }
+
+        $phpType = $this->typeMapper->map($trimmed);
+
+        return in_array($phpType, ['int', 'float', 'bool'], true);
+    }
+
+    private function isUnsupportedWritableByRefParameter(string $cppType): bool
+    {
+        $trimmed = trim($cppType);
+        if ($trimmed === '') {
+            return false;
+        }
+
+        $pointerDepth = substr_count($trimmed, '*');
+        $isRvalueReference = str_contains($trimmed, '&&');
+        $isReference = !$isRvalueReference && str_contains($trimmed, '&');
+        $isConstReference = $isReference && preg_match('/^\s*const\b/', $trimmed) === 1;
+        $isNonConstReference = $isReference && !$isConstReference;
+        $isNonConstPointer = $pointerDepth === 1 && !$isReference && preg_match('/^\s*const\b/', $trimmed) !== 1;
+
+        if (!$isNonConstReference && !$isNonConstPointer) {
+            return false;
+        }
+
+        if ($pointerDepth > 1) {
+            return true;
+        }
+
+        $phpType = $this->typeMapper->map($trimmed);
+        if (in_array($phpType, ['int', 'float', 'bool'], true)) {
+            return false;
+        }
+
+        if ($this->typeBridge->isObjectType($phpType)) {
+            return false;
+        }
+
+        $baseType = $this->normalizeSelfType($trimmed);
+        if ($phpType === 'string' && ($baseType === 'QString' || $baseType === 'QByteArray')) {
+            return false;
+        }
+
+        return true;
     }
 
     private function isSupportedArrayType(string $cppType): bool

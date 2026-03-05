@@ -5,16 +5,26 @@ declare(strict_types=1);
 namespace QtBuilder\Build;
 
 use eftec\bladeone\BladeOne;
+use QtBuilder\IO\FileWriteStats;
+use QtBuilder\IO\SmartFileWriter;
 
 class ExtensionScaffolder
 {
     private BladeOne $blade;
+    private readonly SmartFileWriter $fileWriter;
+    private FileWriteStats $lastWriteStats;
 
-    public function __construct(?string $templatePath = null, ?string $compiledPath = null)
+    public function __construct(
+        ?string $templatePath = null,
+        ?string $compiledPath = null,
+        ?SmartFileWriter $fileWriter = null,
+    )
     {
         $projectRoot = dirname(__DIR__, 2);
         $templatePath ??= $projectRoot . '/templates';
         $compiledPath ??= $projectRoot . '/storage/blade/' . (string) getmypid();
+        $this->fileWriter = $fileWriter ?? new SmartFileWriter();
+        $this->lastWriteStats = new FileWriteStats();
 
         if (!is_dir($compiledPath)) {
             mkdir($compiledPath, 0755, true);
@@ -28,8 +38,6 @@ class ExtensionScaffolder
         $this->ensureDirectory($context->outputDir);
         $this->ensureDirectory($context->outputDir . '/classes');
         $this->ensureDirectory($context->metadataDir());
-
-        $this->clearTransientClassBuildArtifacts($context->outputDir . '/classes');
     }
 
     /**
@@ -37,6 +45,7 @@ class ExtensionScaffolder
      */
     public function finalize(ExtensionBuildContext $context): array
     {
+        $this->lastWriteStats = new FileWriteStats();
         $this->writeCoreFiles($context);
 
         return [
@@ -48,18 +57,28 @@ class ExtensionScaffolder
 
     private function writeCoreFiles(ExtensionBuildContext $context): void
     {
-        file_put_contents(
+        $this->lastWriteStats->record($this->fileWriter->write(
             $context->outputDir . '/config.m4',
             $this->cleanOutput($this->blade->run('generation.config_m4', ['ctx' => $context])),
-        );
-        file_put_contents(
+        ));
+        $this->lastWriteStats->record($this->fileWriter->write(
             $context->outputDir . '/' . $context->phpHeaderFilename(),
             $this->cleanOutput($this->blade->run('generation.extension_header', ['ctx' => $context])),
-        );
-        file_put_contents(
+        ));
+        $this->lastWriteStats->record($this->fileWriter->write(
             $context->outputDir . '/' . $context->moduleSourceFilename(),
             $this->cleanOutput($this->blade->run('generation.extension_source', ['ctx' => $context])),
-        );
+        ));
+    }
+
+    public function lastWriteStats(): FileWriteStats
+    {
+        return $this->lastWriteStats;
+    }
+
+    public function writeComparatorName(): string
+    {
+        return $this->fileWriter->comparatorName();
     }
 
     private function cleanOutput(string $content): string
@@ -68,29 +87,6 @@ class ExtensionScaffolder
         $content = preg_replace('/[ \t]+$/m', '', $content) ?? $content;
 
         return rtrim($content) . "\n";
-    }
-
-    private function clearTransientClassBuildArtifacts(string $classesDir): void
-    {
-        foreach (glob($classesDir . '/*.lo') ?: [] as $path) {
-            @unlink($path);
-        }
-
-        foreach (glob($classesDir . '/*.loT') ?: [] as $path) {
-            @unlink($path);
-        }
-
-        foreach ([$classesDir . '/.deps', $classesDir . '/.libs'] as $dir) {
-            if (!is_dir($dir)) {
-                continue;
-            }
-
-            foreach (glob($dir . '/*') ?: [] as $path) {
-                if (is_file($path)) {
-                    @unlink($path);
-                }
-            }
-        }
     }
 
     private function ensureDirectory(string $directory): void

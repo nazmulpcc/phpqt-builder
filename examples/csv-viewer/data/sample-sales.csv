@@ -1,0 +1,31 @@
+order_id,customer,region,sales_rep,status,amount,updated_at
+SO-10001,Acme Retail,EMEA,Laila Hassan,Paid,1840.00,2026-03-01 08:11:00
+SO-10002,Northwind Foods,APAC,Andre Cole,Pending,920.00,2026-03-01 08:14:00
+SO-10003,Blue River Labs,AMER,Safia Noor,Shipped,2315.00,2026-03-01 08:17:00
+SO-10004,Nimbus Energy,EMEA,Andre Cole,Refunded,410.00,2026-03-01 08:22:00
+SO-10005,Harbor Commerce,LATAM,Laila Hassan,Paid,1575.00,2026-03-01 08:24:00
+SO-10006,Summit Health,APAC,Safia Noor,Delayed,1220.00,2026-03-01 08:29:00
+SO-10007,Acme Retail,EMEA,Laila Hassan,Paid,2110.00,2026-03-01 08:31:00
+SO-10008,Northwind Foods,AMER,Andre Cole,Pending,760.00,2026-03-01 08:35:00
+SO-10009,Blue River Labs,EMEA,Safia Noor,Shipped,3010.00,2026-03-01 08:37:00
+SO-10010,Nimbus Energy,APAC,Laila Hassan,Paid,1685.00,2026-03-01 08:40:00
+SO-10011,Harbor Commerce,LATAM,Andre Cole,Delayed,1330.00,2026-03-01 08:43:00
+SO-10012,Summit Health,EMEA,Safia Noor,Pending,980.00,2026-03-01 08:47:00
+SO-10013,Acme Retail,AMER,Laila Hassan,Paid,2055.00,2026-03-01 08:49:00
+SO-10014,Northwind Foods,APAC,Andre Cole,Shipped,1465.00,2026-03-01 08:54:00
+SO-10015,Blue River Labs,EMEA,Safia Noor,Paid,2860.00,2026-03-01 08:58:00
+SO-10016,Nimbus Energy,LATAM,Laila Hassan,Pending,645.00,2026-03-01 09:02:00
+SO-10017,Harbor Commerce,EMEA,Andre Cole,Paid,1940.00,2026-03-01 09:08:00
+SO-10018,Summit Health,APAC,Safia Noor,Delayed,1500.00,2026-03-01 09:11:00
+SO-10019,Acme Retail,AMER,Laila Hassan,Refunded,390.00,2026-03-01 09:15:00
+SO-10020,Northwind Foods,EMEA,Andre Cole,Shipped,2730.00,2026-03-01 09:18:00
+SO-10021,Blue River Labs,APAC,Safia Noor,Paid,1175.00,2026-03-01 09:22:00
+SO-10022,Nimbus Energy,EMEA,Laila Hassan,Paid,2450.00,2026-03-01 09:27:00
+SO-10023,Harbor Commerce,AMER,Andre Cole,Pending,880.00,2026-03-01 09:31:00
+SO-10024,Summit Health,LATAM,Safia Noor,Delayed,1410.00,2026-03-01 09:34:00
+SO-10025,Acme Retail,EMEA,Laila Hassan,Shipped,1990.00,2026-03-01 09:38:00
+SO-10026,Northwind Foods,APAC,Andre Cole,Paid,1260.00,2026-03-01 09:44:00
+SO-10027,Blue River Labs,EMEA,Safia Noor,Pending,760.00,2026-03-01 09:48:00
+SO-10028,Nimbus Energy,AMER,Laila Hassan,Paid,1850.00,2026-03-01 09:52:00
+SO-10029,Harbor Commerce,LATAM,Andre Cole,Shipped,2250.00,2026-03-01 09:55:00
+SO-10030,Summit Health,EMEA,Safia Noor,Paid,1740.00,2026-03-01 09:58:00

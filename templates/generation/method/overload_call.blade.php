@@ -9,6 +9,7 @@
  */
 $callPlan = $method->callPlan($ctx, $overload);
 $postCallLines = $method->postCallLines($ctx, $overload);
+$writebackLines = $method->writebackLines($ctx, $overload);
 $declaringClass = $overload->declaringClass !== '' ? $overload->declaringClass : $ctx->nativeCppType;
 $callExpr = null;
 if (!$overload->isPureVirtual) {
@@ -42,6 +43,9 @@ if (!$overload->isPureVirtual) {
 @foreach($postCallLines as $line)
 {!! $indent !!}{!! $line !!}
 @endforeach
+@foreach($writebackLines as $line)
+{!! $indent !!}{!! $line !!}
+@endforeach
 @elseif($overload->returnStrategy === 'scalar')
 @php
     $macro = $ctx->typeBridge->returnMacro($overload->phpReturnType);
@@ -50,10 +54,16 @@ if (!$overload->isPureVirtual) {
 @if($macro === null)
 {!! $indent !!}RETURN_NULL();
 @else
+@foreach($writebackLines as $line)
+{!! $indent !!}{!! $line !!}
+@endforeach
 {!! $indent !!}{!! $macro !!}({!! $returnExpr !!});
 @endif
 @elseif($overload->returnStrategy === 'string')
 {!! $indent !!}auto _result = {!! $callExpr !!};
+@foreach($writebackLines as $line)
+{!! $indent !!}{!! $line !!}
+@endforeach
 {!! $indent !!}{!! $ctx->typeBridge->nativeStringToPhpReturn($overload->cppReturnType, '_result') !!};
 @elseif($overload->returnStrategy === 'value_object')
 @php
@@ -63,7 +73,16 @@ if (!$overload->isPureVirtual) {
     $returnStruct = $ctx->typeBridge->objectStructName($returnClass);
 @endphp
 {!! $indent !!}{!! $returnClass !!} _result = {!! $callExpr !!};
+@foreach($writebackLines as $line)
+{!! $indent !!}{!! $line !!}
+@endforeach
 {!! $indent !!}object_init_ex(return_value, {!! $returnCe !!});
+{!! $indent !!}if (UNEXPECTED(Z_TYPE_P(return_value) != IS_OBJECT)) {
+{!! $indent !!}    if (!EG(exception)) {
+{!! $indent !!}        zend_throw_error(NULL, "Failed to instantiate PHP wrapper for {!! $returnClass !!}");
+{!! $indent !!}    }
+{!! $indent !!}    RETURN_THROWS();
+{!! $indent !!}}
 {!! $indent !!}{!! $returnStruct !!} *_ret_intern = {!! $returnFromObj !!}(Z_OBJ_P(return_value));
 {!! $indent !!}_ret_intern->native_ptr = new {!! $returnClass !!}(std::move(_result));
 @elseif($overload->returnStrategy === 'qobject_pointer')
@@ -78,11 +97,20 @@ if (!$overload->isPureVirtual) {
     $writableResultExpr = $ctx->typeBridge->writableObjectPointerExpr($overload->cppReturnType, $returnClass, '_result');
 @endphp
 {!! $indent !!}{!! $resultDeclType !!} _result = {!! $callExpr !!};
+@foreach($writebackLines as $line)
+{!! $indent !!}{!! $line !!}
+@endforeach
 @if($isValueType)
 {!! $indent !!}if (_result == NULL) {
 {!! $indent !!}    RETURN_NULL();
 {!! $indent !!}}
 {!! $indent !!}object_init_ex(return_value, {!! $returnCe !!});
+{!! $indent !!}if (UNEXPECTED(Z_TYPE_P(return_value) != IS_OBJECT)) {
+{!! $indent !!}    if (!EG(exception)) {
+{!! $indent !!}        zend_throw_error(NULL, "Failed to instantiate PHP wrapper for {!! $returnClass !!}");
+{!! $indent !!}    }
+{!! $indent !!}    RETURN_THROWS();
+{!! $indent !!}}
 {!! $indent !!}{!! $returnStruct !!} *_ret_intern = {!! $returnFromObj !!}(Z_OBJ_P(return_value));
 {!! $indent !!}_ret_intern->native_ptr = new {!! $returnClass !!}(*_result);
 @else
@@ -90,6 +118,9 @@ if (!$overload->isPureVirtual) {
 @endif
 @elseif($overload->returnStrategy === 'array')
 {!! $indent !!}auto _result = {!! $callExpr !!};
+@foreach($writebackLines as $line)
+{!! $indent !!}{!! $line !!}
+@endforeach
 {!! $indent !!}{!! $ctx->typeBridge->nativeContainerToPhpZvalBlock('return_value', $overload->cppReturnType, '_result', $index) !!}
 {!! $indent !!}return;
 @else

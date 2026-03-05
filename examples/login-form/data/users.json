@@ -1,0 +1,12 @@
+[
+    {
+        "email": "demo@acme.test",
+        "password": "secret123",
+        "name": "Mia Alvarez"
+    },
+    {
+        "email": "ops@acme.test",
+        "password": "desk-admin",
+        "name": "Rafiq Benson"
+    }
+]

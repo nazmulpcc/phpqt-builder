@@ -72,3 +72,27 @@ it('detects final methods via cursor kind 404', function (): void {
     expect($methods['value']['is_virtual'])->toBeTrue()
         ->and($methods['value']['is_final'])->toBeTrue();
 });
+
+it('extracts enum constants with scalar values', function (): void {
+    $fixtureRoot = qt_fixture_path('policy-qt');
+    $includeRoot = $fixtureRoot . '/include';
+    $header = $includeRoot . '/QtCore/qenumholder.h';
+
+    $inspector = new QtClassInspector(new ClangArgumentBuilder([
+        $includeRoot,
+        $includeRoot . '/QtCore',
+    ]));
+
+    $classData = $inspector->inspect($header, 'QEnumHolder');
+    expect($classData)->not->toBeNull();
+
+    $constants = [];
+    foreach ($classData['enum_constants'] as $constant) {
+        $constants[$constant['name']] = $constant;
+    }
+
+    expect($constants)->toHaveKeys(['Off', 'On'])
+        ->and($constants['Off']['enum_name'])->toBe('Mode')
+        ->and($constants['Off']['value'])->toBe(0)
+        ->and($constants['On']['value'])->toBe(1);
+});

@@ -36,6 +36,11 @@ final class FakeExtensionBootstrapper implements ExtensionBootstrapper
             file_put_contents($arginfoFile, "/* generated */\n");
         }
 
+        if (!is_dir($context->outputDir . '/modules')) {
+            mkdir($context->outputDir . '/modules', 0755, true);
+        }
+        file_put_contents($context->outputDir . '/modules/' . $context->extensionName . '.so', 'binary');
+
         $metadataDir = $context->metadataDir();
         if (!is_dir($metadataDir)) {
             mkdir($metadataDir, 0755, true);

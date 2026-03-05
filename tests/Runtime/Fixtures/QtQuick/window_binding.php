@@ -27,7 +27,8 @@ final class RuntimeQuickDriver extends \Qt\Core\QObject
     }
 }
 
-$app = new \Qt\Gui\QGuiApplication(0, []);
+$argc = 0;
+$app = new \Qt\Gui\QGuiApplication($argc, []);
 $sales = new \Qt\Core\QObject();
 $sales->objectName = 'sales-1';
 $notifyHits = 0;

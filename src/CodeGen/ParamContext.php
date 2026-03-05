@@ -50,6 +50,12 @@ class ParamContext
     /** Whether this parameter is parsed through a zval* slot */
     public readonly bool $isParsedAsZval;
 
+    /** Whether this parameter is emitted as PHP by-reference (`&$param`) */
+    public readonly bool $isByRef;
+
+    /** Whether this by-reference parameter is nullable (`?T &$param = null`) */
+    public readonly bool $isNullableByRef;
+
     public function __construct(
         PhpParameter $param,
         ClassContext $classCtx,
@@ -61,29 +67,37 @@ class ParamContext
         $this->isOptional = $param->hasDefault;
         $this->position = $param->position;
         $this->isUnion = $typeBridge->isUnionType($param->phpType);
-        $this->stubPhpType = $typeBridge->stubType(
+        $this->isByRef = $param->isByRef;
+        $this->isNullableByRef = $param->isNullableByRef;
+        $stubPhpType = $typeBridge->stubType(
             $param->phpType,
             $param->hasDefault,
             $classCtx->phpNamespace,
             $classCtx->classNamespaces,
         );
+        if ($this->isNullableByRef && !str_contains($stubPhpType, 'null')) {
+            $stubPhpType .= '|null';
+        }
+        $this->stubPhpType = $stubPhpType;
 
         // For union types or object types, use zval*
         $primaryType = $this->primaryType($param->phpType);
         $this->isObject = $typeBridge->isObjectType($primaryType);
 
-        if ($this->isUnion || $this->isObject) {
+        if ($this->isByRef || $this->isUnion || $this->isObject) {
             $this->cVarType = 'zval *';
             $this->cDefault = 'NULL';
             $this->isParsedAsZval = true;
             $this->ceVarName = $this->isObject && !$this->isUnion
                 ? $typeBridge->ceVarName($primaryType)
                 : null;
-            $this->zppMacro = $this->isObject && !$this->isUnion
+            $this->zppMacro = $this->isByRef
+                ? sprintf('Z_PARAM_ZVAL(%s)', $this->cVarName)
+                : ($this->isObject && !$this->isUnion
                 ? ($this->isOptional
                     ? $typeBridge->zppMacroOptional($primaryType, $this->cVarName, $this->ceVarName)
                     : $typeBridge->zppMacro($primaryType, $this->cVarName, $this->ceVarName))
-                : sprintf('Z_PARAM_ZVAL(%s)', $this->cVarName);
+                : sprintf('Z_PARAM_ZVAL(%s)', $this->cVarName));
         } else {
             $this->cVarType = $typeBridge->cVarType($primaryType);
             $this->cDefault = $typeBridge->cDefaultValue($primaryType);

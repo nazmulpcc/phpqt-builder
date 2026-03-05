@@ -1,0 +1,4 @@
+[2026-03-05 10:00:00] [INFO] log-viewer boot complete
+[2026-03-05 10:00:03] [WARN] cache warmup took longer than expected
+[2026-03-05 10:00:07] [ERROR] upstream heartbeat timeout, retrying
+[2026-03-05 10:00:12] [INFO] reconnect succeeded

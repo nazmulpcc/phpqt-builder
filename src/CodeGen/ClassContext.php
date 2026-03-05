@@ -95,6 +95,9 @@ class ClassContext
     /** Whether wrapper/runtime paths track generated-subclass instances */
     public readonly bool $tracksGeneratedNativeSubclass;
 
+    /** Whether this class exposes at least one constructible native constructor overload */
+    public readonly bool $hasConstructibleConstructor;
+
     /** Generated access shim type name */
     public readonly string $accessShimTypeName;
 
@@ -142,6 +145,9 @@ class ClassContext
 
     /** @var list<string> Required #include for cross-class references (e.g. "qt_qpoint.h") */
     public readonly array $requiredIncludes;
+
+    /** @var list<array{name: string, stubType: string, stubValue: string, cInit: string, cTypeMask: string}> */
+    public readonly array $classConstants;
 
     /** The namespace parts for INIT_NS_CLASS_ENTRY (e.g. ["Qt", "Widgets"]) */
     public readonly array $namespaceParts;
@@ -234,6 +240,7 @@ class ClassContext
             $methods[] = new MethodContext($method, $this, $typeBridge);
         }
         $this->methods = $methods;
+        $this->hasConstructibleConstructor = $phpClass->hasPublicConstructor;
         $this->requiresAccessShim = $this->computeRequiresAccessShim($methods);
         $this->requiresVirtualTrampoline = $this->computeRequiresVirtualTrampoline($methods);
         $this->usesGeneratedNativeSubclass = $this->requiresVirtualTrampoline || $this->computeUsesGeneratedNativeSubclass($methods);
@@ -308,6 +315,7 @@ class ClassContext
             $properties[] = new PropertyContext($property, $typeBridge);
         }
         $this->properties = $properties;
+        $this->classConstants = $this->buildClassConstants($phpClass->classConstants);
 
         // Compute required cross-class includes
         $this->requiredIncludes = $this->computeRequiredIncludes($phpClass, $typeBridge);
@@ -346,6 +354,10 @@ class ClassContext
      */
     public function stubDefault(ParamContext $param): string
     {
+        if ($param->isNullableByRef) {
+            return 'null';
+        }
+
         return match ($param->phpType) {
             'int' => '0',
             'float' => '0.0',
@@ -431,6 +443,9 @@ class ClassContext
         $parts = explode('|', $phpType);
 
         foreach ($parts as $part) {
+            if ($part === 'QPrivateSignal') {
+                continue;
+            }
             if ($typeBridge->isObjectType($part)) {
                 $classes[$part] = true;
             }
@@ -455,9 +470,53 @@ class ClassContext
         return false;
     }
 
+    /**
+     * @param list<PhpClassConstant> $classConstants
+     * @return list<array{name: string, stubType: string, stubValue: string, cInit: string, cTypeMask: string}>
+     */
+    private function buildClassConstants(array $classConstants): array
+    {
+        $result = [];
+
+        foreach ($classConstants as $constant) {
+            $stubType = is_int($constant->value)
+                ? 'int'
+                : (is_float($constant->value) ? 'float' : 'string');
+
+            $cInit = match ($stubType) {
+                'int' => sprintf('ZVAL_LONG(&_qt_const_value, (zend_long)(%s));', var_export($constant->value, true)),
+                'float' => sprintf('ZVAL_DOUBLE(&_qt_const_value, (double)(%s));', var_export($constant->value, true)),
+                default => sprintf(
+                    'ZVAL_STRING(&_qt_const_value, "%s");',
+                    addcslashes((string) $constant->value, "\\\"\n\r\t\v\f"),
+                ),
+            };
+            $cTypeMask = match ($stubType) {
+                'int' => 'MAY_BE_LONG',
+                'float' => 'MAY_BE_DOUBLE',
+                default => 'MAY_BE_STRING',
+            };
+
+            $result[] = [
+                'name' => $constant->name,
+                'stubType' => $stubType,
+                'stubValue' => var_export($constant->value, true),
+                'cInit' => $cInit,
+                'cTypeMask' => $cTypeMask,
+            ];
+        }
+
+        return $result;
+    }
+
     public function hasSignals(): bool
     {
         return $this->signalOverloads !== [];
+    }
+
+    public function hasClassConstants(): bool
+    {
+        return $this->classConstants !== [];
     }
 
     public function hasQObjectPropertySupport(): bool
@@ -515,6 +574,55 @@ class ClassContext
     }
 
     /**
+     * @return list<string>
+     */
+    public function virtualDispatchMethodNames(): array
+    {
+        $names = [];
+
+        foreach ($this->virtualMethods() as $method) {
+            if (!\in_array($method->name, $names, true)) {
+                $names[] = $method->name;
+            }
+        }
+
+        return $names;
+    }
+
+    /**
+     * @return list<array{method:string, field:string}>
+     */
+    public function virtualDispatchCacheEntries(): array
+    {
+        $entries = [];
+
+        foreach ($this->virtualDispatchMethodNames() as $methodName) {
+            $entries[] = [
+                'method' => $methodName,
+                'field' => 'qt_has_override_' . self::sanitizeIdentifierFragment($methodName),
+            ];
+        }
+
+        return $entries;
+    }
+
+    private static function sanitizeIdentifierFragment(string $name): string
+    {
+        $sanitized = preg_replace('/[^a-zA-Z0-9_]+/', '_', $name) ?? $name;
+        $sanitized = strtolower($sanitized);
+
+        if ($sanitized === '') {
+            return 'method';
+        }
+
+        if (\ctype_digit($sanitized[0])) {
+            return 'm_' . $sanitized;
+        }
+
+        return $sanitized;
+    }
+
+    /**
      * @param list<MethodContext> $signals
      * @return list<SignalOverloadContext>
      */
@@ -527,9 +635,10 @@ class ClassContext
             $baseMethodName = 'on' . ucfirst($signal->name);
 
             foreach ($signal->overloads as $overload) {
+                $callbackParams = $typeBridge->signalCallbackParams($overload->params);
                 $phpMethodName = $baseMethodName;
                 if (\count($signal->overloads) > 1) {
-                    $phpMethodName .= $typeBridge->signalMethodSuffix($overload->params);
+                    $phpMethodName .= $typeBridge->signalMethodSuffix($callbackParams);
                 }
 
                 if (isset($usedMethodNames[$phpMethodName])) {
@@ -553,7 +662,7 @@ class ClassContext
                         $signal->name,
                         $overload,
                     ),
-                    params: $overload->params,
+                    params: $callbackParams,
                 );
             }
         }
@@ -580,6 +689,14 @@ class ClassContext
      */
     private function computeRequiresVirtualTrampoline(array $methods): bool
     {
+        if (!$this->hasPublicDestructor) {
+            return false;
+        }
+
+        if (!$this->isAbstract && !$this->hasConstructibleConstructor) {
+            return false;
+        }
+
         foreach ($methods as $method) {
             if ($method->hasVirtualOverloads) {
                 return true;

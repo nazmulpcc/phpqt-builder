@@ -16,6 +16,7 @@ $returnStruct = $ctx->typeBridge->objectStructName($returnClass);
 $wrapFunc = $ctx->typeBridge->wrapNativeFuncName($returnClass);
 $isValueType = $ctx->typeBridge->isValueType($returnClass);
 $callPlan = $method->callPlan($ctx, $overload);
+$writebackLines = $method->writebackLines($ctx, $overload);
 $declaringClass = $overload?->declaringClass !== '' ? $overload->declaringClass : $ctx->nativeCppType;
 $callExpr = null;
 if ($overload?->isPureVirtual) {
@@ -49,11 +50,20 @@ if ($overload?->isPureVirtual) {
 @endforeach
 @endif
     {!! $resultDeclType !!} _result = {!! $callExpr !!};
+@foreach($writebackLines as $line)
+    {!! $line !!}
+@endforeach
 @if($isValueType)
     if (_result == NULL) {
         RETURN_NULL();
     }
     object_init_ex(return_value, {!! $returnCe !!});
+    if (UNEXPECTED(Z_TYPE_P(return_value) != IS_OBJECT)) {
+        if (!EG(exception)) {
+            zend_throw_error(NULL, "Failed to instantiate PHP wrapper for {!! $returnClass !!}");
+        }
+        RETURN_THROWS();
+    }
     {!! $returnStruct !!} *_ret_intern = {!! $returnFromObj !!}(Z_OBJ_P(return_value));
     _ret_intern->native_ptr = new {!! $returnClass !!}(*_result);
 @else

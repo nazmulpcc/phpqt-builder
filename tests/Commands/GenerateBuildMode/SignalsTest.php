@@ -258,6 +258,48 @@ it('preserves const signal member pointers', function (): void {
         Assert::assertStringContainsString('static_cast<void (QSignalConstFixture::*)(int) const>(&QSignalConstFixture::changed)', $cpp);
 });
 
+it('includes signals with trailing qprivatesignal callback args stripped', function (): void {
+        $fixtureRoot = qt_fixture_path('signals-qt');
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-private-signals-' . bin2hex(random_bytes(4));
+    
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qprivatesignalfixture.h',
+            'class' => 'QPrivateSignalFixture',
+            '--qt-path' => $fixtureRoot,
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+            ],
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QPrivateSignalFixture',
+        ]);
+    
+        Assert::assertSame(Command::SUCCESS, $exitCode);
+    
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        Assert::assertSame('ok', $payload['status']);
+        Assert::assertNotContains('fileChanged', array_column($payload['skipped_methods'], 'name'));
+        Assert::assertNotContains('changed', array_column($payload['skipped_methods'], 'name'));
+    
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qprivatesignalfixture.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qprivatesignalfixture.cpp');
+    
+        Assert::assertStringContainsString('public function onFileChanged(callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
+        Assert::assertStringContainsString('public function onChanged(callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
+        Assert::assertStringContainsString('zend_string_equals_literal(signalSignature, "fileChanged(QString)")', $cpp);
+        Assert::assertStringContainsString('zend_string_equals_literal(signalSignature, "changed()")', $cpp);
+        Assert::assertStringContainsString('&QPrivateSignalFixture::fileChanged', $cpp);
+        Assert::assertStringContainsString('&QPrivateSignalFixture::changed', $cpp);
+        Assert::assertStringContainsString('_qt_arg_0', $cpp);
+        Assert::assertStringContainsString('qt_signal_callback_invoke(_qt_callback, 1, _qt_params);', $cpp);
+        Assert::assertStringContainsString('qt_signal_callback_invoke(_qt_callback, 0, NULL);', $cpp);
+});
+
 it('filters connect methods by name', function (): void {
         $fixtureRoot = qt_fixture_path('policy-qt');
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));

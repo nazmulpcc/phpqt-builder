@@ -55,6 +55,8 @@ class BuildDiscoveryService
                 skippedClasses: [...$initialSkippedClasses, ...$classStructures['skipped_classes']],
                 allowedClasses: [],
                 candidateCount: $candidateCount,
+                moduleMethodTotals: [],
+                moduleAcceptedMethodTotals: [],
                 errors: $classStructures['errors'],
             );
         }
@@ -70,6 +72,16 @@ class BuildDiscoveryService
             skippedClasses: [...$initialSkippedClasses, ...$classStructures['skipped_classes'], ...$viability['skipped_classes']],
             allowedClasses: $viability['allowed_classes'],
             candidateCount: $candidateCount,
+            moduleMethodTotals: $this->moduleMethodTotals(
+                $modules,
+                $classStructures['accepted_candidates'],
+                $classStructures['prepared_class_data'],
+            ),
+            moduleAcceptedMethodTotals: $this->moduleMethodTotals(
+                $modules,
+                $viability['accepted_candidates'],
+                $classStructures['prepared_class_data'],
+            ),
             passes: $viability['passes'],
             errors: $viability['errors'],
         );
@@ -95,6 +107,8 @@ class BuildDiscoveryService
             ),
             'skipped_classes' => array_values($result->skippedClasses),
             'allowed_classes' => array_values($result->allowedClasses),
+            'module_method_totals' => $result->moduleMethodTotals,
+            'module_accepted_method_totals' => $result->moduleAcceptedMethodTotals,
         ];
 
         $this->writeJsonFile($metadataDir . '/discovery_cache.json', $payload, '{}');
@@ -223,11 +237,37 @@ class BuildDiscoveryService
             return null;
         }
 
+        $moduleMethodTotals = [];
+        $moduleMethodTotalsPayload = $decoded['module_method_totals'] ?? [];
+        if (is_array($moduleMethodTotalsPayload)) {
+            foreach ($moduleMethodTotalsPayload as $module => $value) {
+                if (!is_string($module)) {
+                    continue;
+                }
+
+                $moduleMethodTotals[$module] = max(0, (int) $value);
+            }
+        }
+
+        $moduleAcceptedMethodTotals = [];
+        $moduleAcceptedMethodTotalsPayload = $decoded['module_accepted_method_totals'] ?? [];
+        if (is_array($moduleAcceptedMethodTotalsPayload)) {
+            foreach ($moduleAcceptedMethodTotalsPayload as $module => $value) {
+                if (!is_string($module)) {
+                    continue;
+                }
+
+                $moduleAcceptedMethodTotals[$module] = max(0, (int) $value);
+            }
+        }
+
         return new BuildDiscoveryResult(
             acceptedCandidates: $acceptedCandidates,
             skippedClasses: $skippedClasses,
             allowedClasses: $allowedClasses,
             candidateCount: (int) ($decoded['candidate_count'] ?? count($acceptedCandidates) + count($skippedClasses)),
+            moduleMethodTotals: $moduleMethodTotals,
+            moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
         );
     }
 
@@ -759,6 +799,37 @@ class BuildDiscoveryService
 
         file_put_contents($tempPath, $contents);
         rename($tempPath, $path);
+    }
+
+    /**
+     * @param list<string> $modules
+     * @param list<HeaderCandidate> $acceptedCandidates
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @return array<string, int>
+     */
+    private function moduleMethodTotals(array $modules, array $acceptedCandidates, array $preparedClassDataByClass): array
+    {
+        $totals = [];
+        foreach ($modules as $module) {
+            $totals[$module] = 0;
+        }
+
+        foreach ($acceptedCandidates as $candidate) {
+            $totals[$candidate->module] ??= 0;
+            $classData = $preparedClassDataByClass[$candidate->className] ?? null;
+            if (!is_array($classData)) {
+                continue;
+            }
+
+            $methods = $classData['methods'] ?? null;
+            if (!is_array($methods)) {
+                continue;
+            }
+
+            $totals[$candidate->module] += count($methods);
+        }
+
+        return $totals;
     }
 
     private function ensureDirectory(string $directory): void

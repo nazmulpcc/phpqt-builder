@@ -31,7 +31,7 @@ it('uses nullable unions for optional value object parameters', function (): voi
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qabstractitemmodel.cpp');
     
         Assert::assertStringContainsString('QModelIndex|null $parent = null', $stub);
-        Assert::assertStringContainsString('(parent != NULL ? *qt_qmodelindex_from_obj(Z_OBJ_P(parent))->native_ptr : QModelIndex())', $cpp);
+        Assert::assertStringContainsString('(parent != NULL && Z_TYPE_P(parent) == IS_OBJECT ? *qt_qmodelindex_from_obj(Z_OBJ_P(parent))->native_ptr : QModelIndex())', $cpp);
 });
 
 it('skips methods with value object dependencies outside the allow list', function (): void {
@@ -83,7 +83,7 @@ it('uses nullable unions for optional qobject parameters', function (): void {
     
         Assert::assertStringContainsString('QNode|null $node = null', $stub);
         Assert::assertStringContainsString('Z_PARAM_OBJECT_OF_CLASS_OR_NULL(node, qt_ce_QNode)', $cpp);
-        Assert::assertStringContainsString('(node != NULL ? qt_qnode_from_obj(Z_OBJ_P(node))->native_ptr : NULL)', $cpp);
+        Assert::assertStringContainsString('(node != NULL && Z_TYPE_P(node) == IS_OBJECT ? qt_qnode_from_obj(Z_OBJ_P(node))->native_ptr : NULL)', $cpp);
 });
 
 it('transfers ownership for layout attachment methods', function (): void {
@@ -367,7 +367,10 @@ it('guards instance methods when native pointers are missing', function (): void
     
         Assert::assertSame(Command::SUCCESS, $exitCode);
     
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_quninstantiablething.stub.php');
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_quninstantiablething.cpp');
+        Assert::assertStringContainsString('protected function __construct() {}', $stub);
+        Assert::assertStringContainsString('zend_throw_error(NULL, "QUninstantiableThing cannot be instantiated directly.");', $cpp);
         Assert::assertStringContainsString('zend_throw_error(NULL, "QUninstantiableThing native instance is not initialized");', $cpp);
         Assert::assertStringContainsString('RETURN_THROWS();', $cpp);
 });
