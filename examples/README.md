@@ -28,6 +28,8 @@ php -dextension=$PWD/build/ext/.libs/qt.so examples/<example>/run.php
   A tail-like log monitor with severity filtering, keyword search, and pause/resume polling.
 - `file-organizer`
   A lightweight file browser with favorites, text preview, and safe bulk rename workflows.
+- `calculator-basic`
+  A macOS Calculator-inspired basic mode clone with dedicated styling and standard arithmetic behavior.
 
 ## Data model
 
