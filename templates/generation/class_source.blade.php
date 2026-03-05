@@ -1255,6 +1255,24 @@ qt_should_delete_native(T *ptr, bool prevent_destroy)
 }
 
 @endif
+
+template <typename T>
+static inline void qt_delete_native_ptr(T *ptr)
+{
+    if constexpr (std::is_destructible_v<T>) {
+        delete ptr;
+    }
+}
+
+template <typename T>
+static inline T *qt_new_default_native()
+{
+    if constexpr (std::is_default_constructible_v<T>) {
+        return new T();
+    }
+    return NULL;
+}
+
 /* ------------------------------------------------------------------ */
 /* create_object                                                       */
 /* ------------------------------------------------------------------ */
@@ -1300,25 +1318,25 @@ static void {!! $ctx->filePrefix !!}_free_object(zend_object *object)
         if (intern->native_is_generated_subclass) {
 @if($ctx->requiresVirtualTrampoline)
             if (intern->native_is_virtual_trampoline) {
-                delete static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr);
+                qt_delete_native_ptr(static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr));
             } else {
 @if($ctx->plainInstantiationUsesGeneratedType())
-                delete static_cast<{!! $ctx->plainNativeInstantiationType !!} *>(intern->native_ptr);
+                qt_delete_native_ptr(static_cast<{!! $ctx->plainNativeInstantiationType !!} *>(intern->native_ptr));
 @else
-                delete intern->native_ptr;
+                qt_delete_native_ptr(intern->native_ptr);
 @endif
             }
         } else {
-            delete intern->native_ptr;
+            qt_delete_native_ptr(intern->native_ptr);
         }
 @else
-            delete static_cast<{!! $ctx->plainNativeInstantiationType !!} *>(intern->native_ptr);
+            qt_delete_native_ptr(static_cast<{!! $ctx->plainNativeInstantiationType !!} *>(intern->native_ptr));
         } else {
-            delete intern->native_ptr;
+            qt_delete_native_ptr(intern->native_ptr);
         }
 @endif
 @else
-        delete intern->native_ptr;
+        qt_delete_native_ptr(intern->native_ptr);
 @endif
     }
 @endif
@@ -1329,25 +1347,25 @@ static void {!! $ctx->filePrefix !!}_free_object(zend_object *object)
         if (intern->native_is_generated_subclass) {
 @if($ctx->requiresVirtualTrampoline)
             if (intern->native_is_virtual_trampoline) {
-                delete static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr);
+                qt_delete_native_ptr(static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr));
             } else {
 @if($ctx->plainInstantiationUsesGeneratedType())
-                delete static_cast<{!! $ctx->plainNativeInstantiationType !!} *>(intern->native_ptr);
+                qt_delete_native_ptr(static_cast<{!! $ctx->plainNativeInstantiationType !!} *>(intern->native_ptr));
 @else
-                delete intern->native_ptr;
+                qt_delete_native_ptr(intern->native_ptr);
 @endif
             }
         } else {
-            delete intern->native_ptr;
+            qt_delete_native_ptr(intern->native_ptr);
         }
 @else
-            delete static_cast<{!! $ctx->plainNativeInstantiationType !!} *>(intern->native_ptr);
+            qt_delete_native_ptr(static_cast<{!! $ctx->plainNativeInstantiationType !!} *>(intern->native_ptr));
         } else {
-            delete intern->native_ptr;
+            qt_delete_native_ptr(intern->native_ptr);
         }
 @endif
 @else
-        delete intern->native_ptr;
+        qt_delete_native_ptr(intern->native_ptr);
 @endif
     }
 @endif

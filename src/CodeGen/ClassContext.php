@@ -240,7 +240,7 @@ class ClassContext
             $methods[] = new MethodContext($method, $this, $typeBridge);
         }
         $this->methods = $methods;
-        $this->hasConstructibleConstructor = $this->computeHasConstructibleConstructor($methods);
+        $this->hasConstructibleConstructor = $phpClass->hasPublicConstructor;
         $this->requiresAccessShim = $this->computeRequiresAccessShim($methods);
         $this->requiresVirtualTrampoline = $this->computeRequiresVirtualTrampoline($methods);
         $this->usesGeneratedNativeSubclass = $this->requiresVirtualTrampoline || $this->computeUsesGeneratedNativeSubclass($methods);
@@ -689,7 +689,11 @@ class ClassContext
      */
     private function computeRequiresVirtualTrampoline(array $methods): bool
     {
-        if (!$this->hasConstructibleConstructor || !$this->hasPublicDestructor) {
+        if (!$this->hasPublicDestructor) {
+            return false;
+        }
+
+        if (!$this->isAbstract && !$this->hasConstructibleConstructor) {
             return false;
         }
 
@@ -709,20 +713,6 @@ class ClassContext
     {
         foreach ($methods as $method) {
             if ($method->hasInstanceProtectedCallPath()) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * @param list<MethodContext> $methods
-     */
-    private function computeHasConstructibleConstructor(array $methods): bool
-    {
-        foreach ($methods as $method) {
-            if ($method->isConstructor && $method->overloadCount > 0) {
                 return true;
             }
         }

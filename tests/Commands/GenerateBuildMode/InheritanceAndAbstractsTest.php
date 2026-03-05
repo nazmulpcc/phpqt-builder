@@ -90,7 +90,7 @@ it('generates abstract classes and retains pure virtual methods', function (): v
         Assert::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QAbstractThing, size)', $cpp);
         Assert::assertStringContainsString('zend_class_entry *_qt_actual_ce = Z_OBJCE_P(ZEND_THIS);', $cpp);
         Assert::assertStringContainsString('bool _qt_use_trampoline = (_qt_actual_ce != qt_ce_QAbstractThing);', $cpp);
-        Assert::assertStringContainsString('intern->native_ptr = new qt_php_QAbstractThing();', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr = qt_new_default_native<qt_php_QAbstractThing>();', $cpp);
         Assert::assertStringContainsString('zend_throw_error(NULL, "Abstract class QAbstractThing cannot be instantiated directly.");', $cpp);
         Assert::assertStringContainsString('if (!this->qt_has_override_size)', $cpp);
         Assert::assertStringContainsString('ce_flags |= ZEND_ACC_ABSTRACT;', $cpp);

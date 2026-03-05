@@ -254,7 +254,7 @@ it('keeps supported constructor overloads when one sibling is unsupported', func
     
         Assert::assertStringContainsString('public function __construct(int $width = 0, int $height = 0) {}', $stub);
         Assert::assertStringContainsString('int _qt_overload_index = -1;', $cpp);
-        Assert::assertStringContainsString('intern->native_ptr = new QSizeLike();', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr = qt_new_default_native<QSizeLike>();', $cpp);
         Assert::assertStringContainsString('intern->native_ptr = new QSizeLike((int)width, (int)height);', $cpp);
         Assert::assertStringNotContainsString('QComplexHost::Iterator', $stub);
 });
@@ -354,7 +354,7 @@ it('skips private reference constructor variants', function (): void {
     
         Assert::assertStringContainsString('public function __construct() {}', $stub);
         Assert::assertStringNotContainsString('QSizeLike $size', $stub);
-        Assert::assertStringContainsString('intern->native_ptr = new QPrivateRefConstructorThing();', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr = qt_new_default_native<QPrivateRefConstructorThing>();', $cpp);
         Assert::assertStringNotContainsString('new QPrivateRefConstructorThing(*qt_qsizelike_from_obj', $cpp);
 });
 
@@ -384,7 +384,7 @@ it('does not emit fallback objects for required reference overload parameters', 
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qrefconstructorthing.cpp');
     
         Assert::assertStringContainsString('public function __construct(QSizeLike|null $size = null) {}', $stub);
-        Assert::assertStringContainsString('intern->native_ptr = new QRefConstructorThing();', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr = qt_new_default_native<QRefConstructorThing>();', $cpp);
         Assert::assertStringContainsString('intern->native_ptr = new QRefConstructorThing(*qt_qsizelike_from_obj(Z_OBJ_P(size))->native_ptr);', $cpp);
         Assert::assertStringNotContainsString('? *qt_qsizelike_from_obj(Z_OBJ_P(size))->native_ptr : QSizeLike()', $cpp);
 });

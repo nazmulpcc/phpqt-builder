@@ -25,6 +25,7 @@ readonly class PhpClass
         public ?string $parent,
         public bool $isAbstract,
         public bool $isCopyConstructible,
+        public bool $hasPublicConstructor,
         public bool $hasPublicDestructor,
         public array $properties,
         public array $methods,
@@ -64,7 +65,7 @@ readonly class PhpClass
     }
 
     /**
-     * @return array{name: string, parent: ?string, is_abstract: bool, is_copy_constructible: bool, has_public_destructor: bool, is_qobject_derived: bool, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, signals: list<array<string, mixed>>, class_constants: list<array<string, mixed>>, summary: array{total_methods: int, public_methods: int, protected_methods: int, overloaded_methods: int, total_signals: int, total_properties: int, total_class_constants: int}}
+     * @return array{name: string, parent: ?string, is_abstract: bool, is_copy_constructible: bool, has_public_constructor: bool, has_public_destructor: bool, is_qobject_derived: bool, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, signals: list<array<string, mixed>>, class_constants: list<array<string, mixed>>, summary: array{total_methods: int, public_methods: int, protected_methods: int, overloaded_methods: int, total_signals: int, total_properties: int, total_class_constants: int}}
      */
     public function toArray(): array
     {
@@ -73,6 +74,7 @@ readonly class PhpClass
             'parent' => $this->parent,
             'is_abstract' => $this->isAbstract,
             'is_copy_constructible' => $this->isCopyConstructible,
+            'has_public_constructor' => $this->hasPublicConstructor,
             'has_public_destructor' => $this->hasPublicDestructor,
             'is_qobject_derived' => $this->isQObjectDerived,
             'properties' => array_map(

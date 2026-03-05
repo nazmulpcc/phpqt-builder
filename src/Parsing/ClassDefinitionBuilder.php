@@ -30,7 +30,7 @@ class ClassDefinitionBuilder
     /**
      * Build a PhpClass from the array produced by QtClassInspector::inspect().
      *
-     * @param array{name: string, is_abstract: bool, is_copy_constructible?: bool, has_public_destructor?: bool, is_qobject_derived?: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, signals?: list<array<string, mixed>>, enum_constants?: list<array<string, mixed>>} $classData
+     * @param array{name: string, is_abstract: bool, is_copy_constructible?: bool, has_public_constructor?: bool, has_public_destructor?: bool, is_qobject_derived?: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, signals?: list<array<string, mixed>>, enum_constants?: list<array<string, mixed>>} $classData
      */
     public function build(array $classData): PhpClass
     {
@@ -48,6 +48,7 @@ class ClassDefinitionBuilder
             parent: $parent,
             isAbstract: $classData['is_abstract'],
             isCopyConstructible: (bool) ($classData['is_copy_constructible'] ?? true),
+            hasPublicConstructor: (bool) ($classData['has_public_constructor'] ?? true),
             hasPublicDestructor: (bool) ($classData['has_public_destructor'] ?? true),
             isQObjectDerived: (bool) ($classData['is_qobject_derived'] ?? false),
             properties: $properties,

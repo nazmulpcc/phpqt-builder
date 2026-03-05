@@ -46,7 +46,15 @@
 @endforeach
 @if($ctx->requiresVirtualTrampoline)
             if (_qt_use_trampoline) {
+@if(count($callPlan['args']) === 0)
+                intern->native_ptr = qt_new_default_native<{!! $ctx->nativeInstantiationType !!}>();
+@else
                 intern->native_ptr = new {!! $ctx->nativeInstantiationType !!}({!! implode(', ', $callPlan['args']) !!});
+@endif
+                if (intern->native_ptr == NULL) {
+                    zend_throw_error(NULL, "{!! $ctx->phpClassName !!} cannot be instantiated directly.");
+                    RETURN_THROWS();
+                }
                 auto *_qt_trampoline = static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr);
                 _qt_trampoline->php_object = &intern->std;
                 _qt_trampoline->qt_cache_virtual_overrides(_qt_actual_ce, {!! $ctx->ceVarName !!});
@@ -57,13 +65,29 @@
                 zend_throw_error(NULL, "Abstract class {!! $ctx->phpClassName !!} cannot be instantiated directly.");
                 RETURN_THROWS();
 @else
+@if(count($callPlan['args']) === 0)
+                intern->native_ptr = qt_new_default_native<{!! $ctx->plainNativeInstantiationType !!}>();
+@else
                 intern->native_ptr = new {!! $ctx->plainNativeInstantiationType !!}({!! implode(', ', $callPlan['args']) !!});
+@endif
+                if (intern->native_ptr == NULL) {
+                    zend_throw_error(NULL, "{!! $ctx->phpClassName !!} cannot be instantiated directly.");
+                    RETURN_THROWS();
+                }
                 intern->native_is_generated_subclass = {!! $ctx->plainInstantiationUsesGeneratedType() ? 'true' : 'false' !!};
                 intern->native_is_virtual_trampoline = false;
 @endif
             }
 @else
+@if(count($callPlan['args']) === 0)
+            intern->native_ptr = qt_new_default_native<{!! $ctx->nativeInstantiationType !!}>();
+@else
             intern->native_ptr = new {!! $ctx->nativeInstantiationType !!}({!! implode(', ', $callPlan['args']) !!});
+@endif
+            if (intern->native_ptr == NULL) {
+                zend_throw_error(NULL, "{!! $ctx->phpClassName !!} cannot be instantiated directly.");
+                RETURN_THROWS();
+            }
 @if($ctx->tracksGeneratedNativeSubclass)
             intern->native_is_generated_subclass = true;
 @endif

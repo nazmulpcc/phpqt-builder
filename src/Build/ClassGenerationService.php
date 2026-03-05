@@ -470,6 +470,7 @@ class ClassGenerationService
                 parent: $phpClass->parent,
                 isAbstract: $phpClass->isAbstract,
                 isCopyConstructible: $phpClass->isCopyConstructible,
+                hasPublicConstructor: $phpClass->hasPublicConstructor,
                 hasPublicDestructor: $phpClass->hasPublicDestructor,
                 isQObjectDerived: $phpClass->isQObjectDerived,
                 properties: $phpClass->properties,
@@ -1424,6 +1425,7 @@ class ClassGenerationService
                 parent: $phpClass->parent,
                 isAbstract: $phpClass->isAbstract,
                 isCopyConstructible: $phpClass->isCopyConstructible,
+                hasPublicConstructor: $phpClass->hasPublicConstructor,
                 hasPublicDestructor: $phpClass->hasPublicDestructor,
                 isQObjectDerived: $phpClass->isQObjectDerived,
                 properties: $phpClass->properties,
@@ -1900,6 +1902,7 @@ class ClassGenerationService
                 parent: $phpClass->parent,
                 isAbstract: $phpClass->isAbstract,
                 isCopyConstructible: $phpClass->isCopyConstructible,
+                hasPublicConstructor: $phpClass->hasPublicConstructor,
                 hasPublicDestructor: $phpClass->hasPublicDestructor,
                 isQObjectDerived: $phpClass->isQObjectDerived,
                 properties: $phpClass->properties,
@@ -1938,6 +1941,9 @@ class ClassGenerationService
         if ((bool) ($classData['has_public_constructor'] ?? true)) {
             return $phpClass;
         }
+        if (!(bool) ($classData['has_public_destructor'] ?? true)) {
+            return $phpClass;
+        }
 
         foreach ($phpClass->methods as $method) {
             if ($method->name === '__construct') {
@@ -1964,6 +1970,7 @@ class ClassGenerationService
             parent: $phpClass->parent,
             isAbstract: $phpClass->isAbstract,
             isCopyConstructible: $phpClass->isCopyConstructible,
+            hasPublicConstructor: $phpClass->hasPublicConstructor,
             hasPublicDestructor: $phpClass->hasPublicDestructor,
             isQObjectDerived: $phpClass->isQObjectDerived,
             properties: $phpClass->properties,
@@ -2233,8 +2240,10 @@ class ClassGenerationService
         }
 
         if (!$hasExplicitConstructor) {
-            $hasPublicConstructor = $defaultAccess === 'public';
-            $hasPublicDefaultConstructor = $defaultAccess === 'public';
+            // Implicitly-declared special members are public even for `class`.
+            // Keep this optimistic unless an explicit constructor says otherwise.
+            $hasPublicConstructor = true;
+            $hasPublicDefaultConstructor = true;
         }
 
         if (!$hasExplicitDestructor) {
@@ -2947,6 +2956,7 @@ class ClassGenerationService
             parent: $phpClass->parent,
             isAbstract: $phpClass->isAbstract,
             isCopyConstructible: $phpClass->isCopyConstructible,
+            hasPublicConstructor: $phpClass->hasPublicConstructor,
             hasPublicDestructor: $phpClass->hasPublicDestructor,
             properties: $phpClass->properties,
             methods: $methods,
