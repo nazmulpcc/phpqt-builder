@@ -24,6 +24,10 @@ php -dextension=$PWD/build/ext/.libs/qt.so examples/<example>/run.php
   A notes app with sidebar, editor, preview pane, and autosave to repo-local markdown files.
 - `csv-viewer`
   A CSV utility with filtering, pagination, and export of filtered rows.
+- `log-viewer`
+  A tail-like log monitor with severity filtering, keyword search, and pause/resume polling.
+- `file-organizer`
+  A lightweight file browser with favorites, text preview, and safe bulk rename workflows.
 
 ## Data model
 
