@@ -23,12 +23,12 @@ final readonly class AppPaths
 
     public function dataDir(): string
     {
-        return $this->ensureDir($this->exampleRoot . '/data');
+        return $this->ensureDir($this->runtimeDir() . '/data');
     }
 
     public function exportsDir(): string
     {
-        return $this->ensureDir($this->exampleRoot . '/exports');
+        return $this->ensureDir($this->runtimeDir() . '/exports');
     }
 
     public function runtimeDir(): string
@@ -38,7 +38,32 @@ final readonly class AppPaths
 
     public function dataFile(string $name): string
     {
-        return $this->dataDir() . '/' . ltrim($name, '/');
+        $relative = ltrim($name, '/');
+        $target = $this->dataDir() . '/' . $relative;
+        if (file_exists($target)) {
+            return $target;
+        }
+
+        $seed = $this->exampleRoot . '/data/' . $relative;
+        if (is_file($seed)) {
+            $dir = dirname($target);
+            if (!is_dir($dir)) {
+                mkdir($dir, 0777, true);
+            }
+            copy($seed, $target);
+            return $target;
+        }
+
+        if (is_dir($seed)) {
+            $this->copyDir($seed, $target);
+        } else {
+            $dir = dirname($target);
+            if (!is_dir($dir)) {
+                mkdir($dir, 0777, true);
+            }
+        }
+
+        return $target;
     }
 
     public function exportFile(string $name): string
@@ -58,5 +83,32 @@ final readonly class AppPaths
         }
 
         return $path;
+    }
+
+    private function copyDir(string $source, string $target): void
+    {
+        if (!is_dir($target)) {
+            mkdir($target, 0777, true);
+        }
+
+        $entries = scandir($source);
+        if ($entries === false) {
+            return;
+        }
+
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+
+            $src = $source . '/' . $entry;
+            $dst = $target . '/' . $entry;
+            if (is_dir($src)) {
+                $this->copyDir($src, $dst);
+                continue;
+            }
+
+            copy($src, $dst);
+        }
     }
 }

@@ -4,3 +4,5 @@
 /build
 /docs
 .phpunit.cache
+examples/**/runtime/
+examples/**/exports/

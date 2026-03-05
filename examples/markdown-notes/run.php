@@ -168,6 +168,7 @@ final class NotesController extends \Qt\Core\QObject
 example_section('Markdown Notes');
 
 $paths = AppPaths::fromExampleRoot(__DIR__);
+$paths->dataFile('notes');
 $app = new QApplication();
 $window = new QWidget();
 $window->resize(1180, 720);
