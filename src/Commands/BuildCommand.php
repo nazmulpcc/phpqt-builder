@@ -24,6 +24,7 @@ use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Helper\ProgressBar;
+use Symfony\Component\Console\Helper\Table;
 use Symfony\Component\Console\Output\OutputInterface;
 
 #[AsCommand('build', 'Generate a PHP extension source tree from Qt modules.')]
@@ -95,8 +96,9 @@ class BuildCommand extends Command
             $skippedClasses = $cachedDiscovery->skippedClasses;
             $allowedClasses = $cachedDiscovery->allowedClasses;
             $candidateCount = $cachedDiscovery->candidateCount;
+            $moduleMethodTotals = $cachedDiscovery->moduleMethodTotals;
+            $moduleAcceptedMethodTotals = $cachedDiscovery->moduleAcceptedMethodTotals;
             $this->renderCacheUsage($output, $metadataDir);
-            $this->renderModuleAcceptance($output, $modules, $acceptedCandidates, $skippedClasses);
         } else {
             $output->writeln('<comment>Discovery cache miss; invoking build:discover.</comment>');
 
@@ -122,6 +124,8 @@ class BuildCommand extends Command
             $skippedClasses = $cachedDiscovery->skippedClasses;
             $allowedClasses = $cachedDiscovery->allowedClasses;
             $candidateCount = $cachedDiscovery->candidateCount;
+            $moduleMethodTotals = $cachedDiscovery->moduleMethodTotals;
+            $moduleAcceptedMethodTotals = $cachedDiscovery->moduleAcceptedMethodTotals;
         }
 
         $output->writeln(sprintf('<info>Scanning complete.</info> %d candidates queued, %d filtered before generation.', count($acceptedCandidates), count($skippedClasses)));
@@ -164,6 +168,14 @@ class BuildCommand extends Command
         $skippedMethods = $generation['skipped_methods'];
         $errors = $generation['errors'];
         $classmap = $generation['classmap'];
+        $this->renderModuleAcceptance(
+            $output,
+            $modules,
+            $acceptedCandidates,
+            $skippedClasses,
+            $moduleMethodTotals,
+            $generation['module_generated_method_totals'] ?? [],
+        );
 
         $this->discoveryService->writeCache(
             $metadataDir,
@@ -174,6 +186,8 @@ class BuildCommand extends Command
                 skippedClasses: $skippedClasses,
                 allowedClasses: $generatedClasses,
                 candidateCount: $candidateCount,
+                moduleMethodTotals: $moduleMethodTotals,
+                moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
             ),
         );
 
@@ -329,19 +343,41 @@ class BuildCommand extends Command
      * @param list<HeaderCandidate> $acceptedCandidates
      * @param list<array<string, string|null>> $skippedClasses
      */
-    private function renderModuleAcceptance(OutputInterface $output, array $modules, array $acceptedCandidates, array $skippedClasses): void
+    private function renderModuleAcceptance(
+        OutputInterface $output,
+        array $modules,
+        array $acceptedCandidates,
+        array $skippedClasses,
+        array $moduleMethodTotals = [],
+        array $moduleGeneratedMethodTotals = [],
+    ): void
     {
-        $output->writeln('<comment>Module acceptance:</comment>');
-
+        $rows = [];
         foreach ($this->discoveryService->moduleAcceptance($modules, $acceptedCandidates, $skippedClasses) as $row) {
-            $output->writeln(sprintf(
-                '  <comment>%s:</comment> %d/%d accepted (%s%%)',
-                $row['module'],
-                $row['accepted'],
-                $row['total'],
-                number_format($row['percent'], 1),
-            ));
+            $module = $row['module'];
+            $classAccepted = (int) $row['accepted'];
+            $classTotal = (int) $row['total'];
+            $classPercent = $classTotal > 0 ? ($classAccepted / $classTotal) * 100.0 : 0.0;
+
+            $methodTotal = max(0, (int) ($moduleMethodTotals[$module] ?? 0));
+            $methodAccepted = max(0, (int) ($moduleGeneratedMethodTotals[$module] ?? 0));
+            if ($methodAccepted > $methodTotal) {
+                $methodAccepted = $methodTotal;
+            }
+            $methodPercent = $methodTotal > 0 ? ($methodAccepted / $methodTotal) * 100.0 : 0.0;
+
+            $rows[] = [
+                $module,
+                sprintf('%.1f%% (%d/%d)', $classPercent, $classAccepted, $classTotal),
+                sprintf('%.1f%% (%d/%d)', $methodPercent, $methodAccepted, $methodTotal),
+            ];
         }
+
+        $output->writeln('<comment>Module acceptance:</comment>');
+        $table = new Table($output);
+        $table->setHeaders(['Module Name', 'Class Acceptance', 'Method Acceptance']);
+        $table->setRows($rows);
+        $table->render();
     }
 
     /**
@@ -365,6 +401,7 @@ class BuildCommand extends Command
             '--modules' => implode(',', $modules),
             '--output' => $outputDir,
             '--jobs' => (string) $jobs,
+            '--no-acceptance-table' => true,
         ];
         if ($usingApplicationCommand) {
             $arguments['command'] = 'build:discover';
@@ -387,6 +424,7 @@ class BuildCommand extends Command
      * @return array{
      *   accepted_candidates: list<HeaderCandidate>,
      *   generated_classes: list<string>,
+     *   module_generated_method_totals: array<string, int>,
      *   generated_class_parents: array<string, string|null>,
      *   generated_class_dependencies: array<string, list<string>>,
      *   skipped_classes: list<array<string, string|null>>,
@@ -436,6 +474,8 @@ class BuildCommand extends Command
         $generatedClassDependencies = [];
         /** @var array<string, \QtBuilder\Definition\PhpClass> $generatedPhpClasses */
         $generatedPhpClasses = [];
+        /** @var array<string, int> $moduleGeneratedMethodTotals */
+        $moduleGeneratedMethodTotals = [];
         $passes = 0;
         $classNamespaces = $this->classNamespaces($acceptedCandidates);
         $candidateModules = [];
@@ -606,9 +646,20 @@ class BuildCommand extends Command
             }
         }
 
+        $moduleGeneratedMethodTotals = [];
+        foreach ($generatedPhpClasses as $className => $phpClass) {
+            $module = $candidateModules[$className] ?? null;
+            if ($module === null || $module === '') {
+                continue;
+            }
+
+            $moduleGeneratedMethodTotals[$module] = ($moduleGeneratedMethodTotals[$module] ?? 0) + count($phpClass->methods);
+        }
+
         return [
             'accepted_candidates' => $currentCandidates,
             'generated_classes' => $generatedClasses,
+            'module_generated_method_totals' => $moduleGeneratedMethodTotals,
             'generated_class_parents' => $generatedClassParents,
             'generated_class_dependencies' => $generatedClassDependencies,
             'skipped_classes' => array_values($skippedByClass),

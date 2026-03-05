@@ -60,7 +60,10 @@ it('generates the extension tree from a fixture qt root', function (): void {
             'make: started',
             'make: succeeded',
             'Module acceptance:',
-            'QtCore:',
+            'Module Name',
+            'Class Acceptance',
+            'Method Acceptance',
+            'QtCore',
         )
         ->and($bootstrapper->contexts)->toHaveCount(1);
 
@@ -138,7 +141,10 @@ it('reuses an existing discovery cache', function (): void {
         'make: started',
         'make: succeeded',
         'Module acceptance:',
-        'QtCore:',
+        'Module Name',
+        'Class Acceptance',
+        'Method Acceptance',
+        'QtCore',
     )->not->toContain('Running 2 parallel discovery worker(s)...');
     expect(substr_count($result['display'], 'Module acceptance:'))->toBe(1);
 
@@ -256,7 +262,7 @@ it('rewrites cached allow lists to actual generated classes', function (): void 
     );
 
     expect($result)->toBeSuccessfulCommandResult();
-    expect($result['display'])->toContain('Using cached build metadata:', 'Re-evaluating generated dependency set', 'Module acceptance:', 'QtCore:');
+    expect($result['display'])->toContain('Using cached build metadata:', 'Re-evaluating generated dependency set', 'Module acceptance:', 'Module Name', 'QtCore');
     expect(substr_count($result['display'], 'Module acceptance:'))->toBe(1);
 
     $allowedClasses = qt_decode_json((string) file_get_contents($metadataDir . '/allowed_classes.json'));

@@ -10,6 +10,7 @@ use QtBuilder\Build\BuildDiscoveryService;
 use QtBuilder\Build\ExtensionBuildContext;
 use QtBuilder\Contracts\SystemInformation;
 use QtBuilder\Qt\QtInstallationResolver;
+use Symfony\Component\Console\Helper\Table;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -34,6 +35,7 @@ class BuildDiscoverCommand extends Command
             ->addOption('modules', null, InputOption::VALUE_REQUIRED, 'Comma-separated Qt modules to scan', 'QtCore')
             ->addOption('output', 'o', InputOption::VALUE_REQUIRED, 'Build root directory; discovery metadata is written under <output>/generated', 'build')
             ->addOption('force', 'F', InputOption::VALUE_NONE, 'Clear the selected build root before starting discovery')
+            ->addOption('no-acceptance-table', null, InputOption::VALUE_NONE, 'Skip module acceptance table output (internal use)')
             ->addOption('jobs', 'j', InputOption::VALUE_REQUIRED, 'Number of parallel discovery workers');
     }
 
@@ -80,7 +82,16 @@ class BuildDiscoverCommand extends Command
             count($discovery->acceptedCandidates),
             count($discovery->skippedClasses),
         ));
-        $this->renderModuleAcceptance($output, $modules, $discovery->acceptedCandidates, $discovery->skippedClasses);
+        if (!(bool) $input->getOption('no-acceptance-table')) {
+            $this->renderModuleAcceptance(
+                $output,
+                $modules,
+                $discovery->acceptedCandidates,
+                $discovery->skippedClasses,
+                $discovery->moduleMethodTotals,
+                $discovery->moduleAcceptedMethodTotals,
+            );
+        }
 
         if ($discovery->errors !== []) {
             foreach ($discovery->errors as $error) {
@@ -139,19 +150,46 @@ class BuildDiscoverCommand extends Command
      * @param list<string> $modules
      * @param list<\QtBuilder\Scanning\HeaderCandidate> $acceptedCandidates
      * @param list<array<string, string|null>> $skippedClasses
+     * @param array<string, int> $moduleMethodTotals
+     * @param array<string, int> $moduleAcceptedMethodTotals
      */
-    private function renderModuleAcceptance(OutputInterface $output, array $modules, array $acceptedCandidates, array $skippedClasses): void
+    private function renderModuleAcceptance(
+        OutputInterface $output,
+        array $modules,
+        array $acceptedCandidates,
+        array $skippedClasses,
+        array $moduleMethodTotals,
+        array $moduleAcceptedMethodTotals,
+    ): void
     {
-        $output->writeln('<comment>Module acceptance:</comment>');
-
+        $rows = [];
         foreach ($this->discoveryService->moduleAcceptance($modules, $acceptedCandidates, $skippedClasses) as $row) {
-            $output->writeln(sprintf(
-                '  <comment>%s:</comment> %d/%d accepted (%s%%)',
-                $row['module'],
-                $row['accepted'],
-                $row['total'],
-                number_format($row['percent'], 1),
-            ));
+            $module = $row['module'];
+            $classAccepted = (int) $row['accepted'];
+            $classTotal = (int) $row['total'];
+            $classPercent = $classTotal > 0 ? ($classAccepted / $classTotal) * 100.0 : 0.0;
+
+            $methodTotal = max(0, (int) ($moduleMethodTotals[$module] ?? 0));
+            $methodAccepted = max(0, (int) ($moduleAcceptedMethodTotals[$module] ?? 0));
+            if ($methodAccepted > $methodTotal) {
+                $methodAccepted = $methodTotal;
+            }
+            $methodPercent = $methodTotal > 0 ? 100.0 : 0.0;
+            if ($methodTotal > 0) {
+                $methodPercent = ($methodAccepted / $methodTotal) * 100.0;
+            }
+
+            $rows[] = [
+                $module,
+                sprintf('%.1f%% (%d/%d)', $classPercent, $classAccepted, $classTotal),
+                sprintf('%.1f%% (%d/%d)', $methodPercent, $methodAccepted, $methodTotal),
+            ];
         }
+
+        $output->writeln('<comment>Module acceptance:</comment>');
+        $table = new Table($output);
+        $table->setHeaders(['Module Name', 'Class Acceptance', 'Method Acceptance']);
+        $table->setRows($rows);
+        $table->render();
     }
 }
