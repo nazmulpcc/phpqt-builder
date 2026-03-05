@@ -57,6 +57,10 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
     bool _qt_use_trampoline = (_qt_actual_ce != {!! $ctx->ceVarName !!}) && _qt_has_virtual_override;
 @endif
 @endif
+@if($method->overloadCount === 0)
+    zend_throw_error(NULL, "{!! $ctx->phpClassName !!} cannot be instantiated directly.");
+    RETURN_THROWS();
+@endif
 
 @if($method->hasNoParams())
 @if($ctx->requiresVirtualTrampoline)

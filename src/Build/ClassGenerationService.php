@@ -156,6 +156,7 @@ class ClassGenerationService
         );
         $phpClass = $abstractConstructorAdjusted['class'];
         $skippedMethods = [...$skippedMethods, ...$abstractConstructorAdjusted['skipped_methods']];
+        $phpClass = $this->ensureProtectedUnavailableConstructor($phpClass, $sourceClassData);
         $phpClass = $this->stripQObjectRuntimeMethods($phpClass);
 
         if (!$this->shouldGenerateClassShell($phpClass, $classData)) {
@@ -347,6 +348,7 @@ class ClassGenerationService
         );
         $phpClass = $abstractConstructorAdjusted['class'];
         $skippedMethods = [...$skippedMethods, ...$abstractConstructorAdjusted['skipped_methods']];
+        $phpClass = $this->ensureProtectedUnavailableConstructor($phpClass, $sourceClassData);
         $phpClass = $this->stripQObjectRuntimeMethods($phpClass);
 
         if (!$this->shouldGenerateClassShell($phpClass, $classData)) {
@@ -1911,6 +1913,64 @@ class ClassGenerationService
                 'reason_message' => 'Abstract class constructors are only exposed when the generated native subclass can satisfy all pure virtual requirements.',
             ]],
         ];
+    }
+
+    /**
+     * Keep internally-owned, non-instantiable classes concrete in PHP while still
+     * preventing direct construction from userland.
+     *
+     * @param array<string, mixed> $classData
+     */
+    private function ensureProtectedUnavailableConstructor(PhpClass $phpClass, array $classData): PhpClass
+    {
+        if ($phpClass->isAbstract) {
+            return $phpClass;
+        }
+
+        $hasUsableSurface = $phpClass->methods !== []
+            || $phpClass->signals !== []
+            || $phpClass->properties !== []
+            || $phpClass->classConstants !== [];
+        if (!$hasUsableSurface) {
+            return $phpClass;
+        }
+
+        if ((bool) ($classData['has_public_constructor'] ?? true)) {
+            return $phpClass;
+        }
+
+        foreach ($phpClass->methods as $method) {
+            if ($method->name === '__construct') {
+                return $phpClass;
+            }
+        }
+
+        $methods = $phpClass->methods;
+        array_unshift($methods, new PhpMethod(
+            name: '__construct',
+            access: 'protected',
+            isStatic: false,
+            isSignal: false,
+            isSlot: false,
+            isAbstractMethod: false,
+            returnType: 'void',
+            parameters: [],
+            overloads: [],
+            cppName: '__construct',
+        ));
+
+        return new PhpClass(
+            name: $phpClass->name,
+            parent: $phpClass->parent,
+            isAbstract: $phpClass->isAbstract,
+            isCopyConstructible: $phpClass->isCopyConstructible,
+            hasPublicDestructor: $phpClass->hasPublicDestructor,
+            isQObjectDerived: $phpClass->isQObjectDerived,
+            properties: $phpClass->properties,
+            methods: $methods,
+            signals: $phpClass->signals,
+            classConstants: $phpClass->classConstants,
+        );
     }
 
     /**

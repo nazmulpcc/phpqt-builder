@@ -367,7 +367,10 @@ it('guards instance methods when native pointers are missing', function (): void
     
         Assert::assertSame(Command::SUCCESS, $exitCode);
     
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_quninstantiablething.stub.php');
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_quninstantiablething.cpp');
+        Assert::assertStringContainsString('protected function __construct() {}', $stub);
+        Assert::assertStringContainsString('zend_throw_error(NULL, "QUninstantiableThing cannot be instantiated directly.");', $cpp);
         Assert::assertStringContainsString('zend_throw_error(NULL, "QUninstantiableThing native instance is not initialized");', $cpp);
         Assert::assertStringContainsString('RETURN_THROWS();', $cpp);
 });
