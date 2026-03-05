@@ -1738,6 +1738,26 @@ PHP_MINIT_FUNCTION({!! $ctx->minitName !!})
 @if($ctx->isAbstract)
     {!! $ctx->ceVarName !!}->ce_flags |= ZEND_ACC_ABSTRACT;
 @endif
+@if($ctx->hasClassConstants())
+@foreach($ctx->classConstants as $constant)
+    {
+        zval _qt_const_value;
+        {!! $constant['cInit'] !!}
+        zend_string *_qt_const_name = zend_string_init_interned("{!! addslashes($constant['name']) !!}", sizeof("{!! addslashes($constant['name']) !!}") - 1, 1);
+        if (!zend_hash_exists(&{!! $ctx->ceVarName !!}->constants_table, _qt_const_name)) {
+            zend_declare_typed_class_constant(
+                {!! $ctx->ceVarName !!},
+                _qt_const_name,
+                &_qt_const_value,
+                ZEND_ACC_PUBLIC,
+                NULL,
+                (zend_type) ZEND_TYPE_INIT_MASK({!! $constant['cTypeMask'] !!})
+            );
+        }
+        zend_string_release(_qt_const_name);
+    }
+@endforeach
+@endif
 @if($ctx->hasQObjectPropertySupport())
     {
         const QMetaObject &_qt_meta = {!! $ctx->nativeCppType !!}::staticMetaObject;

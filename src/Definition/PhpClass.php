@@ -18,6 +18,7 @@ readonly class PhpClass
      * @param list<PhpProperty> $properties
      * @param list<PhpMethod> $methods
      * @param list<PhpMethod> $signals
+     * @param list<PhpClassConstant> $classConstants
      */
     public function __construct(
         public string $name,
@@ -29,6 +30,7 @@ readonly class PhpClass
         public array $methods,
         public array $signals,
         public bool $isQObjectDerived = false,
+        public array $classConstants = [],
     ) {}
 
     /**
@@ -62,7 +64,7 @@ readonly class PhpClass
     }
 
     /**
-     * @return array{name: string, parent: ?string, is_abstract: bool, is_copy_constructible: bool, has_public_destructor: bool, is_qobject_derived: bool, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, signals: list<array<string, mixed>>, summary: array{total_methods: int, public_methods: int, protected_methods: int, overloaded_methods: int, total_signals: int, total_properties: int}}
+     * @return array{name: string, parent: ?string, is_abstract: bool, is_copy_constructible: bool, has_public_destructor: bool, is_qobject_derived: bool, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, signals: list<array<string, mixed>>, class_constants: list<array<string, mixed>>, summary: array{total_methods: int, public_methods: int, protected_methods: int, overloaded_methods: int, total_signals: int, total_properties: int, total_class_constants: int}}
      */
     public function toArray(): array
     {
@@ -85,6 +87,10 @@ readonly class PhpClass
                 static fn(PhpMethod $m): array => $m->toArray(),
                 $this->signals,
             ),
+            'class_constants' => array_map(
+                static fn(PhpClassConstant $constant): array => $constant->toArray(),
+                $this->classConstants,
+            ),
             'summary' => [
                 'total_methods' => \count($this->methods),
                 'public_methods' => \count($this->publicMethods()),
@@ -92,6 +98,7 @@ readonly class PhpClass
                 'overloaded_methods' => \count($this->overloadedMethods()),
                 'total_signals' => \count($this->signals),
                 'total_properties' => \count($this->properties),
+                'total_class_constants' => \count($this->classConstants),
             ],
         ];
     }

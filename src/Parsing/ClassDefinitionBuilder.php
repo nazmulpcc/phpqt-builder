@@ -7,6 +7,7 @@ namespace QtBuilder\Parsing;
 use QtBuilder\Definition\MethodOverload;
 use QtBuilder\Definition\OverloadParameter;
 use QtBuilder\Definition\PhpClass;
+use QtBuilder\Definition\PhpClassConstant;
 use QtBuilder\Definition\PhpMethod;
 use QtBuilder\Definition\PhpParameter;
 use QtBuilder\Definition\PhpProperty;
@@ -29,7 +30,7 @@ class ClassDefinitionBuilder
     /**
      * Build a PhpClass from the array produced by QtClassInspector::inspect().
      *
-     * @param array{name: string, is_abstract: bool, is_copy_constructible?: bool, has_public_destructor?: bool, is_qobject_derived?: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, signals?: list<array<string, mixed>>} $classData
+     * @param array{name: string, is_abstract: bool, is_copy_constructible?: bool, has_public_destructor?: bool, is_qobject_derived?: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, signals?: list<array<string, mixed>>, enum_constants?: list<array<string, mixed>>} $classData
      */
     public function build(array $classData): PhpClass
     {
@@ -37,6 +38,7 @@ class ClassDefinitionBuilder
         $properties = $this->buildProperties($classData['properties']);
         $methods = $this->buildMethods($classData['methods'], $className);
         $signals = $this->buildMethods($classData['signals'] ?? [], $className);
+        $classConstants = $this->buildClassConstants($classData['enum_constants'] ?? []);
 
         // Use the first base class as the PHP parent (single inheritance).
         $parent = $classData['bases'][0] ?? null;
@@ -51,7 +53,46 @@ class ClassDefinitionBuilder
             properties: $properties,
             methods: $methods,
             signals: $signals,
+            classConstants: $classConstants,
         );
+    }
+
+    /**
+     * @param list<array<string, mixed>> $constants
+     * @return list<PhpClassConstant>
+     */
+    private function buildClassConstants(array $constants): array
+    {
+        $result = [];
+        $seenNames = [];
+
+        foreach ($constants as $constant) {
+            $name = is_string($constant['name'] ?? null) ? trim($constant['name']) : '';
+            if ($name === '' || preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $name) !== 1) {
+                continue;
+            }
+            if (isset($seenNames[$name])) {
+                continue;
+            }
+
+            $value = $constant['value'] ?? null;
+            if (!is_int($value) && !is_float($value) && !is_string($value)) {
+                continue;
+            }
+
+            $enumName = is_string($constant['enum_name'] ?? null)
+                ? trim((string) $constant['enum_name'])
+                : '';
+
+            $result[] = new PhpClassConstant(
+                name: $name,
+                value: $value,
+                enumName: $enumName,
+            );
+            $seenNames[$name] = true;
+        }
+
+        return $result;
     }
 
     // ------------------------------------------------------------------

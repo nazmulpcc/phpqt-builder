@@ -473,6 +473,7 @@ class ClassGenerationService
                 properties: $phpClass->properties,
                 methods: $methods,
                 signals: $phpClass->signals,
+                classConstants: $phpClass->classConstants,
             ),
             'skipped_methods' => $skippedMethods,
         ];
@@ -1426,6 +1427,7 @@ class ClassGenerationService
                 properties: $phpClass->properties,
                 methods: $methods,
                 signals: $phpClass->signals,
+                classConstants: $phpClass->classConstants,
             ),
             'skipped_methods' => $skippedMethods,
         ];
@@ -1897,6 +1899,7 @@ class ClassGenerationService
                 properties: $phpClass->properties,
                 methods: $methods,
                 signals: $phpClass->signals,
+                classConstants: $phpClass->classConstants,
             ),
             'skipped_methods' => [[
                 'name' => '__construct',
@@ -2885,6 +2888,7 @@ class ClassGenerationService
             methods: $methods,
             signals: $phpClass->signals,
             isQObjectDerived: $phpClass->isQObjectDerived,
+            classConstants: $phpClass->classConstants,
         );
     }
 

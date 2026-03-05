@@ -97,6 +97,8 @@ it('casts enum parameters back to native types', function (): void {
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qenumholder.cpp');
     
         Assert::assertStringContainsString('public function setMode(int $mode): void {}', $stub);
+        Assert::assertStringContainsString('public const int Off = 0;', $stub);
+        Assert::assertStringContainsString('public const int On = 1;', $stub);
         Assert::assertStringContainsString('intern->native_ptr->setMode((QEnumHolder::Mode)((int)(mode)));', $cpp);
         Assert::assertStringContainsString('RETURN_LONG((zend_long)(intern->native_ptr->mode()));', $cpp);
 });

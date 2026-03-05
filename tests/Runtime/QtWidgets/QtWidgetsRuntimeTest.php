@@ -62,3 +62,13 @@ it('ensures renamed methods do not leave generated classes abstract', function (
 
     expect($payload['offenders'])->toBe([]);
 });
+
+it('exposes Qt enum values as class constants', function (): void {
+    $payload = qt_runtime_payload('QtWidgets/header_view_constants.php');
+
+    expect($payload['has_stretch'])->toBeTrue()
+        ->and($payload['has_interactive'])->toBeTrue()
+        ->and($payload['has_fixed'])->toBeTrue()
+        ->and($payload['has_resize_to_contents'])->toBeTrue()
+        ->and($payload['stretch_value'])->toBe(1);
+});

@@ -143,6 +143,9 @@ class ClassContext
     /** @var list<string> Required #include for cross-class references (e.g. "qt_qpoint.h") */
     public readonly array $requiredIncludes;
 
+    /** @var list<array{name: string, stubType: string, stubValue: string, cInit: string, cTypeMask: string}> */
+    public readonly array $classConstants;
+
     /** The namespace parts for INIT_NS_CLASS_ENTRY (e.g. ["Qt", "Widgets"]) */
     public readonly array $namespaceParts;
 
@@ -308,6 +311,7 @@ class ClassContext
             $properties[] = new PropertyContext($property, $typeBridge);
         }
         $this->properties = $properties;
+        $this->classConstants = $this->buildClassConstants($phpClass->classConstants);
 
         // Compute required cross-class includes
         $this->requiredIncludes = $this->computeRequiredIncludes($phpClass, $typeBridge);
@@ -458,9 +462,53 @@ class ClassContext
         return false;
     }
 
+    /**
+     * @param list<PhpClassConstant> $classConstants
+     * @return list<array{name: string, stubType: string, stubValue: string, cInit: string, cTypeMask: string}>
+     */
+    private function buildClassConstants(array $classConstants): array
+    {
+        $result = [];
+
+        foreach ($classConstants as $constant) {
+            $stubType = is_int($constant->value)
+                ? 'int'
+                : (is_float($constant->value) ? 'float' : 'string');
+
+            $cInit = match ($stubType) {
+                'int' => sprintf('ZVAL_LONG(&_qt_const_value, (zend_long)(%s));', var_export($constant->value, true)),
+                'float' => sprintf('ZVAL_DOUBLE(&_qt_const_value, (double)(%s));', var_export($constant->value, true)),
+                default => sprintf(
+                    'ZVAL_STRING(&_qt_const_value, "%s");',
+                    addcslashes((string) $constant->value, "\\\"\n\r\t\v\f"),
+                ),
+            };
+            $cTypeMask = match ($stubType) {
+                'int' => 'MAY_BE_LONG',
+                'float' => 'MAY_BE_DOUBLE',
+                default => 'MAY_BE_STRING',
+            };
+
+            $result[] = [
+                'name' => $constant->name,
+                'stubType' => $stubType,
+                'stubValue' => var_export($constant->value, true),
+                'cInit' => $cInit,
+                'cTypeMask' => $cTypeMask,
+            ];
+        }
+
+        return $result;
+    }
+
     public function hasSignals(): bool
     {
         return $this->signalOverloads !== [];
+    }
+
+    public function hasClassConstants(): bool
+    {
+        return $this->classConstants !== [];
     }
 
     public function hasQObjectPropertySupport(): bool

@@ -20,6 +20,12 @@ namespace {!! $ctx->phpNamespace !!};
 @endphp
 {!! $classDecl !!}
 {
+@if($ctx->hasClassConstants())
+@foreach($ctx->classConstants as $constant)
+    public const {!! $constant['stubType'] !!} {!! $constant['name'] !!} = {!! $constant['stubValue'] !!};
+
+@endforeach
+@endif
 @foreach($ctx->methods as $method)
 @php
     $modifiers = $method->access;

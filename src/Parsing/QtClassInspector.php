@@ -78,7 +78,7 @@ class QtClassInspector
      * Convenience method that combines {@see parse()}, {@see findClass()},
      * and {@see extractClassData()} in one call.
      *
-     * @return array{name: string, is_abstract: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>}|null
+     * @return array{name: string, is_abstract: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, enum_constants: list<array<string, mixed>>}|null
      */
     public function inspect(string $headerPath, string $className): ?array
     {
@@ -120,7 +120,7 @@ class QtClassInspector
      * nodes for the actual definition. In that case we recover members by scanning the
      * translation unit for methods/fields whose parent spelling matches the class name.
      *
-     * @return array{name: string, is_abstract: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>}
+     * @return array{name: string, is_abstract: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, enum_constants: list<array<string, mixed>>}
      */
     private function extractClassDataFromTranslationUnit(string $className, ?ClassCursor $classCursor = null): array
     {
@@ -206,6 +206,7 @@ class QtClassInspector
             )) : [],
             'properties' => $properties,
             'methods' => $methods,
+            'enum_constants' => $classCursor !== null ? $this->extractEnumConstants($classCursor) : [],
         ];
     }
 
@@ -219,7 +220,7 @@ class QtClassInspector
     /**
      * Extract structured metadata from a ClassCursor.
      *
-     * @return array{name: string, is_abstract: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>}
+     * @return array{name: string, is_abstract: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, enum_constants: list<array<string, mixed>>}
      */
     public function extractClassData(ClassCursor $class): array
     {
@@ -253,7 +254,39 @@ class QtClassInspector
             'bases' => $bases,
             'properties' => $properties,
             'methods' => $methods,
+            'enum_constants' => $this->extractEnumConstants($class),
         ];
+    }
+
+    /**
+     * @return list<array{name: string, enum_name: string, value: int|float|string}>
+     */
+    private function extractEnumConstants(ClassCursor $class): array
+    {
+        $constants = [];
+
+        foreach ($class->getEnums() as $enum) {
+            $enumName = trim($enum->getSpelling());
+            foreach ($enum->getConstants() as $constant) {
+                $name = trim($constant->getSpelling());
+                if ($name === '') {
+                    continue;
+                }
+
+                $value = $constant->getValue();
+                if (!is_int($value) && !is_float($value) && !is_string($value)) {
+                    continue;
+                }
+
+                $constants[] = [
+                    'name' => $name,
+                    'enum_name' => $enumName,
+                    'value' => $value,
+                ];
+            }
+        }
+
+        return $constants;
     }
 
     /**
