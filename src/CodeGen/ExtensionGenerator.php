@@ -6,6 +6,8 @@ namespace QtBuilder\CodeGen;
 
 use eftec\bladeone\BladeOne;
 use QtBuilder\Definition\PhpClass;
+use QtBuilder\IO\FileWriteStats;
+use QtBuilder\IO\SmartFileWriter;
 
 /**
  * Orchestrates Blade template rendering to generate C/C++ extension files.
@@ -19,12 +21,17 @@ class ExtensionGenerator
 {
     private BladeOne $blade;
     private TypeBridge $typeBridge;
+    private readonly SmartFileWriter $fileWriter;
+    private FileWriteStats $lastWriteStats;
 
     public function __construct(
         ?string $templatePath = null,
         ?string $compiledPath = null,
+        ?SmartFileWriter $fileWriter = null,
     ) {
         $this->typeBridge = new TypeBridge();
+        $this->fileWriter = $fileWriter ?? new SmartFileWriter();
+        $this->lastWriteStats = new FileWriteStats();
 
         $projectRoot = dirname(__DIR__, 2);
         $templatePath ??= $projectRoot . '/templates';
@@ -52,6 +59,7 @@ class ExtensionGenerator
      */
     public function generate(PhpClass $phpClass, string $namespace, string $outputDir, array $classNamespaces = []): array
     {
+        $this->lastWriteStats = new FileWriteStats();
         $ctx = new ClassContext($phpClass, $namespace, $this->typeBridge, $classNamespaces);
         $files = [];
 
@@ -70,13 +78,16 @@ class ExtensionGenerator
         $sourceFile = $outputDir . '/' . $ctx->filePrefix . '.cpp';
         $stubFile = $outputDir . '/' . $ctx->filePrefix . '.stub.php';
 
-        file_put_contents($headerFile, $this->cleanOutput($headerContent));
+        $headerResult = $this->fileWriter->write($headerFile, $this->cleanOutput($headerContent));
+        $this->lastWriteStats->record($headerResult);
         $files[] = $headerFile;
 
-        file_put_contents($sourceFile, $this->cleanOutput($sourceContent));
+        $sourceResult = $this->fileWriter->write($sourceFile, $this->cleanOutput($sourceContent));
+        $this->lastWriteStats->record($sourceResult);
         $files[] = $sourceFile;
 
-        file_put_contents($stubFile, $this->cleanOutput($stubContent));
+        $stubResult = $this->fileWriter->write($stubFile, $this->cleanOutput($stubContent));
+        $this->lastWriteStats->record($stubResult);
         $files[] = $stubFile;
 
         if ($ctx->hasSignals()) {
@@ -100,6 +111,16 @@ class ExtensionGenerator
     public function buildContext(PhpClass $phpClass, string $namespace, array $classNamespaces = []): ClassContext
     {
         return new ClassContext($phpClass, $namespace, $this->typeBridge, $classNamespaces);
+    }
+
+    public function lastWriteStats(): FileWriteStats
+    {
+        return $this->lastWriteStats;
+    }
+
+    public function writeComparatorName(): string
+    {
+        return $this->fileWriter->comparatorName();
     }
 
     /**
@@ -130,22 +151,25 @@ class ExtensionGenerator
         $sourceFile = $outputDir . '/qt_qmetaobjectconnection.cpp';
         $stubFile = $outputDir . '/qt_qmetaobjectconnection.stub.php';
 
-        file_put_contents(
+        $headerResult = $this->fileWriter->write(
             $headerFile,
             $this->cleanOutput($this->blade->run('generation.support.qmetaobjectconnection_header', [])),
         );
+        $this->lastWriteStats->record($headerResult);
         $files[] = $headerFile;
 
-        file_put_contents(
+        $sourceResult = $this->fileWriter->write(
             $sourceFile,
             $this->cleanOutput($this->blade->run('generation.support.qmetaobjectconnection_source', [])),
         );
+        $this->lastWriteStats->record($sourceResult);
         $files[] = $sourceFile;
 
-        file_put_contents(
+        $stubResult = $this->fileWriter->write(
             $stubFile,
             $this->cleanOutput($this->blade->run('generation.support.qmetaobjectconnection_stub', [])),
         );
+        $this->lastWriteStats->record($stubResult);
         $files[] = $stubFile;
 
         return $files;

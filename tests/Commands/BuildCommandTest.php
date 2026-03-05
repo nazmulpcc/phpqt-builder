@@ -60,6 +60,7 @@ it('generates the extension tree from a fixture qt root', function (): void {
             'make: started',
             'make: succeeded',
             'Module acceptance:',
+            'File writes:',
             'Module Name',
             'Class Acceptance',
             'Method Acceptance',
@@ -72,7 +73,8 @@ it('generates the extension tree from a fixture qt root', function (): void {
     $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
     expect($summary['generated_classes'])->toBe(5)
         ->and($summary['skipped_classes'])->toBe(1)
-        ->and(array_column($summary['bootstrap'], 'name'))->toBe(['phpize', 'gen_stub', 'configure', 'make']);
+        ->and(array_column($summary['bootstrap'], 'name'))->toBe(['phpize', 'gen_stub', 'configure', 'make'])
+        ->and($summary['file_writes']['total']['total'] ?? null)->toBeGreaterThan(0);
 
     $classmap = qt_decode_json((string) file_get_contents($metadataDir . '/classmap.json'));
     expect(array_column($classmap, 'class'))->toBe(['QAbstractItemModel', 'QModelIndex', 'QNode', 'QPoint', 'QTree']);
@@ -285,6 +287,43 @@ it('rewrites cached allow lists to actual generated classes', function (): void 
     expect($summary['generation_passes'])->toBe(2)
         ->and($summary['generated_classes'])->toBe(1)
         ->and($summary['skipped_classes'])->toBe(1);
+});
+
+it('skips bootstrap when generated files are unchanged and module binary exists', function (): void {
+    $fixtureRoot = qt_fixture_path('qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-skip-bootstrap-' . bin2hex(random_bytes(4));
+    $metadataDir = $buildRoot . '/generated';
+    $bootstrapper = new FakeExtensionBootstrapper();
+
+    $first = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            '--modules' => 'QtCore',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+        ],
+    );
+    expect($first)->toBeSuccessfulCommandResult();
+
+    $second = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            '--modules' => 'QtCore',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+        ],
+    );
+
+    expect($second)->toBeSuccessfulCommandResult()
+        ->and($second['display'])->toContain('No generated file changes detected; skipping bootstrap.')
+        ->and($bootstrapper->contexts)->toHaveCount(1);
+
+    $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
+    expect($summary['bootstrap_skipped'] ?? null)->toBeTrue()
+        ->and($summary['file_writes']['total']['written'] ?? null)->toBe(0)
+        ->and($summary['file_writes']['total']['unchanged'] ?? 0)->toBeGreaterThan(0);
 });
 
 it('rejects an ext directory as the build root', function (): void {

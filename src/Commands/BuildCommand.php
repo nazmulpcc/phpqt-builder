@@ -16,6 +16,7 @@ use QtBuilder\Build\ExtensionScaffolder;
 use QtBuilder\Build\ProcessExtensionBootstrapper;
 use QtBuilder\CodeGen\ExtensionGenerator;
 use QtBuilder\Contracts\SystemInformation;
+use QtBuilder\IO\FileWriteStats;
 use QtBuilder\Qt\QtInstallationResolver;
 use QtBuilder\Scanning\HeaderCandidate;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -168,6 +169,8 @@ class BuildCommand extends Command
         $skippedMethods = $generation['skipped_methods'];
         $errors = $generation['errors'];
         $classmap = $generation['classmap'];
+        /** @var FileWriteStats $classWriteStats */
+        $classWriteStats = $generation['file_write_stats'];
         $this->renderModuleAcceptance(
             $output,
             $modules,
@@ -198,20 +201,30 @@ class BuildCommand extends Command
             (bool) ($generation['requires_signal_connection_support'] ?? false),
         );
         $scaffoldFiles = $scaffolder->finalize($context);
+        $coreWriteStats = $scaffolder->lastWriteStats();
+        $totalWriteStats = new FileWriteStats();
+        $totalWriteStats->merge($classWriteStats);
+        $totalWriteStats->merge($coreWriteStats);
 
         $bootstrapResult = null;
         $bootstrapError = null;
+        $bootstrapSkipped = false;
 
         if ($generatedClasses !== [] && $errors === []) {
-            $output->writeln('<info>Bootstrapping extension build tree...</info>');
+            if ($totalWriteStats->written() === 0 && $this->moduleBinaryExists($context)) {
+                $bootstrapSkipped = true;
+                $output->writeln('<comment>No generated file changes detected; skipping bootstrap.</comment>');
+            } else {
+                $output->writeln('<info>Bootstrapping extension build tree...</info>');
 
-            try {
-                $bootstrapResult = $this->bootstrapper->bootstrap($context, $jobs, function (array $event) use ($output): void {
-                    $this->renderBootstrapEvent($output, $event);
-                });
-            } catch (\RuntimeException $e) {
-                $bootstrapError = $e->getMessage();
-                $output->writeln(sprintf('<error>%s</error>', $bootstrapError));
+                try {
+                    $bootstrapResult = $this->bootstrapper->bootstrap($context, $jobs, function (array $event) use ($output): void {
+                        $this->renderBootstrapEvent($output, $event);
+                    });
+                } catch (\RuntimeException $e) {
+                    $bootstrapError = $e->getMessage();
+                    $output->writeln(sprintf('<error>%s</error>', $bootstrapError));
+                }
             }
         }
 
@@ -225,6 +238,13 @@ class BuildCommand extends Command
             'generation_passes' => $generation['passes'],
             'bootstrap' => $bootstrapResult?->toArray(),
             'bootstrap_error' => $bootstrapError,
+            'bootstrap_skipped' => $bootstrapSkipped,
+            'file_writes' => [
+                'comparator' => $scaffolder->writeComparatorName(),
+                'class' => $classWriteStats->toArray(),
+                'core' => $coreWriteStats->toArray(),
+                'total' => $totalWriteStats->toArray(),
+            ],
         ];
 
         file_put_contents($metadataDir . '/classmap.json', json_encode($classmap, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]');
@@ -235,6 +255,14 @@ class BuildCommand extends Command
         foreach ($scaffoldFiles as $file) {
             $output->writeln(sprintf('  <comment>Wrote:</comment> %s', $file));
         }
+        $output->writeln(sprintf(
+            '<comment>File writes:</comment> %d written (%d created, %d updated), %d unchanged [comparator: %s]',
+            $totalWriteStats->written(),
+            $totalWriteStats->created(),
+            $totalWriteStats->updated(),
+            $totalWriteStats->unchanged(),
+            $scaffolder->writeComparatorName(),
+        ));
         $output->writeln(sprintf('<info>Generated %d class wrapper(s); %d class(es) skipped; %d error(s).</info>', count($generatedClasses), count($skippedClasses), count($errors)));
 
         if ($generatedClasses === [] || $errors !== [] || $bootstrapError !== null) {
@@ -242,6 +270,13 @@ class BuildCommand extends Command
         }
 
         return self::SUCCESS;
+    }
+
+    private function moduleBinaryExists(ExtensionBuildContext $context): bool
+    {
+        $path = $context->outputDir . '/modules/' . $context->extensionName . '.so';
+
+        return is_file($path);
     }
 
     /**
@@ -425,6 +460,7 @@ class BuildCommand extends Command
      *   accepted_candidates: list<HeaderCandidate>,
      *   generated_classes: list<string>,
      *   module_generated_method_totals: array<string, int>,
+     *   file_write_stats: FileWriteStats,
      *   generated_class_parents: array<string, string|null>,
      *   generated_class_dependencies: array<string, list<string>>,
      *   skipped_classes: list<array<string, string|null>>,
@@ -476,6 +512,7 @@ class BuildCommand extends Command
         $generatedPhpClasses = [];
         /** @var array<string, int> $moduleGeneratedMethodTotals */
         $moduleGeneratedMethodTotals = [];
+        $fileWriteStats = new FileWriteStats();
         $passes = 0;
         $classNamespaces = $this->classNamespaces($acceptedCandidates);
         $candidateModules = [];
@@ -617,6 +654,7 @@ class BuildCommand extends Command
                     $outputDir . '/classes',
                     $classNamespaces,
                 );
+                $fileWriteStats->merge($generator->lastWriteStats());
                 $classmap[] = [
                     'class' => $className,
                     'header' => $this->headerPathForClass($currentCandidates, $acceptedCandidates, $className),
@@ -660,6 +698,7 @@ class BuildCommand extends Command
             'accepted_candidates' => $currentCandidates,
             'generated_classes' => $generatedClasses,
             'module_generated_method_totals' => $moduleGeneratedMethodTotals,
+            'file_write_stats' => $fileWriteStats,
             'generated_class_parents' => $generatedClassParents,
             'generated_class_dependencies' => $generatedClassDependencies,
             'skipped_classes' => array_values($skippedByClass),
