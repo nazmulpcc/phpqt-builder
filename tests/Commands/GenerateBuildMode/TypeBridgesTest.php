@@ -103,6 +103,35 @@ it('casts enum parameters back to native types', function (): void {
         Assert::assertStringContainsString('RETURN_LONG((zend_long)(intern->native_ptr->mode()));', $cpp);
 });
 
+it('qualifies nested enum class names for native casts', function (): void {
+        $fixtureRoot = qt_fixture_path('policy-qt');
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+    
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qnestedenumholder.h',
+            'class' => 'QNestedEnumHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QNestedEnumHolder',
+        ]);
+    
+        Assert::assertSame(Command::SUCCESS, $exitCode);
+    
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        Assert::assertSame('ok', $payload['status']);
+    
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qnestedenumholder.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qnestedenumholder.cpp');
+    
+        Assert::assertStringContainsString('public function setPair(int $semantic, int $componentType): void {}', $stub);
+        Assert::assertStringContainsString('intern->native_ptr->setPair((QNestedEnumHolder::Attribute::Semantic)((int)(semantic)), (QNestedEnumHolder::Attribute::ComponentType)((int)(componentType)));', $cpp);
+});
+
 it('handles const char pointer string returns', function (): void {
         $fixtureRoot = qt_fixture_path('policy-qt');
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));

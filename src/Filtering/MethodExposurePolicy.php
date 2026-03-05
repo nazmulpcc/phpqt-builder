@@ -616,6 +616,16 @@ class MethodExposurePolicy
             $lastSeparator = (int) strrpos($trimmed, '::');
             $prefix = substr($trimmed, 0, $lastSeparator);
             $nested = substr($trimmed, $lastSeparator + 2);
+            if (
+                $prefix !== ''
+                && $nested !== ''
+                && !str_contains($prefix, '::')
+                && $prefix !== $className
+                && in_array($nested, $enumNames, true)
+            ) {
+                return sprintf('%s::%s::%s', $className, $prefix, $nested);
+            }
+
             if ($prefix !== '' && $nested !== '' && isset($flagAliases[$nested])) {
                 return sprintf('QFlags<%s::%s>', $prefix, $flagAliases[$nested]);
             }

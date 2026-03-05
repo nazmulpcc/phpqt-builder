@@ -30,6 +30,12 @@ php -dextension=$PWD/build/ext/.libs/qt.so examples/<example>/run.php
   A lightweight file browser with favorites, text preview, and safe bulk rename workflows.
 - `calculator-basic`
   A macOS Calculator-inspired basic mode clone with dedicated styling and standard arithmetic behavior.
+- `depth-playground`
+  A 2.5D visual demo with layered cards, animated parallax drift, and depth-reactive shadows.
+- `true-3d`
+  A native QtQuick3D scene rendered from PHP via inline QML, with animated meshes, camera, and lighting.
+- `gpu-stress`
+  An interactive QtQuick3D stress scene with presets, camera controls, dynamic instancing, and FPS HUD.
 
 ## Data model
 
