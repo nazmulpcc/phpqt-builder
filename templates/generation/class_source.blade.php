@@ -1026,9 +1026,12 @@ public:
 class {!! $ctx->trampolineTypeName !!} : public @if($ctx->requiresAccessShim){!! $ctx->accessShimTypeName !!}@else{!! $ctx->nativeCppType !!}@endif
 {
 public:
+@php
+    $trampolineBaseType = $ctx->requiresAccessShim ? $ctx->accessShimTypeName : $ctx->nativeCppType;
+@endphp
     template <typename... Args>
     explicit {!! $ctx->trampolineTypeName !!}(Args&&... args)
-        : @if($ctx->requiresAccessShim){!! $ctx->accessShimTypeName !!}@else{!! $ctx->nativeCppType !!}@endif(std::forward<Args>(args)...)
+        : {!! $trampolineBaseType !!}(std::forward<Args>(args)...)
     {
     }
 
@@ -1291,7 +1294,7 @@ static void {!! $ctx->filePrefix !!}_free_object(zend_object *object)
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
 
 @if($ctx->hasPreventDestroy)
-@if($ctx->hasPublicDestructor)
+@if($ctx->hasPublicDestructor && $ctx->hasConstructibleConstructor)
     if (qt_should_delete_native(intern->native_ptr, intern->prevent_destroy)) {
 @if($ctx->tracksGeneratedNativeSubclass)
         if (intern->native_is_generated_subclass) {
@@ -1320,7 +1323,7 @@ static void {!! $ctx->filePrefix !!}_free_object(zend_object *object)
     }
 @endif
 @else
-@if($ctx->hasPublicDestructor)
+@if($ctx->hasPublicDestructor && $ctx->hasConstructibleConstructor)
     if (intern->native_ptr) {
 @if($ctx->tracksGeneratedNativeSubclass)
         if (intern->native_is_generated_subclass) {

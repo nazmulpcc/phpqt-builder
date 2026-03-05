@@ -10,11 +10,17 @@ $captureArgs = ['_qt_callback'];
 $setupLines = [];
 $teardownLines = [];
 $paramCount = count($signal->params);
+$hasBorrowedSignalArg = false;
 
 foreach ($signal->params as $index => $param) {
     $nativeVar = sprintf('_qt_arg_%d', $index);
     $lambdaParams[] = $param->cppType . ' ' . $nativeVar;
-    $captureArgs[] = $nativeVar;
+    $borrowed = $ctx->typeBridge->signalArgUsesBorrowedWrap($param->phpType, $param->cppType);
+    if ($borrowed) {
+        $hasBorrowedSignalArg = true;
+    } else {
+        $captureArgs[] = $nativeVar;
+    }
     $setupLines[] = $ctx->typeBridge->signalArgToZvalBlock(
         sprintf('&_qt_params[%d]', $index),
         $param->phpType,
@@ -34,6 +40,20 @@ foreach ($signal->params as $index => $param) {
         intern->native_ptr,
         {!! $signal->memberPointerExpr !!},
         [_qt_callback]({!! implode(', ', $lambdaParams) !!}) {
+@if($hasBorrowedSignalArg)
+@if($paramCount > 0)
+            zval _qt_params[{!! $paramCount !!}];
+@foreach($setupLines as $line)
+            {!! $line !!}
+@endforeach
+            qt_signal_callback_invoke(_qt_callback, {!! $paramCount !!}, _qt_params);
+@foreach($teardownLines as $line)
+            {!! $line !!}
+@endforeach
+@else
+            qt_signal_callback_invoke(_qt_callback, 0, NULL);
+@endif
+@else
             qt_signal_dispatch([{!! implode(', ', $captureArgs) !!}]() mutable {
 @if($paramCount > 0)
                 zval _qt_params[{!! $paramCount !!}];
@@ -48,6 +68,7 @@ foreach ($signal->params as $index => $param) {
                 qt_signal_callback_invoke(_qt_callback, 0, NULL);
 @endif
             });
+@endif
         }
     );
 

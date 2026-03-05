@@ -95,6 +95,9 @@ class ClassContext
     /** Whether wrapper/runtime paths track generated-subclass instances */
     public readonly bool $tracksGeneratedNativeSubclass;
 
+    /** Whether this class exposes at least one constructible native constructor overload */
+    public readonly bool $hasConstructibleConstructor;
+
     /** Generated access shim type name */
     public readonly string $accessShimTypeName;
 
@@ -237,6 +240,7 @@ class ClassContext
             $methods[] = new MethodContext($method, $this, $typeBridge);
         }
         $this->methods = $methods;
+        $this->hasConstructibleConstructor = $this->computeHasConstructibleConstructor($methods);
         $this->requiresAccessShim = $this->computeRequiresAccessShim($methods);
         $this->requiresVirtualTrampoline = $this->computeRequiresVirtualTrampoline($methods);
         $this->usesGeneratedNativeSubclass = $this->requiresVirtualTrampoline || $this->computeUsesGeneratedNativeSubclass($methods);
@@ -685,6 +689,10 @@ class ClassContext
      */
     private function computeRequiresVirtualTrampoline(array $methods): bool
     {
+        if (!$this->hasConstructibleConstructor || !$this->hasPublicDestructor) {
+            return false;
+        }
+
         foreach ($methods as $method) {
             if ($method->hasVirtualOverloads) {
                 return true;
@@ -701,6 +709,20 @@ class ClassContext
     {
         foreach ($methods as $method) {
             if ($method->hasInstanceProtectedCallPath()) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param list<MethodContext> $methods
+     */
+    private function computeHasConstructibleConstructor(array $methods): bool
+    {
+        foreach ($methods as $method) {
+            if ($method->isConstructor && $method->overloadCount > 0) {
                 return true;
             }
         }

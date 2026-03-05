@@ -60,7 +60,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
 @if($method->overloadCount === 0)
     zend_throw_error(NULL, "{!! $ctx->phpClassName !!} cannot be instantiated directly.");
     RETURN_THROWS();
-@endif
+@else
 
 @if($method->hasNoParams())
 @if($ctx->requiresVirtualTrampoline)
@@ -137,6 +137,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
     }
 @endif
 @endforeach
+@endif
 @endif
 @endif
 }

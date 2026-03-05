@@ -1234,6 +1234,16 @@ class TypeBridge
 
     public function signalArgToZvalBlock(string $zvalVar, string $phpType, string $cppType, string $sourceExpr, ?int $paramIndex = null): string
     {
+        if ($this->signalArgUsesBorrowedWrap($phpType, $cppType)) {
+            return sprintf(
+                '%s(%s, %s, %s, true);',
+                $this->wrapNativeFuncName($phpType),
+                $zvalVar,
+                $this->writableObjectPointerExpr($cppType, $phpType, '&' . $sourceExpr),
+                $this->ceVarName($phpType),
+            );
+        }
+
         $strategy = $this->returnStrategyForCpp($phpType, $cppType);
 
         if ($strategy === 'array') {
@@ -1380,6 +1390,19 @@ class TypeBridge
         }
 
         return sprintf('ZVAL_NULL(%s);', $zvalVar);
+    }
+
+    public function signalArgUsesBorrowedWrap(string $phpType, string $cppType): bool
+    {
+        if (!$this->isObjectType($phpType) || $this->isValueType($phpType)) {
+            return false;
+        }
+
+        if ($this->isPointerType($cppType)) {
+            return false;
+        }
+
+        return str_contains(trim($cppType), '&');
     }
 
     public function zvalToNativeReturnExpr(string $phpType, string $cppType, string $zvalPtrExpr, bool $nullable = false): string
