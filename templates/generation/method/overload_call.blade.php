@@ -64,6 +64,12 @@ if (!$overload->isPureVirtual) {
 @endphp
 {!! $indent !!}{!! $returnClass !!} _result = {!! $callExpr !!};
 {!! $indent !!}object_init_ex(return_value, {!! $returnCe !!});
+{!! $indent !!}if (UNEXPECTED(Z_TYPE_P(return_value) != IS_OBJECT)) {
+{!! $indent !!}    if (!EG(exception)) {
+{!! $indent !!}        zend_throw_error(NULL, "Failed to instantiate PHP wrapper for {!! $returnClass !!}");
+{!! $indent !!}    }
+{!! $indent !!}    RETURN_THROWS();
+{!! $indent !!}}
 {!! $indent !!}{!! $returnStruct !!} *_ret_intern = {!! $returnFromObj !!}(Z_OBJ_P(return_value));
 {!! $indent !!}_ret_intern->native_ptr = new {!! $returnClass !!}(std::move(_result));
 @elseif($overload->returnStrategy === 'qobject_pointer')
@@ -83,6 +89,12 @@ if (!$overload->isPureVirtual) {
 {!! $indent !!}    RETURN_NULL();
 {!! $indent !!}}
 {!! $indent !!}object_init_ex(return_value, {!! $returnCe !!});
+{!! $indent !!}if (UNEXPECTED(Z_TYPE_P(return_value) != IS_OBJECT)) {
+{!! $indent !!}    if (!EG(exception)) {
+{!! $indent !!}        zend_throw_error(NULL, "Failed to instantiate PHP wrapper for {!! $returnClass !!}");
+{!! $indent !!}    }
+{!! $indent !!}    RETURN_THROWS();
+{!! $indent !!}}
 {!! $indent !!}{!! $returnStruct !!} *_ret_intern = {!! $returnFromObj !!}(Z_OBJ_P(return_value));
 {!! $indent !!}_ret_intern->native_ptr = new {!! $returnClass !!}(*_result);
 @else

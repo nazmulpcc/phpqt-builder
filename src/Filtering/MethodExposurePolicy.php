@@ -118,7 +118,7 @@ class MethodExposurePolicy
         bool $isAbstractClass,
     ): array
     {
-        if (str_starts_with($methodName, '~') || str_starts_with($methodName, 'operator') || in_array($methodName, self::NAME_SKIP, true)) {
+        if ($this->isFilteredMethodName($methodName)) {
             return [
                 'selected' => [],
                 'skipped' => [[
@@ -208,6 +208,29 @@ class MethodExposurePolicy
             'selected' => $selected,
             'skipped' => $skipped,
         ];
+    }
+
+    private function isFilteredMethodName(string $methodName): bool
+    {
+        if (str_starts_with($methodName, '~') || str_starts_with($methodName, 'operator')) {
+            return true;
+        }
+
+        if (in_array($methodName, self::NAME_SKIP, true)) {
+            return true;
+        }
+
+        // Macro artifacts can leak through cparser as pseudo-methods.
+        if (preg_match('/^[A-Z][A-Z0-9_]*$/', $methodName) === 1) {
+            return true;
+        }
+
+        // Qt private helpers frequently use this suffix and are not public API.
+        if (str_ends_with($methodName, '_helper')) {
+            return true;
+        }
+
+        return false;
     }
 
     /**
@@ -596,6 +619,10 @@ class MethodExposurePolicy
             return true;
         }
 
+        if ($this->looksLikeInheritedOrGlobalEnumName($trimmed)) {
+            return true;
+        }
+
         return false;
     }
 
@@ -665,7 +692,42 @@ class MethodExposurePolicy
             return $trimmed;
         }
 
+        // Global Qt enums (e.g. QtMsgType) are already fully named.
+        if (str_starts_with($trimmed, 'Qt')) {
+            return $trimmed;
+        }
+
         return $className . '::' . $trimmed;
+    }
+
+    private function looksLikeInheritedOrGlobalEnumName(string $name): bool
+    {
+        if (str_starts_with($name, 'Qt')) {
+            if ($name === 'QtMsgType') {
+                return true;
+            }
+
+            foreach (['Type', 'Mode', 'Flag', 'Flags', 'Policy'] as $suffix) {
+                if (str_ends_with($name, $suffix)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        // Avoid treating Qt classes as enums by default.
+        if (str_starts_with($name, 'Q')) {
+            return false;
+        }
+
+        foreach (['Mode', 'Modes', 'Flag', 'Flags'] as $suffix) {
+            if (str_ends_with($name, $suffix)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function looksLikeQualifiedEnumName(string $name): bool

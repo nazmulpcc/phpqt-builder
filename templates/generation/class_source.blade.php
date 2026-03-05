@@ -1406,6 +1406,12 @@ void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativeCppType !!
     }
 
     object_init_ex(return_value, ce);
+    if (UNEXPECTED(Z_TYPE_P(return_value) != IS_OBJECT)) {
+        if (!EG(exception)) {
+            zend_throw_error(NULL, "Failed to instantiate PHP wrapper for {!! $ctx->phpClassName !!}");
+        }
+        return;
+    }
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(return_value);
     intern->native_ptr = native;
     qt_track_native_instance(intern->native_ptr);

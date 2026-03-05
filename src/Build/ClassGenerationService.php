@@ -75,12 +75,20 @@ class ClassGenerationService
 
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
         if ($parentClass !== null && !in_array($parentClass, $allowedClasses, true)) {
+            if ($this->canIgnoreUnavailableParent($parentClass)) {
+                $classData['bases'] = array_values(array_filter(
+                    (array) ($classData['bases'] ?? []),
+                    static fn(mixed $base): bool => is_string($base) && $base !== $parentClass,
+                ));
+                $parentClass = null;
+            } else {
             return ClassGenerationResult::skipped(
                 $className,
                 $headerPath,
                 'unsupported_parent_class',
                 sprintf('Parent class %s is not available for generation.', $parentClass),
             );
+            }
         }
 
         $filtered = $this->methodPolicy->filter($classData, $allowedClasses);
@@ -259,12 +267,20 @@ class ClassGenerationService
 
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
         if ($parentClass !== null && !in_array($parentClass, $allowedClasses, true)) {
+            if ($this->canIgnoreUnavailableParent($parentClass)) {
+                $classData['bases'] = array_values(array_filter(
+                    (array) ($classData['bases'] ?? []),
+                    static fn(mixed $base): bool => is_string($base) && $base !== $parentClass,
+                ));
+                $parentClass = null;
+            } else {
             return ClassGenerationResult::skipped(
                 $className,
                 $headerPath,
                 'unsupported_parent_class',
                 sprintf('Parent class %s is not available for generation.', $parentClass),
             );
+            }
         }
 
         $filtered = $this->methodPolicy->filter($classData, $allowedClasses);
@@ -1211,13 +1227,25 @@ class ClassGenerationService
 
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
         if ($parentClass !== null && !in_array($parentClass, $allowedClasses, true)) {
-            return null;
+            if ($this->canIgnoreUnavailableParent($parentClass)) {
+                $classData['bases'] = array_values(array_filter(
+                    (array) ($classData['bases'] ?? []),
+                    static fn(mixed $base): bool => is_string($base) && $base !== $parentClass,
+                ));
+            } else {
+                return null;
+            }
         }
 
         $filtered = $this->methodPolicy->filter($classData, $allowedClasses);
         $classData['selected_methods'] = $filtered['selected_methods'];
 
         return $classData;
+    }
+
+    private function canIgnoreUnavailableParent(string $parentClass): bool
+    {
+        return $parentClass === 'QIODeviceBase';
     }
 
     /**

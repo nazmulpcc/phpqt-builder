@@ -23,7 +23,6 @@ class ClangArgumentBuilder
     private const array BASE_ARGS = [
         '-x', 'c++',
         '-std=c++17',
-        '-Wno-character-conversion',
     ];
 
     /**
@@ -42,25 +41,16 @@ class ClangArgumentBuilder
     public function build(): array
     {
         $args = self::BASE_ARGS;
+        $hasExplicitQtIncludes = $this->hasExplicitQtIncludePath();
 
+        $args = [...$args, ...$this->extraIncludeArgs()];
         $args = [...$args, ...$this->discoverSystemIncludes()];
         $args = [...$args, ...$this->discoverClangResourceDir()];
-        $args = [...$args, ...$this->discoverQtIncludes()];
+        if (!$hasExplicitQtIncludes) {
+            $args = [...$args, ...$this->discoverQtIncludes()];
+        }
         $args = [...$args, ...$this->qtFeatureOverrides()];
         $args = [...$args, ...$this->platformDefines()];
-
-        foreach ($this->extraIncludePaths as $path) {
-            if ($path === '') {
-                continue;
-            }
-
-            if (str_starts_with($path, '-')) {
-                $args[] = $path;
-                continue;
-            }
-
-            $args[] = '-I' . $path;
-        }
 
         return array_values(array_unique($args));
     }
@@ -104,7 +94,6 @@ class ClangArgumentBuilder
         $candidates = [
             '/usr/local/include',
             '/usr/include',
-            '/usr/lib/llvm-*/lib/clang/*/include',
         ];
 
         return $this->resolveIncludePaths($candidates);
@@ -279,5 +268,49 @@ class ClangArgumentBuilder
         }
 
         return $args;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function extraIncludeArgs(): array
+    {
+        $args = [];
+
+        foreach ($this->extraIncludePaths as $path) {
+            if ($path === '') {
+                continue;
+            }
+
+            if (str_starts_with($path, '-')) {
+                $args[] = $path;
+                continue;
+            }
+
+            $args[] = '-I' . $path;
+        }
+
+        return $args;
+    }
+
+    private function hasExplicitQtIncludePath(): bool
+    {
+        foreach ($this->extraIncludePaths as $path) {
+            if ($path === '' || str_starts_with($path, '-')) {
+                continue;
+            }
+
+            $trimmed = rtrim($path, '/');
+            $baseName = basename($trimmed);
+            if (preg_match('/^Qt[A-Za-z0-9]+$/', $baseName) === 1) {
+                return true;
+            }
+
+            if (is_dir($trimmed . '/QtCore') || is_dir($trimmed . '/QtGui') || is_dir($trimmed . '/QtQml')) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

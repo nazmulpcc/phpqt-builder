@@ -143,6 +143,10 @@ class CppToPhpTypeMapper
             return 'int';
         }
 
+        if ($this->isQtGlobalEnumLike($normalized)) {
+            return 'int';
+        }
+
         if ($normalized === 'Qt::Disambiguated_t') {
             return 'mixed';
         }
@@ -264,6 +268,29 @@ class CppToPhpTypeMapper
             'std::chrono::years',
         ] as $durationType) {
             if ($type === $durationType) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function isQtGlobalEnumLike(string $type): bool
+    {
+        if (!str_starts_with($type, 'Qt')) {
+            return false;
+        }
+
+        if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $type) !== 1) {
+            return false;
+        }
+
+        if ($type === 'QtMsgType') {
+            return true;
+        }
+
+        foreach (['Type', 'Mode', 'Flag', 'Flags', 'Policy'] as $suffix) {
+            if (str_ends_with($type, $suffix)) {
                 return true;
             }
         }

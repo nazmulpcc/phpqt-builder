@@ -45,6 +45,12 @@ if ($overload?->isPureVirtual) {
 @endif
     {!! $returnClass !!} _result = {!! $callExpr !!};
     object_init_ex(return_value, {!! $returnCe !!});
+    if (UNEXPECTED(Z_TYPE_P(return_value) != IS_OBJECT)) {
+        if (!EG(exception)) {
+            zend_throw_error(NULL, "Failed to instantiate PHP wrapper for {!! $returnClass !!}");
+        }
+        RETURN_THROWS();
+    }
     {!! $returnStruct !!} *_ret_intern = {!! $returnFromObj !!}(Z_OBJ_P(return_value));
     _ret_intern->native_ptr = new {!! $returnClass !!}(std::move(_result));
 @endif

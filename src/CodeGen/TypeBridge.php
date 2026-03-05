@@ -605,6 +605,26 @@ class TypeBridge
         ?string $persistentStorageVar = null,
         ?string $pairedCountVarName = null,
     ): array {
+        if (
+            $persistentStorageVar !== null
+            && $phpType === 'int'
+            && $this->isNonConstReferenceType($cppType)
+            && $this->normalizeCppType($cppType) === 'int'
+        ) {
+            $initExpr = $sourceIsZval
+                ? $this->zvalToNativeExpr($phpType, $cppType, $sourceVarName, $nullable)
+                : $this->directPhpToNativeExpr($phpType, $cppType, $sourceVarName, $nullable);
+
+            return [
+                'lines' => [
+                    sprintf('%s & %s = %s->argc_value;', $this->cppCastType($cppType), $nativeVarName, $persistentStorageVar),
+                    sprintf('%s = %s;', $nativeVarName, $initExpr),
+                ],
+                'expr' => $nativeVarName,
+                'local_var' => $nativeVarName,
+            ];
+        }
+
         if ($phpType === 'array' && $this->isCharPointerArrayType($cppType)) {
             return [
                 'lines' => [$this->charPointerArraySetupBlock(
@@ -937,6 +957,7 @@ class TypeBridge
     public function nativeStringToPhpReturn(string $cppType, string $varName): string
     {
         $base = $this->normalizeCppType($cppType);
+        $isPointer = $this->isPointerType($cppType);
 
         if ($this->isPointerType($cppType)) {
             if ($base === 'QString') {
@@ -958,14 +979,40 @@ class TypeBridge
         }
 
         if ($base === 'QByteArray') {
+            if ($isPointer) {
+                return sprintf(
+                    "if (%s == nullptr) {\n    RETURN_EMPTY_STRING();\n}\n    RETURN_STRINGL(%s->constData(), %s->size())",
+                    $varName,
+                    $varName,
+                    $varName,
+                );
+            }
+
             return sprintf('RETURN_STRINGL(%s.constData(), %s.size())', $varName, $varName);
         }
 
         if ($base === 'std::string' || $base === 'std::string_view') {
+            if ($isPointer) {
+                return sprintf(
+                    "if (%s == nullptr) {\n    RETURN_EMPTY_STRING();\n}\n    RETURN_STRINGL(%s->data(), %s->size())",
+                    $varName,
+                    $varName,
+                    $varName,
+                );
+            }
+
             return sprintf('RETURN_STRINGL(%s.data(), %s.size())', $varName, $varName);
         }
 
         if ($base === 'std::wstring') {
+            if ($isPointer) {
+                return sprintf(
+                    "if (%s == nullptr) {\n    RETURN_EMPTY_STRING();\n}\n    QByteArray _utf8 = QString::fromStdWString(*%s).toUtf8();\n    RETURN_STRINGL(_utf8.constData(), _utf8.size())",
+                    $varName,
+                    $varName,
+                );
+            }
+
             return sprintf(
                 "QByteArray _utf8 = QString::fromStdWString(%s).toUtf8();\n    RETURN_STRINGL(_utf8.constData(), _utf8.size())",
                 $varName,
@@ -973,6 +1020,14 @@ class TypeBridge
         }
 
         if ($base === 'std::u16string') {
+            if ($isPointer) {
+                return sprintf(
+                    "if (%s == nullptr) {\n    RETURN_EMPTY_STRING();\n}\n    QByteArray _utf8 = QString::fromStdU16String(*%s).toUtf8();\n    RETURN_STRINGL(_utf8.constData(), _utf8.size())",
+                    $varName,
+                    $varName,
+                );
+            }
+
             return sprintf(
                 "QByteArray _utf8 = QString::fromStdU16String(%s).toUtf8();\n    RETURN_STRINGL(_utf8.constData(), _utf8.size())",
                 $varName,
@@ -980,6 +1035,14 @@ class TypeBridge
         }
 
         if ($base === 'std::u32string') {
+            if ($isPointer) {
+                return sprintf(
+                    "if (%s == nullptr) {\n    RETURN_EMPTY_STRING();\n}\n    QByteArray _utf8 = QString::fromStdU32String(*%s).toUtf8();\n    RETURN_STRINGL(_utf8.constData(), _utf8.size())",
+                    $varName,
+                    $varName,
+                );
+            }
+
             return sprintf(
                 "QByteArray _utf8 = QString::fromStdU32String(%s).toUtf8();\n    RETURN_STRINGL(_utf8.constData(), _utf8.size())",
                 $varName,
@@ -987,6 +1050,14 @@ class TypeBridge
         }
 
         if ($base === 'QAnyStringView') {
+            if ($isPointer) {
+                return sprintf(
+                    "if (%s == nullptr) {\n    RETURN_EMPTY_STRING();\n}\n    QByteArray _utf8 = %s->toString().toUtf8();\n    RETURN_STRINGL(_utf8.constData(), _utf8.size())",
+                    $varName,
+                    $varName,
+                );
+            }
+
             return sprintf(
                 "QByteArray _utf8 = %s.toString().toUtf8();\n    RETURN_STRINGL(_utf8.constData(), _utf8.size())",
                 $varName,
@@ -994,6 +1065,14 @@ class TypeBridge
         }
 
         if ($base === 'std::filesystem::path') {
+            if ($isPointer) {
+                return sprintf(
+                    "if (%s == nullptr) {\n    RETURN_EMPTY_STRING();\n}\n    std::string _path = %s->string();\n    RETURN_STRINGL(_path.data(), _path.size())",
+                    $varName,
+                    $varName,
+                );
+            }
+
             return sprintf(
                 "std::string _path = %s.string();\n    RETURN_STRINGL(_path.data(), _path.size())",
                 $varName,
@@ -1006,6 +1085,14 @@ class TypeBridge
             }
 
             return sprintf('RETURN_STRINGL(&%s, 1)', $varName);
+        }
+
+        if ($isPointer) {
+            return sprintf(
+                "if (%s == nullptr) {\n    RETURN_EMPTY_STRING();\n}\n    QByteArray _utf8 = %s->toUtf8();\n    RETURN_STRINGL(_utf8.constData(), _utf8.size())",
+                $varName,
+                $varName,
+            );
         }
 
         // Default: assume QString-like, convert via UTF-8
@@ -1431,6 +1518,10 @@ class TypeBridge
             return $normalized;
         }
 
+        if ($this->isQtGlobalEnumLikeType($normalized)) {
+            return $normalized;
+        }
+
         if ($normalized !== '' && (str_contains($normalized, '::') || str_starts_with($normalized, 'QFlags<'))) {
             return $normalized;
         }
@@ -1443,6 +1534,29 @@ class TypeBridge
             'long long', 'unsigned long long', 'qint64', 'quint64', 'qlonglong', 'qulonglong' => $normalized,
             default => 'int',
         };
+    }
+
+    private function isQtGlobalEnumLikeType(string $type): bool
+    {
+        if (!str_starts_with($type, 'Qt')) {
+            return false;
+        }
+
+        if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $type) !== 1) {
+            return false;
+        }
+
+        if ($type === 'QtMsgType') {
+            return true;
+        }
+
+        foreach (['Type', 'Mode', 'Flag', 'Flags', 'Policy'] as $suffix) {
+            if (str_ends_with($type, $suffix)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

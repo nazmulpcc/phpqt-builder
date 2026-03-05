@@ -67,6 +67,8 @@ it('casts const object pointer returns for wrapping', function (): void {
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qnodeconstholder.cpp');
         Assert::assertStringContainsString('const QNode * _result = intern->native_ptr->node();', $cpp);
         Assert::assertStringContainsString('qt_qnode_wrap_native(return_value, const_cast<QNode *>(_result), qt_ce_QNode, true);', $cpp);
+        Assert::assertStringContainsString('if (UNEXPECTED(Z_TYPE_P(return_value) != IS_OBJECT)) {', $cpp);
+        Assert::assertStringContainsString('Failed to instantiate PHP wrapper for QNodeConstHolder', $cpp);
 });
 
 it('casts enum parameters back to native types', function (): void {
@@ -125,6 +127,39 @@ it('handles const char pointer string returns', function (): void {
         Assert::assertStringContainsString('auto _result = intern->native_ptr->bits();', $cpp);
         Assert::assertStringContainsString('RETURN_STRING(_result);', $cpp);
         Assert::assertStringNotContainsString('QByteArray _utf8 = _result.toUtf8();', $cpp);
+});
+
+it('handles QString pointer parameters', function (): void {
+        $fixtureRoot = qt_fixture_path('policy-qt');
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qstringpointerholder.h',
+            'class' => 'QStringPointerHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QStringPointerHolder',
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        Assert::assertSame('ok', $payload['status']);
+
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qstringpointerholder.cpp');
+        Assert::assertStringContainsString('QString _qt_arg_1_value;', $cpp);
+        Assert::assertStringContainsString('QString *_qt_arg_1 = NULL;', $cpp);
+        Assert::assertStringContainsString('_qt_arg_1_value = QString::fromUtf8(ZSTR_VAL(selectedFilter), (int)ZSTR_LEN(selectedFilter));', $cpp);
+        Assert::assertStringContainsString('_qt_arg_1 = &_qt_arg_1_value;', $cpp);
+        Assert::assertStringContainsString('auto _result = QStringPointerHolder::pickLabel(', $cpp);
+        Assert::assertStringContainsString('_qt_arg_1);', $cpp);
+        Assert::assertStringContainsString('QByteArray _utf8 = _result.toUtf8();', $cpp);
+        Assert::assertStringContainsString('RETURN_STRINGL(_utf8.constData(), _utf8.size());', $cpp);
 });
 
 it('treats qbitarray factories as value returns and skips bool out parameters', function (): void {
