@@ -187,6 +187,40 @@ it('skips object double pointer out parameters', function (): void {
         Assert::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QDoublePointerHolder, locate)', $cpp);
 });
 
+it('keeps optional QString pointer parameters as input-only string pointers', function (): void {
+        $fixtureRoot = qt_fixture_path('policy-qt');
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qstringpointerholder.h',
+            'class' => 'QStringPointerHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QStringPointerHolder',
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        Assert::assertSame('ok', $payload['status']);
+        Assert::assertNotContains('pickLabel', array_column($payload['skipped_methods'], 'name'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qstringpointerholder.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qstringpointerholder.cpp');
+
+        Assert::assertStringContainsString('public static function pickLabel(string $fallback = \'\', string $selectedFilter = \'\'): string {}', $stub);
+        Assert::assertStringContainsString('QString _qt_arg_1_value;', $cpp);
+        Assert::assertStringContainsString('QString *_qt_arg_1 = NULL;', $cpp);
+        Assert::assertStringContainsString('_qt_arg_1_value = QString::fromUtf8(ZSTR_VAL(selectedFilter), (int)ZSTR_LEN(selectedFilter));', $cpp);
+        Assert::assertStringContainsString('_qt_arg_1 = &_qt_arg_1_value;', $cpp);
+        Assert::assertStringContainsString('QStringPointerHolder::pickLabel(QString::fromUtf8(ZSTR_VAL(fallback), (int)ZSTR_LEN(fallback)), _qt_arg_1)', $cpp);
+});
+
 it('uses fromInt for flag aliases', function (): void {
         $fixtureRoot = qt_fixture_path('policy-qt');
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));

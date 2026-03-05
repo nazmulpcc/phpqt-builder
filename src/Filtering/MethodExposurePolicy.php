@@ -287,7 +287,7 @@ class MethodExposurePolicy
 
         foreach ($variant['parameters'] as $parameter) {
             $type = (string) $parameter['type'];
-            if ($this->isUnsupportedOutParameter($type, $className, $flagAliases, $enumNames)) {
+            if ($this->isUnsupportedOutParameter($type, $className, $flagAliases, $enumNames, $parameter)) {
                 return ['code' => 'unsupported_output_parameter', 'message' => sprintf('Parameter type %s looks like an output parameter.', $type)];
             }
             if (!$this->isSupportedType($type, $className, $allowedClasses, false, $flagAliases, $enumNames)) {
@@ -366,9 +366,16 @@ class MethodExposurePolicy
         return str_contains($trimmed, '&') && !str_starts_with($trimmed, 'const ');
     }
 
-    private function isUnsupportedOutParameter(string $cppType, string $className, array $flagAliases = [], array $enumNames = []): bool
+    /**
+     * @param array<string, mixed> $parameter
+     */
+    private function isUnsupportedOutParameter(string $cppType, string $className, array $flagAliases = [], array $enumNames = [], array $parameter = []): bool
     {
         $trimmed = trim($cppType);
+        if ($this->isSupportedInputStringPointerParameter($trimmed, $parameter)) {
+            return false;
+        }
+
         if ($this->containerBridge->isSupported($trimmed) && str_contains($trimmed, '&') && !str_starts_with($trimmed, 'const ')) {
             return true;
         }
@@ -395,6 +402,34 @@ class MethodExposurePolicy
         }
 
         return false;
+    }
+
+    /**
+     * Allow optional `QString *` / `QByteArray *` parameters as input-only bridges.
+     *
+     * These are frequently declared as output pointers in Qt APIs (e.g.
+     * selectedFilter), but for PHP we intentionally treat them as one-way
+     * optional input values.
+     *
+     * @param array<string, mixed> $parameter
+     */
+    private function isSupportedInputStringPointerParameter(string $cppType, array $parameter): bool
+    {
+        if (str_starts_with($cppType, 'const ')) {
+            return false;
+        }
+
+        if (!str_contains($cppType, '*') || $this->hasMultiplePointerIndirection($cppType)) {
+            return false;
+        }
+
+        if (!(bool) ($parameter['has_default'] ?? false)) {
+            return false;
+        }
+
+        $baseType = $this->normalizeSelfType($cppType);
+
+        return $baseType === 'QString' || $baseType === 'QByteArray';
     }
 
     /**

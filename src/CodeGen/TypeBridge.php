@@ -626,6 +626,28 @@ class TypeBridge
             ];
         }
 
+        if ($phpType === 'string' && $this->isQtStringPointerType($cppType)) {
+            $storageVar = $nativeVarName . '_value';
+            $baseType = $this->normalizeCppType($cppType);
+            $sourceExpr = $sourceIsZval ? sprintf('Z_STR_P(%s)', $sourceVarName) : $sourceVarName;
+            $guardExpr = $sourceIsZval
+                ? sprintf('(%s != NULL && Z_TYPE_P(%s) == IS_STRING)', $sourceVarName, $sourceVarName)
+                : sprintf('(%s != NULL)', $sourceVarName);
+
+            return [
+                'lines' => [
+                    sprintf('%s %s;', $baseType, $storageVar),
+                    sprintf('%s *%s = NULL;', $baseType, $nativeVarName),
+                    sprintf('if (%s) {', $guardExpr),
+                    sprintf('    %s = %s;', $storageVar, $this->phpStringToNativeExpr($cppType, $sourceExpr)),
+                    sprintf('    %s = &%s;', $nativeVarName, $storageVar),
+                    '}',
+                ],
+                'expr' => $nativeVarName,
+                'local_var' => $nativeVarName,
+            ];
+        }
+
         if ($isRvalueReference) {
             $initExpr = $sourceIsZval
                 ? $this->zvalToNativeRvalueExpr($phpType, $cppType, $sourceVarName, $nullable)
@@ -1520,6 +1542,21 @@ class TypeBridge
     private function isPointerType(string $cppType): bool
     {
         return str_contains($cppType, '*');
+    }
+
+    private function isQtStringPointerType(string $cppType): bool
+    {
+        if (!$this->isPointerType($cppType)) {
+            return false;
+        }
+
+        if (preg_match('/\bconst\b/', $cppType) === 1 || preg_match('/\*\s*\*/', $cppType) === 1) {
+            return false;
+        }
+
+        $base = $this->normalizeCppType($cppType);
+
+        return $base === 'QString' || $base === 'QByteArray';
     }
 
     private function containerBridge(): ContainerBridge
