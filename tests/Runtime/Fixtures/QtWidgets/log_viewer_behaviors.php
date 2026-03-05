@@ -20,7 +20,7 @@ final class RuntimeStandardItemModel extends QStandardItemModel
 
     public function parentModelIndex(QModelIndex $child): QModelIndex
     {
-        return parent::parentModelIndexAsModelIndex($child);
+        return parent::parentModelIndex($child);
     }
 }
 
@@ -33,7 +33,7 @@ final class RuntimeProxyModel extends QSortFilterProxyModel
 
     public function parentModelIndex(QModelIndex $child): QModelIndex
     {
-        return parent::parentModelIndexAsModelIndex($child);
+        return parent::parentModelIndex($child);
     }
 }
 

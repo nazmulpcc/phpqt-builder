@@ -36,12 +36,12 @@ final class OrganizerFileSystemModel extends \Qt\Gui\QFileSystemModel
 
     public function parentModelIndex(QModelIndex $child): QModelIndex
     {
-        return parent::parentModelIndexAsModelIndex($child);
+        return parent::parentModelIndex($child);
     }
 
-    public function index(int $row, int $column, ?QModelIndex $parent = null): QModelIndex
+    public function index(int|string $row, int $column = 0, ?QModelIndex $parent = null): QModelIndex
     {
-        return parent::indexIntOrStringIntModelIndex($row, $column, $parent);
+        return parent::index($row, $column, $parent ?? new QModelIndex());
     }
 }
 
@@ -54,7 +54,7 @@ final class OrganizerProxyModel extends QSortFilterProxyModel
 
     public function parentModelIndex(QModelIndex $child): QModelIndex
     {
-        return parent::parentModelIndexAsModelIndex($child);
+        return parent::parentModelIndex($child);
     }
 }
 

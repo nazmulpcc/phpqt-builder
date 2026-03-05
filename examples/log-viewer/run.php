@@ -37,7 +37,7 @@ final class LogStandardItemModel extends QStandardItemModel
 
     public function parentModelIndex(QModelIndex $child): QModelIndex
     {
-        return parent::parentModelIndexAsModelIndex($child);
+        return parent::parentModelIndex($child);
     }
 }
 
@@ -50,7 +50,7 @@ final class LogProxyModel extends QSortFilterProxyModel
 
     public function parentModelIndex(QModelIndex $child): QModelIndex
     {
-        return parent::parentModelIndexAsModelIndex($child);
+        return parent::parentModelIndex($child);
     }
 }
 

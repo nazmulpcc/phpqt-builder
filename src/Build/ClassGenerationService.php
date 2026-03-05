@@ -7,6 +7,7 @@ namespace QtBuilder\Build;
 use QtBuilder\CodeGen\TypeBridge;
 use QtBuilder\Definition\PhpClass;
 use QtBuilder\Definition\PhpMethod;
+use QtBuilder\Definition\PhpParameter;
 use QtBuilder\Filtering\ClassExposurePolicy;
 use QtBuilder\Filtering\MethodExposurePolicy;
 use QtBuilder\Parsing\ClassDefinitionBuilder;
@@ -419,10 +420,27 @@ class ClassGenerationService
 
         foreach ($phpClass->methods as $method) {
             $parentMethod = $parentMethods[$method->name] ?? null;
-            if ($parentMethod === null || $this->isCompatibleInheritedMethod($method, $parentMethod)) {
+            if ($parentMethod !== null && $this->isCompatibleInheritedMethod($method, $parentMethod)) {
                 $normalizedMethod = $this->normalizeAbstractMethodAgainstParent($method, $parentMethod);
                 $methods[] = $normalizedMethod;
                 $usedMethodNames[$normalizedMethod->name] = true;
+                continue;
+            }
+
+            $canonicalParentMethod = $this->findCanonicalContractParentMethod($method, $parentMethods);
+            if ($canonicalParentMethod !== null) {
+                $normalizedMethod = $this->normalizeAbstractMethodAgainstParent(
+                    $this->withMethodName($method, $canonicalParentMethod->name),
+                    $canonicalParentMethod,
+                );
+                $methods[] = $normalizedMethod;
+                $usedMethodNames[$normalizedMethod->name] = true;
+                continue;
+            }
+
+            if ($parentMethod === null) {
+                $methods[] = $method;
+                $usedMethodNames[$method->name] = true;
                 continue;
             }
 
@@ -1355,10 +1373,27 @@ class ClassGenerationService
 
         foreach ($phpClass->methods as $method) {
             $parentMethod = $parentMethods[$method->name] ?? null;
-            if ($parentMethod === null || $this->isCompatibleInheritedMethod($method, $parentMethod)) {
+            if ($parentMethod !== null && $this->isCompatibleInheritedMethod($method, $parentMethod)) {
                 $normalizedMethod = $this->normalizeAbstractMethodAgainstParent($method, $parentMethod);
                 $methods[] = $normalizedMethod;
                 $usedMethodNames[$normalizedMethod->name] = true;
+                continue;
+            }
+
+            $canonicalParentMethod = $this->findCanonicalContractParentMethod($method, $parentMethods);
+            if ($canonicalParentMethod !== null) {
+                $normalizedMethod = $this->normalizeAbstractMethodAgainstParent(
+                    $this->withMethodName($method, $canonicalParentMethod->name),
+                    $canonicalParentMethod,
+                );
+                $methods[] = $normalizedMethod;
+                $usedMethodNames[$normalizedMethod->name] = true;
+                continue;
+            }
+
+            if ($parentMethod === null) {
+                $methods[] = $method;
+                $usedMethodNames[$method->name] = true;
                 continue;
             }
 
@@ -1458,7 +1493,7 @@ class ClassGenerationService
             return false;
         }
 
-        if ($parent->access === 'public' && $child->access !== 'public') {
+        if ($parent->access === 'public' && $child->access !== 'public' && !$parent->isAbstractMethod) {
             return false;
         }
 
@@ -1466,7 +1501,7 @@ class ClassGenerationService
             return false;
         }
 
-        if ($this->requiredParameterCount($child) > $this->requiredParameterCount($parent)) {
+        if ($this->requiredParameterCount($child) > $this->requiredParameterCount($parent) && !$parent->isAbstractMethod) {
             return false;
         }
 
@@ -1476,11 +1511,14 @@ class ClassGenerationService
                 return false;
             }
 
-            if ($childParameter->phpType !== $parentParameter->phpType) {
+            if (
+                !$this->isParentParameterTypeAcceptedByChild($parentParameter->phpType, $childParameter->phpType)
+                && !$parent->isAbstractMethod
+            ) {
                 return false;
             }
 
-            if ($parentParameter->hasDefault && !$childParameter->hasDefault) {
+            if ($parentParameter->hasDefault && !$childParameter->hasDefault && !$parent->isAbstractMethod) {
                 return false;
             }
         }
@@ -1491,7 +1529,10 @@ class ClassGenerationService
             }
         }
 
-        if ($child->returnType !== $parent->returnType) {
+        if (
+            !$this->isChildReturnTypeCompatibleWithParent($child->returnType, $parent->returnType)
+            && !$parent->isAbstractMethod
+        ) {
             return false;
         }
 
@@ -1500,22 +1541,211 @@ class ClassGenerationService
 
     private function normalizeAbstractMethodAgainstParent(PhpMethod $method, ?PhpMethod $parentMethod): PhpMethod
     {
-        if (!$method->isAbstractMethod || $parentMethod === null || $parentMethod->isAbstractMethod) {
+        if ($parentMethod === null) {
+            return $method;
+        }
+
+        $isAbstractMethod = $method->isAbstractMethod;
+        if ($isAbstractMethod && !$parentMethod->isAbstractMethod) {
+            $isAbstractMethod = false;
+        }
+
+        $access = $method->access;
+        if ($parentMethod->isAbstractMethod && $parentMethod->access === 'public' && $access !== 'public') {
+            $access = 'public';
+        }
+
+        $parameters = $method->parameters;
+        if ($parentMethod->isAbstractMethod) {
+            foreach ($parentMethod->parameters as $index => $parentParameter) {
+                $childParameter = $parameters[$index] ?? null;
+                if ($childParameter === null) {
+                    continue;
+                }
+
+                $normalizedType = $this->mergeParentTypesIntoChild($parentParameter->phpType, $childParameter->phpType);
+                $normalizedDefault = $childParameter->hasDefault || $parentParameter->hasDefault;
+                if (
+                    $normalizedType === $childParameter->phpType
+                    && $normalizedDefault === $childParameter->hasDefault
+                ) {
+                    continue;
+                }
+
+                $parameters[$index] = new PhpParameter(
+                    name: $childParameter->name,
+                    phpType: $normalizedType,
+                    hasDefault: $normalizedDefault,
+                    position: $childParameter->position,
+                );
+            }
+
+            for ($index = count($parentMethod->parameters); $index < count($parameters); $index++) {
+                $childParameter = $parameters[$index] ?? null;
+                if ($childParameter === null || $childParameter->hasDefault) {
+                    continue;
+                }
+
+                $parameters[$index] = new PhpParameter(
+                    name: $childParameter->name,
+                    phpType: $childParameter->phpType,
+                    hasDefault: true,
+                    position: $childParameter->position,
+                );
+            }
+        }
+
+        $returnType = $method->returnType;
+        if (
+            $parentMethod->isAbstractMethod
+            && !$this->isChildReturnTypeCompatibleWithParent($returnType, $parentMethod->returnType)
+        ) {
+            $returnType = $parentMethod->returnType;
+        }
+
+        if (
+            $isAbstractMethod === $method->isAbstractMethod
+            && $access === $method->access
+            && $parameters === $method->parameters
+            && $returnType === $method->returnType
+        ) {
             return $method;
         }
 
         return new PhpMethod(
             name: $method->name,
+            access: $access,
+            isStatic: $method->isStatic,
+            isSignal: $method->isSignal,
+            isSlot: $method->isSlot,
+            isAbstractMethod: $isAbstractMethod,
+            returnType: $returnType,
+            parameters: $parameters,
+            overloads: $method->overloads,
+            cppName: $method->cppName,
+        );
+    }
+
+    /**
+     * @param array<string, PhpMethod> $parentMethods
+     */
+    private function findCanonicalContractParentMethod(PhpMethod $method, array $parentMethods): ?PhpMethod
+    {
+        $baseName = $method->cppName ?? $method->name;
+        $signatureSuffix = $this->methodSignatureSuffix($method);
+        $candidateNames = array_values(array_unique(array_filter([
+            $baseName,
+            $signatureSuffix !== '' ? $baseName . $signatureSuffix : null,
+            $method->name !== $baseName ? $method->name : null,
+        ], static fn(?string $name): bool => is_string($name) && $name !== '')));
+
+        foreach ($candidateNames as $candidateName) {
+            $candidate = $parentMethods[$candidateName] ?? null;
+            if ($candidate === null || !$candidate->isAbstractMethod) {
+                continue;
+            }
+
+            if (!$this->isCompatibleInheritedMethod($method, $candidate)) {
+                continue;
+            }
+
+            return $candidate;
+        }
+
+        return null;
+    }
+
+    private function withMethodName(PhpMethod $method, string $newName): PhpMethod
+    {
+        if ($newName === $method->name) {
+            return $method;
+        }
+
+        return new PhpMethod(
+            name: $newName,
             access: $method->access,
             isStatic: $method->isStatic,
             isSignal: $method->isSignal,
             isSlot: $method->isSlot,
-            isAbstractMethod: false,
+            isAbstractMethod: $method->isAbstractMethod,
             returnType: $method->returnType,
             parameters: $method->parameters,
             overloads: $method->overloads,
             cppName: $method->cppName,
         );
+    }
+
+    private function isParentParameterTypeAcceptedByChild(string $parentType, string $childType): bool
+    {
+        $parentParts = $this->normalizeUnionTypeParts($parentType);
+        $childParts = $this->normalizeUnionTypeParts($childType);
+
+        if ($childParts === ['mixed'] || $parentParts === []) {
+            return true;
+        }
+
+        if ($childParts === []) {
+            return false;
+        }
+
+        foreach ($parentParts as $part) {
+            if (!in_array($part, $childParts, true)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function isChildReturnTypeCompatibleWithParent(string $childType, string $parentType): bool
+    {
+        $childParts = $this->normalizeUnionTypeParts($childType);
+        $parentParts = $this->normalizeUnionTypeParts($parentType);
+
+        if ($parentParts === ['mixed'] || $childParts === []) {
+            return true;
+        }
+
+        if ($parentParts === []) {
+            return $childParts === [];
+        }
+
+        foreach ($childParts as $part) {
+            if (!in_array($part, $parentParts, true)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function normalizeUnionTypeParts(string $type): array
+    {
+        $parts = array_values(array_filter(
+            array_map(static fn(string $part): string => trim($part), explode('|', $type)),
+            static fn(string $part): bool => $part !== '',
+        ));
+
+        if ($parts === []) {
+            return [];
+        }
+
+        sort($parts);
+
+        return array_values(array_unique($parts));
+    }
+
+    private function mergeParentTypesIntoChild(string $parentType, string $childType): string
+    {
+        $parts = array_values(array_unique(array_merge(
+            $this->normalizeUnionTypeParts($parentType),
+            $this->normalizeUnionTypeParts($childType),
+        )));
+
+        return implode('|', $parts);
     }
 
     /**

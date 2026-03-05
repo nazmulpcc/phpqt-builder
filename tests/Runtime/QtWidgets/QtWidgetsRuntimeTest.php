@@ -56,3 +56,9 @@ it('covers file-organizer model filtering preview and bulk rename modes', functi
         ->and($payload['preview_first_line'])->toBe('hello')
         ->and($payload['preview_has_world'])->toBeTrue();
 });
+
+it('ensures renamed methods do not leave generated classes abstract', function (): void {
+    $payload = qt_runtime_payload('QtWidgets/abstract_contract_compatibility.php');
+
+    expect($payload['offenders'])->toBe([]);
+});
