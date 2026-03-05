@@ -1026,7 +1026,11 @@ public:
 class {!! $ctx->trampolineTypeName !!} : public @if($ctx->requiresAccessShim){!! $ctx->accessShimTypeName !!}@else{!! $ctx->nativeCppType !!}@endif
 {
 public:
-    using @if($ctx->requiresAccessShim){!! $ctx->accessShimTypeName !!}@else{!! $ctx->nativeCppType !!}@endif::@if($ctx->requiresAccessShim){!! $ctx->accessShimTypeName !!}@else{!! $ctx->nativeCppType !!}@endif;
+    template <typename... Args>
+    explicit {!! $ctx->trampolineTypeName !!}(Args&&... args)
+        : @if($ctx->requiresAccessShim){!! $ctx->accessShimTypeName !!}@else{!! $ctx->nativeCppType !!}@endif(std::forward<Args>(args)...)
+    {
+    }
 
     zend_object *php_object = nullptr;
     mutable bool qt_override_cache_initialized = false;

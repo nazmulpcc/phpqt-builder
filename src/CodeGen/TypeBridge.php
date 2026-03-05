@@ -2049,7 +2049,11 @@ class TypeBridge
             $lines[] = sprintf('    add_index_zval(%s, (zend_long)%s.key(), &%s);', $zvalPtrExpr, $itVar, $valueVar);
         } else {
             $keyStringVar = $suffix === null ? '_qt_key_utf8' : sprintf('_qt_key_utf8_%d', $suffix);
-            $lines[] = sprintf('    QByteArray %s = %s.key().toUtf8();', $keyStringVar, $itVar);
+            if ($this->normalizeCppType($keyType) === 'QByteArray') {
+                $lines[] = sprintf('    QByteArray %s = %s.key();', $keyStringVar, $itVar);
+            } else {
+                $lines[] = sprintf('    QByteArray %s = %s.key().toUtf8();', $keyStringVar, $itVar);
+            }
             $lines[] = sprintf('    add_assoc_zval_ex(%s, %s.constData(), %s.size(), &%s);', $zvalPtrExpr, $keyStringVar, $keyStringVar, $valueVar);
         }
         $lines[] = '}';

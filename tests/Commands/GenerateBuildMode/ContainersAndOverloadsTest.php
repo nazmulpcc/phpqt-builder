@@ -98,6 +98,43 @@ it('supports common qt container signatures for virtual overrides', function ():
         Assert::assertStringContainsString('QList<QByteArray>()', $cpp);
 });
 
+it('uses QByteArray keys directly when converting map returns to PHP arrays', function (): void {
+        $fixtureRoot = qt_fixture_path('policy-qt');
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+        mkdir($outputDir, 0777, true);
+
+        $header = $outputDir . '/qbytearraykeymapholder.h';
+        file_put_contents($header, <<<'CPP'
+template <typename K, typename V>
+class QHash {};
+class QByteArray {};
+class QVariant {};
+class QByteArrayKeyMapHolder {
+public:
+QHash<QByteArray, QVariant> headers() const;
+};
+CPP);
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $header,
+            'class' => 'QByteArrayKeyMapHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QByteArrayKeyMapHolder,QVariant',
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode);
+
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qbytearraykeymapholder.cpp');
+        Assert::assertStringContainsString('QByteArray _qt_key_utf8 = _qt_it.key();', $cpp);
+        Assert::assertStringNotContainsString('QByteArray _qt_key_utf8 = _qt_it.key().toUtf8();', $cpp);
+});
+
 it('keeps writable container references unsupported', function (): void {
         $fixtureRoot = qt_fixture_path('policy-qt');
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
