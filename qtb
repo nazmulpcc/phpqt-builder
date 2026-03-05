@@ -16,7 +16,7 @@ $systemInformation = new UnixSystemInformation();
 $app = new Application('QT Builder', '0.1.0');
 
 $app->addCommand(new DoctorCommand($systemInformation));
-$app->addCommand(new InspectCommand());
+$app->addCommand(new InspectCommand($systemInformation));
 $app->addCommand(new DefineCommand());
 $app->addCommand(new GenerateCommand($systemInformation));
 $app->addCommand(new BuildCommand($systemInformation));
