@@ -5,6 +5,7 @@ declare(strict_types=1);
 use PHPUnit\Framework\Assert;
 use QtBuilder\Build\ClassGenerationService;
 use QtBuilder\Commands\GenerateCommand;
+use QtBuilder\CodeGen\TypeBridge;
 use QtBuilder\Tests\Support\GenerateBuildModeRunner;
 use QtBuilder\Tests\Support\FakeSystemInformation;
 use Symfony\Component\Console\Command\Command;
@@ -192,6 +193,14 @@ it('handles QString pointer parameters', function (): void {
         Assert::assertStringContainsString('_qt_arg_1);', $cpp);
         Assert::assertStringContainsString('QByteArray _utf8 = _result.toUtf8();', $cpp);
         Assert::assertStringContainsString('RETURN_STRINGL(_utf8.constData(), _utf8.size());', $cpp);
+});
+
+it('uses direct construction for explicit value-return fallbacks in virtual dispatch', function (): void {
+        $bridge = new TypeBridge();
+
+        Assert::assertSame('QExplicitValue()', $bridge->defaultNativeReturnExpr('QExplicitValue', 'QExplicitValue'));
+        Assert::assertSame('QSqlIndex()', $bridge->defaultNativeReturnExpr('QSqlIndex', 'QSqlIndex'));
+        Assert::assertSame('QVariant()', $bridge->defaultNativeReturnExpr('QVariant', 'QVariant'));
 });
 
 it('treats qbitarray factories as value returns and supports bool out parameters by-ref', function (): void {

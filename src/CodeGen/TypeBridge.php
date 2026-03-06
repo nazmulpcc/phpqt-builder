@@ -1442,6 +1442,7 @@ class TypeBridge
             },
             'string' => sprintf('%s()', $this->normalizeCppType($cppType)),
             'array' => sprintf('%s()', $this->normalizeCppType($cppType)),
+            'value_object' => sprintf('%s()', $this->normalizeCppType($cppType)),
             'qobject_pointer' => 'NULL',
             default => '{}',
         };
@@ -1870,13 +1871,14 @@ class TypeBridge
 
         $lines = [
             sprintf('%s %s;', $containerType, $nativeVarName),
-            sprintf('if (%s != NULL) {', $sourceVarName),
         ];
         if ($sourceIsZval) {
             $lines[] = sprintf('    if (Z_TYPE_P(%s) != IS_ARRAY) {', $sourceVarName);
             $lines[] = '        zend_type_error("Expected PHP array for Qt container conversion.");';
             $lines[] = '        ' . $failureStatement;
             $lines[] = '    }';
+        } else {
+            $lines[] = sprintf('if (%s != NULL) {', $sourceVarName);
         }
         $lines[] = sprintf('    HashTable *%s_ht = Z_ARRVAL_P(%s);', $nativeVarName, $sourceVarName);
         $lines[] = sprintf('    zval *%s;', $entryVar);
@@ -1885,7 +1887,9 @@ class TypeBridge
         $lines = array_merge($lines, $this->sequenceInputValueLines($container, $phpType, $entryVar, $valueVar, $stringVar, $nullable, $failureStatement));
         $lines[] = sprintf('        %s.append(%s);', $nativeVarName, $valueVar);
         $lines[] = '    } ZEND_HASH_FOREACH_END();';
-        $lines[] = '}';
+        if (!$sourceIsZval) {
+            $lines[] = '}';
+        }
 
         return $lines;
     }
@@ -1970,13 +1974,14 @@ class TypeBridge
 
         $lines = [
             sprintf('%s %s;', $containerType, $nativeVarName),
-            sprintf('if (%s != NULL) {', $sourceVarName),
         ];
         if ($sourceIsZval) {
             $lines[] = sprintf('    if (Z_TYPE_P(%s) != IS_ARRAY) {', $sourceVarName);
             $lines[] = '        zend_type_error("Expected PHP array for Qt container conversion.");';
             $lines[] = '        ' . $failureStatement;
             $lines[] = '    }';
+        } else {
+            $lines[] = sprintf('if (%s != NULL) {', $sourceVarName);
         }
         $lines[] = sprintf('    HashTable *%s_ht = Z_ARRVAL_P(%s);', $nativeVarName, $sourceVarName);
         $lines[] = sprintf('    zend_string *%s_key_str;', $nativeVarName);
@@ -2039,7 +2044,9 @@ class TypeBridge
 
         $lines[] = sprintf('        %s.insert(%s, %s);', $nativeVarName, $keyVar, $valueVar);
         $lines[] = '    } ZEND_HASH_FOREACH_END();';
-        $lines[] = '}';
+        if (!$sourceIsZval) {
+            $lines[] = '}';
+        }
 
         return $lines;
     }

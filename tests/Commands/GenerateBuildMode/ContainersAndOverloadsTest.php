@@ -96,6 +96,7 @@ it('supports common qt container signatures for virtual overrides', function ():
         Assert::assertStringContainsString('Expected PHP array for Qt container conversion.', $cpp);
         Assert::assertStringContainsString('QMap<int, QVariant>()', $cpp);
         Assert::assertStringContainsString('QList<QByteArray>()', $cpp);
+        Assert::assertStringNotContainsString('if (&_qt_retval != NULL)', $cpp);
 });
 
 it('uses QByteArray keys directly when converting map returns to PHP arrays', function (): void {
