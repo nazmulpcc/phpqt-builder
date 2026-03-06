@@ -13,6 +13,7 @@ use QtBuilder\Qt\QtInstallationResolver;
 use Symfony\Component\Console\Helper\Table;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
@@ -31,8 +32,8 @@ class BuildDiscoverCommand extends Command
     protected function configure(): void
     {
         $this
+            ->addArgument('modules', InputArgument::OPTIONAL, 'Comma-separated Qt modules to scan', 'QtCore')
             ->addOption('qt-path', null, InputOption::VALUE_REQUIRED, 'Path to the Qt installation root')
-            ->addOption('modules', null, InputOption::VALUE_REQUIRED, 'Comma-separated Qt modules to scan', 'QtCore')
             ->addOption('output', 'o', InputOption::VALUE_REQUIRED, 'Build root directory; discovery metadata is written under <output>/generated', 'build')
             ->addOption('force', 'F', InputOption::VALUE_NONE, 'Clear the selected build root before starting discovery')
             ->addOption('no-acceptance-table', null, InputOption::VALUE_NONE, 'Skip module acceptance table output (internal use)')
@@ -41,7 +42,7 @@ class BuildDiscoverCommand extends Command
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        $modules = $this->parseModules((string) $input->getOption('modules'));
+        $modules = $this->parseModules((string) $input->getArgument('modules'));
 
         $qtResolver = new QtInstallationResolver($this->systemInformation);
         $installation = $qtResolver->resolve($input->getOption('qt-path') !== null ? (string) $input->getOption('qt-path') : null, $modules);

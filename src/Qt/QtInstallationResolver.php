@@ -6,7 +6,6 @@ namespace QtBuilder\Qt;
 
 use QtBuilder\Contracts\SystemInformation;
 use RuntimeException;
-use Symfony\Component\Process\Process;
 
 class QtInstallationResolver
 {
@@ -117,6 +116,10 @@ class QtInstallationResolver
             $libraryRoots[] = $libsPath;
         }
 
+        [$qtVersion, $qtVersionMajor, $qtVersionMinor, $qtVersionPatch] = $this->resolveQtVersion(
+            $rootPath,
+            $headersPath,
+        );
         $moduleLinkFlags = $this->resolveModuleLinkFlags($modules, $rootPath, $tools);
 
         return new QtInstallation(
@@ -127,6 +130,10 @@ class QtInstallationResolver
             moduleHeaderRoots: $moduleHeaderRoots,
             moduleLinkFlags: $moduleLinkFlags,
             tools: $tools,
+            qtVersion: $qtVersion,
+            qtVersionMajor: $qtVersionMajor,
+            qtVersionMinor: $qtVersionMinor,
+            qtVersionPatch: $qtVersionPatch,
         );
     }
 
@@ -205,15 +212,12 @@ class QtInstallationResolver
      */
     private function queryTool(string $binary, array $args): ?string
     {
-        $process = new Process([$binary, ...$args]);
-        $process->setTimeout(5.0);
-        $process->run();
-
-        if (!$process->isSuccessful()) {
+        $result = $this->systemInformation->runCommand([$binary, ...$args], 5.0);
+        if (!$result->isSuccessful()) {
             return null;
         }
 
-        $output = trim($process->getOutput());
+        $output = trim($result->getStdout());
 
         return $output !== '' ? $output : null;
     }
@@ -231,5 +235,121 @@ class QtInstallationResolver
         }
 
         return null;
+    }
+
+    /**
+     * @return array{0: string, 1: int, 2: int, 3: int}
+     */
+    private function resolveQtVersion(string $rootPath, ?string $headersPath): array
+    {
+        $qtpaths = $this->findFirstExecutable(['qtpaths6', 'qtpaths']);
+        if ($qtpaths !== null) {
+            $version = $this->queryTool($qtpaths, ['--qt-version']);
+            if ($version !== null) {
+                return $this->normalizeQtVersion($version);
+            }
+        }
+
+        $qmake = $this->findFirstExecutable(['qmake6', 'qmake']);
+        if ($qmake !== null) {
+            $version = $this->queryTool($qmake, ['-query', 'QT_VERSION']);
+            if ($version !== null) {
+                return $this->normalizeQtVersion($version);
+            }
+        }
+
+        $pkgConfig = $this->systemInformation->findExecutable('pkg-config');
+        if ($pkgConfig !== null) {
+            $version = $this->queryTool($pkgConfig, ['--modversion', 'Qt6Core']);
+            if ($version !== null) {
+                return $this->normalizeQtVersion($version);
+            }
+        }
+
+        $qconfigPath = $this->qconfigPath($rootPath, $headersPath);
+        if ($qconfigPath !== null) {
+            $parsed = $this->parseQconfigVersion($qconfigPath);
+            if ($parsed !== null) {
+                return $parsed;
+            }
+        }
+
+        return ['', 0, 0, 0];
+    }
+
+    /**
+     * @return array{0: string, 1: int, 2: int, 3: int}
+     */
+    private function normalizeQtVersion(string $version): array
+    {
+        $normalized = trim($version);
+        if ($normalized === '') {
+            return ['', 0, 0, 0];
+        }
+
+        if (preg_match('/^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)$/', $normalized, $matches) !== 1) {
+            return [$normalized, 0, 0, 0];
+        }
+
+        return [
+            $normalized,
+            (int) $matches['major'],
+            (int) $matches['minor'],
+            (int) $matches['patch'],
+        ];
+    }
+
+    private function qconfigPath(string $rootPath, ?string $headersPath): ?string
+    {
+        $frameworkHeaderRoot = $this->frameworkHeaderRoot($rootPath, 'QtCore');
+        $candidates = array_filter([
+            $headersPath !== null ? $headersPath . '/QtCore/qconfig.h' : null,
+            $headersPath !== null ? $headersPath . '/qconfig.h' : null,
+            $rootPath . '/include/QtCore/qconfig.h',
+            $rootPath . '/include/qconfig.h',
+            $frameworkHeaderRoot !== null ? $frameworkHeaderRoot . '/qconfig.h' : null,
+        ]);
+
+        foreach ($candidates as $candidate) {
+            if (is_string($candidate) && is_file($candidate)) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array{0: string, 1: int, 2: int, 3: int}|null
+     */
+    private function parseQconfigVersion(string $path): ?array
+    {
+        $contents = file_get_contents($path);
+        if (!is_string($contents) || $contents === '') {
+            return null;
+        }
+
+        if (preg_match('/#define\s+QT_VERSION_STR\s+"([^"]+)"/', $contents, $versionMatch) === 1) {
+            $version = $this->normalizeQtVersion($versionMatch[1]);
+            if ($version[0] !== '') {
+                return $version;
+            }
+        }
+
+        $major = preg_match('/#define\s+QT_VERSION_MAJOR\s+(\d+)/', $contents, $majorMatch) === 1
+            ? (int) $majorMatch[1]
+            : 0;
+        $minor = preg_match('/#define\s+QT_VERSION_MINOR\s+(\d+)/', $contents, $minorMatch) === 1
+            ? (int) $minorMatch[1]
+            : 0;
+        $patch = preg_match('/#define\s+QT_VERSION_PATCH\s+(\d+)/', $contents, $patchMatch) === 1
+            ? (int) $patchMatch[1]
+            : 0;
+
+        if ($major === 0 && $minor === 0 && $patch === 0) {
+            return null;
+        }
+
+        return [sprintf('%d.%d.%d', $major, $minor, $patch), $major, $minor, $patch];
     }
 }

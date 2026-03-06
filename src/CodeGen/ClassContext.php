@@ -119,6 +119,15 @@ class ClassContext
     /** Qt include directive (e.g. "<QWidget>") */
     public readonly string $qtInclude;
 
+    /** @var list<string> Native Qt includes needed by this wrapper */
+    public readonly array $nativeIncludes;
+
+    /** @var list<string> Native Qt includes beyond the primary include */
+    public readonly array $extraQtIncludes;
+
+    /** Optional `using` alias that binds the PHP wrapper name to a C++ type */
+    public readonly ?string $nativeAliasOf;
+
     /** MINIT function name (e.g. "qt_qwidget") */
     public readonly string $minitName;
 
@@ -205,7 +214,13 @@ class ClassContext
         $this->minitName = $typeBridge->minitName($phpClass->name);
         $this->filePrefix = $typeBridge->minitName($phpClass->name);
         $this->headerGuard = strtoupper($this->filePrefix) . '_H';
-        $this->qtInclude = $typeBridge->qtInclude($phpClass->name);
+        $nativeIncludes = $phpClass->nativeIncludes !== []
+            ? array_values(array_unique($phpClass->nativeIncludes))
+            : [$typeBridge->qtInclude($phpClass->name)];
+        $this->nativeIncludes = $nativeIncludes;
+        $this->qtInclude = $nativeIncludes[0];
+        $this->extraQtIncludes = array_slice($nativeIncludes, 1);
+        $this->nativeAliasOf = $phpClass->nativeAliasOf;
 
         // Type classification
         $this->isValueType = $typeBridge->isValueType($phpClass->name);

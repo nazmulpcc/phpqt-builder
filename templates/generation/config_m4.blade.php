@@ -9,7 +9,7 @@ PHP_ARG_ENABLE([{!! $ctx->extensionName !!}],
 AS_VAR_IF([PHP_{!! strtoupper($ctx->extensionName) !!}], [no],, [
   PHP_REQUIRE_CXX()
 @php($sharedLibAdd = strtoupper($ctx->extensionName) . '_SHARED_LIBADD')
-@foreach($ctx->installation->includeRoots as $includeRoot)
+@foreach($ctx->compileIncludeRoots() as $includeRoot)
 @if(str_starts_with($includeRoot, '-F'))
   CPPFLAGS="$CPPFLAGS {!! $includeRoot !!}"
 @elseif(str_starts_with($includeRoot, '-'))

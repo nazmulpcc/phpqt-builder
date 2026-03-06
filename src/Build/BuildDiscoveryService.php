@@ -33,6 +33,7 @@ class BuildDiscoveryService
         int $jobs,
         OutputInterface $output,
         string $extensionName = 'qt',
+        ?ImportedModuleAbi $importedAbi = null,
     ): BuildDiscoveryResult {
         $this->ensureDirectory(dirname($metadataDir));
         $this->ensureDirectory($metadataDir);
@@ -63,8 +64,12 @@ class BuildDiscoveryService
 
         $viability = $this->resolveViableCandidates(
             $classStructures['accepted_candidates'],
-            $classStructures['prepared_class_data'],
+            $importedAbi !== null
+                ? $importedAbi->mergePreparedClassData($classStructures['prepared_class_data'])
+                : $classStructures['prepared_class_data'],
             $output,
+            $importedAbi?->availableClasses ?? [],
+            $importedAbi !== null,
         );
 
         return new BuildDiscoveryResult(
@@ -482,6 +487,8 @@ class BuildDiscoveryService
         array $acceptedCandidates,
         array $preparedClassDataByClass,
         OutputInterface $output,
+        array $importedAvailableClasses = [],
+        bool $preferExternalDependencyReasons = false,
     ): array {
         if ($acceptedCandidates === []) {
             return [
@@ -507,6 +514,7 @@ class BuildDiscoveryService
         do {
             $passes++;
             $allowedClasses = array_keys($viableCandidates);
+            $allowedClasses = array_values(array_unique([...$allowedClasses, ...$importedAvailableClasses]));
             sort($allowedClasses);
 
             if ($passes > 1) {
@@ -545,6 +553,7 @@ class BuildDiscoveryService
                     $candidate->parseHeader,
                     $allowedClasses,
                     $preparedClassDataByClass,
+                    $preferExternalDependencyReasons,
                 );
 
                 if ($result->status === 'ok') {

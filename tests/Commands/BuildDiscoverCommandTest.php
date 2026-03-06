@@ -47,7 +47,7 @@ it('writes reusable build metadata during discovery', function (): void {
         new BuildDiscoverCommand(FakeSystemInformation::passing()),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtCore',
+            'modules' => 'QtCore',
             '--output' => $buildRoot,
             '--jobs' => '2',
         ],
@@ -94,7 +94,7 @@ it('reuses class structure cache after generated metadata is cleared', function 
         new BuildDiscoverCommand(FakeSystemInformation::passing()),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtCore',
+            'modules' => 'QtCore',
             '--output' => $buildRoot,
             '--jobs' => '2',
         ],
@@ -109,7 +109,7 @@ it('reuses class structure cache after generated metadata is cleared', function 
         new BuildDiscoverCommand(FakeSystemInformation::passing()),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtCore',
+            'modules' => 'QtCore',
             '--output' => $buildRoot,
             '--jobs' => '2',
         ],
@@ -134,7 +134,7 @@ it('feeds discovery cache into the build command', function (): void {
         new BuildDiscoverCommand(FakeSystemInformation::passing()),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtCore',
+            'modules' => 'QtCore',
             '--output' => $buildRoot,
             '--jobs' => '2',
         ],
@@ -145,7 +145,7 @@ it('feeds discovery cache into the build command', function (): void {
         new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtCore',
+            'modules' => 'QtCore',
             '--output' => $buildRoot,
             '--jobs' => '2',
         ],
@@ -165,7 +165,7 @@ it('rejects an ext directory as the build root for discovery', function (): void
         new BuildDiscoverCommand(FakeSystemInformation::passing()),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtCore',
+            'modules' => 'QtCore',
             '--output' => $buildRoot . '/ext',
             '--jobs' => '2',
         ],
@@ -185,7 +185,7 @@ it('clears the build root before discovery when forced', function (): void {
         new BuildDiscoverCommand(FakeSystemInformation::passing()),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtCore',
+            'modules' => 'QtCore',
             '--output' => $buildRoot,
             '--jobs' => '2',
             '--force' => true,

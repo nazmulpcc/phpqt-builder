@@ -1,0 +1,162 @@
+<?php
+
+declare(strict_types=1);
+
+namespace QtBuilder\Build;
+
+final readonly class ModuleAbiManifest
+{
+    /**
+     * @param list<string> $includeDirs
+     * @param list<string> $sharedIncludeDirs
+     * @param list<string> $dependencyModules
+     * @param list<string> $classes
+     * @param array<string, string> $classNamespaces
+     */
+    public function __construct(
+        public string $module,
+        public string $extensionName,
+        public string $buildRootDir,
+        public string $outputDir,
+        public string $metadataDir,
+        public string $acceptedCandidatesPath,
+        public string $classCacheDir,
+        public array $includeDirs,
+        public array $sharedIncludeDirs,
+        public array $dependencyModules,
+        public array $classes,
+        public array $classNamespaces,
+        public bool $includesSignalConnectionSupport,
+        public string $buildMode = RuntimeManifest::MODE_MONOLITHIC,
+        public string $qtVersion = '',
+        public int $qtVersionMajor = 0,
+        public int $qtVersionMinor = 0,
+        public int $qtVersionPatch = 0,
+        public string $extensionVersion = '',
+        public string $builderAbiVersion = RuntimeManifest::BUILDER_ABI_VERSION,
+    ) {}
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function toArray(): array
+    {
+        return [
+            'module' => $this->module,
+            'extension_name' => $this->extensionName,
+            'build_root_dir' => $this->buildRootDir,
+            'output_dir' => $this->outputDir,
+            'metadata_dir' => $this->metadataDir,
+            'accepted_candidates_path' => $this->acceptedCandidatesPath,
+            'class_cache_dir' => $this->classCacheDir,
+            'include_dirs' => array_values($this->includeDirs),
+            'shared_include_dirs' => array_values($this->sharedIncludeDirs),
+            'dependency_modules' => array_values($this->dependencyModules),
+            'classes' => array_values($this->classes),
+            'class_count' => count($this->classes),
+            'namespaces' => $this->namespaces(),
+            'class_namespaces' => $this->classNamespaces,
+            'includes_signal_connection_support' => $this->includesSignalConnectionSupport,
+            'build_mode' => $this->buildMode,
+            'qt_version' => $this->qtVersion,
+            'qt_version_major' => $this->qtVersionMajor,
+            'qt_version_minor' => $this->qtVersionMinor,
+            'qt_version_patch' => $this->qtVersionPatch,
+            'extension_version' => $this->extensionVersion,
+            'builder_abi_version' => $this->builderAbiVersion,
+        ];
+    }
+
+    public function write(string $path): void
+    {
+        $directory = dirname($path);
+        if (!is_dir($directory) && !mkdir($directory, 0755, true) && !is_dir($directory)) {
+            throw new \RuntimeException(sprintf('Could not create directory: %s', $directory));
+        }
+
+        $encoded = json_encode($this->toArray(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        if ($encoded === false) {
+            throw new \RuntimeException('Could not encode module ABI manifest.');
+        }
+
+        file_put_contents($path, $encoded . "\n");
+    }
+
+    public static function load(string $path): self
+    {
+        $decoded = json_decode((string) file_get_contents($path), true);
+        if (!is_array($decoded)) {
+            throw new \RuntimeException(sprintf('Could not decode module ABI manifest: %s', $path));
+        }
+
+        return new self(
+            module: (string) ($decoded['module'] ?? ''),
+            extensionName: (string) ($decoded['extension_name'] ?? ''),
+            buildRootDir: (string) ($decoded['build_root_dir'] ?? ''),
+            outputDir: (string) ($decoded['output_dir'] ?? ''),
+            metadataDir: (string) ($decoded['metadata_dir'] ?? ''),
+            acceptedCandidatesPath: (string) ($decoded['accepted_candidates_path'] ?? ''),
+            classCacheDir: (string) ($decoded['class_cache_dir'] ?? ''),
+            includeDirs: self::filterStringList($decoded['include_dirs'] ?? []),
+            sharedIncludeDirs: self::filterStringList($decoded['shared_include_dirs'] ?? []),
+            dependencyModules: self::filterStringList($decoded['dependency_modules'] ?? []),
+            classes: self::filterStringList($decoded['classes'] ?? []),
+            classNamespaces: self::filterStringMap($decoded['class_namespaces'] ?? []),
+            includesSignalConnectionSupport: (bool) ($decoded['includes_signal_connection_support'] ?? false),
+            buildMode: is_string($decoded['build_mode'] ?? null) ? $decoded['build_mode'] : RuntimeManifest::MODE_MONOLITHIC,
+            qtVersion: is_string($decoded['qt_version'] ?? null) ? $decoded['qt_version'] : '',
+            qtVersionMajor: max(0, (int) ($decoded['qt_version_major'] ?? 0)),
+            qtVersionMinor: max(0, (int) ($decoded['qt_version_minor'] ?? 0)),
+            qtVersionPatch: max(0, (int) ($decoded['qt_version_patch'] ?? 0)),
+            extensionVersion: is_string($decoded['extension_version'] ?? null) ? $decoded['extension_version'] : '',
+            builderAbiVersion: is_string($decoded['builder_abi_version'] ?? null) ? $decoded['builder_abi_version'] : RuntimeManifest::BUILDER_ABI_VERSION,
+        );
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function namespaces(): array
+    {
+        $namespaces = array_values(array_unique(array_values($this->classNamespaces)));
+        sort($namespaces);
+
+        return $namespaces;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private static function filterStringList(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+
+        return array_values(array_filter(
+            array_map(static fn(mixed $entry): string => is_string($entry) ? $entry : '', $value),
+            static fn(string $entry): bool => $entry !== '',
+        ));
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private static function filterStringMap(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $resolved = [];
+        foreach ($value as $key => $entry) {
+            if (!is_string($key) || !is_string($entry) || $key === '' || $entry === '') {
+                continue;
+            }
+
+            $resolved[$key] = $entry;
+        }
+
+        return $resolved;
+    }
+}

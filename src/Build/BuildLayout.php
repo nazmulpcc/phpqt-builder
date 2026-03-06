@@ -6,7 +6,12 @@ namespace QtBuilder\Build;
 
 final readonly class BuildLayout
 {
-    public function __construct(public string $buildRootDir) {}
+    public string $buildRootDir;
+
+    public function __construct(string $buildRootDir)
+    {
+        $this->buildRootDir = self::absolutePath(rtrim($buildRootDir, '/'));
+    }
 
     public static function fromCliOutput(string $output): self
     {
@@ -24,6 +29,33 @@ final readonly class BuildLayout
         }
 
         return new self($normalized);
+    }
+
+    private static function absolutePath(string $path): string
+    {
+        if ($path === '' || self::isAbsolutePath($path)) {
+            return $path;
+        }
+
+        $cwd = getcwd();
+        if (!is_string($cwd) || $cwd === '') {
+            return $path;
+        }
+
+        return rtrim($cwd, '/\\') . '/' . ltrim($path, '/\\');
+    }
+
+    private static function isAbsolutePath(string $path): bool
+    {
+        if ($path === '') {
+            return false;
+        }
+
+        if ($path[0] === '/' || $path[0] === '\\') {
+            return true;
+        }
+
+        return preg_match('/^[A-Za-z]:[\\\\\\/]/', $path) === 1;
     }
 
     public function extensionDir(): string

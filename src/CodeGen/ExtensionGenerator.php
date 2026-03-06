@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace QtBuilder\CodeGen;
 
 use eftec\bladeone\BladeOne;
+use QtBuilder\Build\ExtensionBuildContext;
 use QtBuilder\Definition\PhpClass;
 use QtBuilder\IO\FileWriteStats;
 use QtBuilder\IO\SmartFileWriter;
@@ -57,7 +58,13 @@ class ExtensionGenerator
      * @param array<string, string> $classNamespaces Class-to-namespace map used for stub generation
      * @return list<string> List of files written (absolute paths)
      */
-    public function generate(PhpClass $phpClass, string $namespace, string $outputDir, array $classNamespaces = []): array
+    public function generate(
+        PhpClass $phpClass,
+        string $namespace,
+        string $outputDir,
+        array $classNamespaces = [],
+        bool $emitSignalConnectionSupport = true,
+    ): array
     {
         $this->lastWriteStats = new FileWriteStats();
         $ctx = new ClassContext($phpClass, $namespace, $this->typeBridge, $classNamespaces);
@@ -90,8 +97,8 @@ class ExtensionGenerator
         $this->lastWriteStats->record($stubResult);
         $files[] = $stubFile;
 
-        if ($ctx->hasSignals()) {
-            $files = [...$files, ...$this->generateSignalConnectionSupport($outputDir)];
+        if ($emitSignalConnectionSupport && $ctx->hasSignals()) {
+            $files = [...$files, ...$this->writeSignalConnectionSupport($outputDir)];
         }
 
         return $files;
@@ -124,6 +131,26 @@ class ExtensionGenerator
     }
 
     /**
+     * @return list<string>
+     */
+    public function generateSignalConnectionSupport(string $outputDir): array
+    {
+        $this->lastWriteStats = new FileWriteStats();
+
+        return $this->writeSignalConnectionSupport($outputDir);
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function generateBuildInfoSupport(string $outputDir, ExtensionBuildContext $context): array
+    {
+        $this->lastWriteStats = new FileWriteStats();
+
+        return $this->writeBuildInfoSupport($outputDir, $context);
+    }
+
+    /**
      * Clean up Blade output: remove excessive blank lines, trim trailing whitespace.
      */
     private function cleanOutput(string $content): string
@@ -143,7 +170,7 @@ class ExtensionGenerator
     /**
      * @return list<string>
      */
-    private function generateSignalConnectionSupport(string $outputDir): array
+    private function writeSignalConnectionSupport(string $outputDir): array
     {
         $files = [];
 
@@ -168,6 +195,41 @@ class ExtensionGenerator
         $stubResult = $this->fileWriter->write(
             $stubFile,
             $this->cleanOutput($this->blade->run('generation.support.qmetaobjectconnection_stub', [])),
+        );
+        $this->lastWriteStats->record($stubResult);
+        $files[] = $stubFile;
+
+        return $files;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function writeBuildInfoSupport(string $outputDir, ExtensionBuildContext $context): array
+    {
+        $files = [];
+
+        $headerFile = $outputDir . '/qt_buildinfo.h';
+        $sourceFile = $outputDir . '/qt_buildinfo.cpp';
+        $stubFile = $outputDir . '/qt_buildinfo.stub.php';
+
+        $headerResult = $this->fileWriter->write(
+            $headerFile,
+            $this->cleanOutput($this->blade->run('generation.support.buildinfo_header', ['ctx' => $context])),
+        );
+        $this->lastWriteStats->record($headerResult);
+        $files[] = $headerFile;
+
+        $sourceResult = $this->fileWriter->write(
+            $sourceFile,
+            $this->cleanOutput($this->blade->run('generation.support.buildinfo_source', ['ctx' => $context])),
+        );
+        $this->lastWriteStats->record($sourceResult);
+        $files[] = $sourceFile;
+
+        $stubResult = $this->fileWriter->write(
+            $stubFile,
+            $this->cleanOutput($this->blade->run('generation.support.buildinfo_stub', ['ctx' => $context])),
         );
         $this->lastWriteStats->record($stubResult);
         $files[] = $stubFile;

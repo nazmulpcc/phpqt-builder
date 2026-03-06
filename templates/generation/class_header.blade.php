@@ -17,16 +17,28 @@
 
 #include "php.h"
 #include "zend_exceptions.h"
-#include {!! $ctx->qtInclude !!}
+@foreach($ctx->nativeIncludes as $include)
+#include {!! $include !!}
+@endforeach
 @if($ctx->needsArgvStorage)
 #include <vector>
 #include <QByteArray>
 @endif
 
 #ifndef PHP_QT_API
-#define PHP_QT_API
+# if defined(PHP_WIN32)
+#  define PHP_QT_API __declspec(dllexport)
+# elif defined(__GNUC__) && __GNUC__ >= 4
+#  define PHP_QT_API __attribute__ ((visibility("default")))
+# else
+#  define PHP_QT_API
+# endif
 #endif
 
+@if($ctx->nativeAliasOf)
+using {!! $ctx->nativeCppType !!} = {!! $ctx->nativeAliasOf !!};
+
+@endif
 /* ------------------------------------------------------------------ */
 /* Object struct                                                       */
 /* ------------------------------------------------------------------ */
@@ -79,7 +91,7 @@ static inline {!! $ctx->objectStructName !!} *{!! $ctx->fromObjFunc !!}(zend_obj
 /* wrap_native — wrap an existing C++ pointer in a PHP object          */
 /* ------------------------------------------------------------------ */
 
-void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativeCppType !!} *native,
+PHP_QT_API void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativeCppType !!} *native,
     zend_class_entry *ce, bool prevent_destroy);
 
 @endif

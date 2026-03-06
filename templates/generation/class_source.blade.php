@@ -1418,7 +1418,7 @@ static HashTable *{!! $ctx->filePrefix !!}_get_gc(zend_object *object, zval **ta
 /* wrap_native                                                         */
 /* ------------------------------------------------------------------ */
 
-void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativeCppType !!} *native,
+PHP_QT_API void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativeCppType !!} *native,
     zend_class_entry *ce, bool prevent_destroy)
 {
     if (!native) {

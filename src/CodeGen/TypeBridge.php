@@ -145,6 +145,15 @@ class TypeBridge
         'QModelIndex',
         'QPersistentModelIndex',
         'QDate', 'QTime', 'QDateTime',
+        'QItemSelection',
+        'QItemSelectionRange',
+        'QPolygon',
+        'QPolygonF',
+        'QStringList',
+        'QVariantList',
+        'QModelIndexList',
+        'QXmlStreamAttribute',
+        'QXmlStreamAttributes',
     ];
 
     // ------------------------------------------------------------------
@@ -172,7 +181,8 @@ class TypeBridge
      */
     public function isValueType(string $className): bool
     {
-        return \in_array($className, self::KNOWN_VALUE_TYPES, true);
+        return \in_array($className, self::KNOWN_VALUE_TYPES, true)
+            || str_starts_with($className, 'QListOf');
     }
 
     /**
