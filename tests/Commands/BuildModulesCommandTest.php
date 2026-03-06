@@ -94,6 +94,12 @@ it('builds split module trees with a shared sdk and skips unavailable sibling ab
         'php_info_print_table_row(2, "loaded modules", ZSTR_VAL(qt_buildinfo_loaded_modules));',
     );
 
+    $buildInfoStub = (string) file_get_contents($qtCoreRoot . '/ext/classes/qt_buildinfo.stub.php');
+    expect($buildInfoStub)->toContain(
+        "public const string MODE_MONOLITHIC = 'monolithic';",
+        "public const string MODE_MODULAR = 'modular';",
+    );
+
     $qtWidgetsSummary = qt_decode_json((string) file_get_contents($qtWidgetsRoot . '/generated/build_summary.json'));
     expect($qtWidgetsSummary['generated_classes'])->toBe(2)
         ->and($qtWidgetsSummary['skipped_classes'])->toBe(1)

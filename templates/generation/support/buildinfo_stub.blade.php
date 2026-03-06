@@ -6,8 +6,8 @@ namespace Qt;
 
 final class BuildInfo
 {
-    public const MODE_MONOLITHIC = 'monolithic';
-    public const MODE_MODULAR = 'modular';
+    public const string MODE_MONOLITHIC = 'monolithic';
+    public const string MODE_MODULAR = 'modular';
 
     public static function buildMode(): string {}
 

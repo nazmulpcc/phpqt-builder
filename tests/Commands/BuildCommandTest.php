@@ -97,6 +97,12 @@ it('generates the extension tree from a fixture qt root', function (): void {
         'php_info_print_table_row(2, "built modules", ZSTR_VAL(qt_buildinfo_built_modules));',
     );
 
+    $buildInfoStub = (string) file_get_contents($outputDir . '/classes/qt_buildinfo.stub.php');
+    expect($buildInfoStub)->toContain(
+        "public const string MODE_MONOLITHIC = 'monolithic';",
+        "public const string MODE_MODULAR = 'modular';",
+    );
+
     $classmap = qt_decode_json((string) file_get_contents($metadataDir . '/classmap.json'));
     expect(array_column($classmap, 'class'))->toBe(['QAbstractItemModel', 'QModelIndex', 'QNode', 'QPoint', 'QTree']);
 
