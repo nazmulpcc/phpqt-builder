@@ -157,13 +157,38 @@ class BuildPipeline
         $skippedClasses = [...$skippedClasses, ...$classStructures['skipped_classes']];
 
         $classNamespaces = $this->classNamespaces($acceptedCandidates, $request->importedAbi);
-        $enumRegistry = (new EnumHolderExtractor())->extract(
+        $enumHolderCache = new EnumHolderCache();
+        $enumRegistry = $enumHolderCache->load(
+            $metadataDir,
             $request->installation->includeRoots,
             $acceptedCandidates,
             $skippedClasses,
-            $classStructures['prepared_class_data'],
             $classNamespaces,
         );
+
+        if ($enumRegistry instanceof EnumHolderRegistry) {
+            $output->writeln(sprintf(
+                '<comment>Enum holder cache:</comment> hit (%s).',
+                $enumHolderCache->path($metadataDir),
+            ));
+        } else {
+            $output->writeln('<comment>Enum holder cache:</comment> miss.');
+            $enumRegistry = (new EnumHolderExtractor())->extract(
+                $request->installation->includeRoots,
+                $acceptedCandidates,
+                $skippedClasses,
+                $classStructures['prepared_class_data'],
+                $classNamespaces,
+            );
+            $enumHolderCache->write(
+                $metadataDir,
+                $request->installation->includeRoots,
+                $acceptedCandidates,
+                $skippedClasses,
+                $classNamespaces,
+                $enumRegistry,
+            );
+        }
 
         $output->writeln('<info>Evaluating generated class set from cached class structures...</info>');
         $generation = $this->resolveGeneratedCandidates(
@@ -404,6 +429,7 @@ class BuildPipeline
             'discovery_cache.json',
             'accepted_candidates.json',
             'allowed_classes.json',
+            'enum_holders_cache.json',
         ] as $filename) {
             $path = $metadataDir . '/' . $filename;
             if (is_file($path)) {

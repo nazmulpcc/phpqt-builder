@@ -44,6 +44,7 @@ it('generates the extension tree from a fixture qt root', function (): void {
         ->and(is_file($metadataDir . '/runtime_manifest.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/allowed_classes.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/discovery_cache.json'))->toBeTrue()
+        ->and(is_file($metadataDir . '/enum_holders_cache.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/accepted_candidates.json'))->toBeTrue()
         ->and(is_file($classCacheDir . '/QPoint.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/phpize.stdout.log'))->toBeTrue()
@@ -55,6 +56,7 @@ it('generates the extension tree from a fixture qt root', function (): void {
             'Expanded modules: QtCore',
             'Running 2 parallel discovery worker(s)...',
             'Class structure cache:',
+            'Enum holder cache: miss.',
             'Discovery pass 1',
             'phpize: started',
             'phpize: succeeded',
@@ -176,6 +178,7 @@ it('reuses an existing discovery cache', function (): void {
         'discovery_cache.json',
         'accepted_candidates.json',
         'allowed_classes.json',
+        'enum_holders_cache.json',
         'phpize: started',
         'phpize: succeeded',
         'gen_stub: started',
