@@ -219,6 +219,11 @@ class BuildPipeline
     public function build(BuildExecutionRequest $request, OutputInterface $output): BuildExecutionResult
     {
         $analysis = $this->analyze($request, $output);
+        $runtimeManifest = (new RuntimeManifestBuilder())->buildForMonolithic(
+            $request,
+            $analysis,
+            $analysis->requiresSignalConnectionSupport || $request->forceSignalConnectionSupport,
+        );
         $context = new ExtensionBuildContext(
             $request->extensionName,
             $request->extensionVersion,
@@ -231,6 +236,9 @@ class BuildPipeline
                 ...$request->importIncludeRoots,
                 ...($request->importedAbi?->includeDirs() ?? []),
             ])),
+            includeBuildInfoSupport: true,
+            runtimeManifest: $runtimeManifest,
+            buildMode: RuntimeManifest::MODE_MONOLITHIC,
         );
 
         $context = $context->withGeneratedClasses(
@@ -247,14 +255,16 @@ class BuildPipeline
         $scaffolder = new ExtensionScaffolder();
         $scaffolder->prepare($context);
         $metadataDir = $context->metadataDir();
+        $runtimeManifestPath = $metadataDir . '/runtime_manifest.json';
+        $runtimeManifest->write($runtimeManifestPath);
+        $output->writeln(sprintf('  <comment>Wrote:</comment> %s', $runtimeManifestPath));
 
         $emission = $this->emitGeneratedClasses(
-            $request->outputDir . '/classes',
+            $context,
             $analysis->generatedClasses,
             $analysis->generatedPhpClasses,
             $analysis->classNamespaces,
             $analysis->generatedClassHeaders,
-            $context->includeSignalConnectionSupport,
             $output,
         );
         $scaffoldFiles = $scaffolder->finalize($context);
@@ -289,6 +299,7 @@ class BuildPipeline
                 'core' => $coreWriteStats->toArray(),
                 'total' => $totalWriteStats->toArray(),
             ],
+            'runtime_manifest' => $runtimeManifestPath,
         ];
 
         file_put_contents($metadataDir . '/classmap.json', json_encode($emission['classmap'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]');
@@ -315,10 +326,17 @@ class BuildPipeline
                     $request->outputDir . '/classes',
                 ],
                 sharedIncludeDirs: [],
-                dependencyModules: [],
+                dependencyModules: $runtimeManifest->module($request->modules[0] ?? 'QtCore')?->dependencies ?? [],
                 classes: $analysis->generatedClasses,
                 classNamespaces: $this->exportedClassNamespaces($analysis->acceptedCandidates, $analysis->generatedClasses),
                 includesSignalConnectionSupport: $context->includeSignalConnectionSupport,
+                buildMode: $runtimeManifest->buildMode,
+                qtVersion: $runtimeManifest->qtVersion,
+                qtVersionMajor: $runtimeManifest->qtVersionMajor,
+                qtVersionMinor: $runtimeManifest->qtVersionMinor,
+                qtVersionPatch: $runtimeManifest->qtVersionPatch,
+                extensionVersion: $runtimeManifest->extensionVersion,
+                builderAbiVersion: $runtimeManifest->builderAbiVersion,
             );
             $abiManifest->write($metadataDir . '/module_abi.json');
             $summary['abi_manifest'] = $metadataDir . '/module_abi.json';
@@ -918,17 +936,17 @@ class BuildPipeline
      * }
      */
     public function emitGeneratedClasses(
-        string $outputDir,
+        ExtensionBuildContext $context,
         array $generatedClasses,
         array $generatedPhpClasses,
         array $classNamespaces,
         array $classHeaders,
-        bool $emitSignalConnectionSupport,
         OutputInterface $output,
     ): array {
         $generator = new ExtensionGenerator();
         $fileWriteStats = new FileWriteStats();
         $classmap = [];
+        $outputDir = $context->outputDir . '/classes';
 
         if ($generatedClasses !== []) {
             $output->writeln(sprintf('<info>Emitting %d generated class wrapper(s)...</info>', count($generatedClasses)));
@@ -971,7 +989,12 @@ class BuildPipeline
             }
         }
 
-        if ($emitSignalConnectionSupport) {
+        if ($context->includeBuildInfoSupport) {
+            $generator->generateBuildInfoSupport($outputDir, $context);
+            $fileWriteStats->merge($generator->lastWriteStats());
+        }
+
+        if ($context->includeSignalConnectionSupport) {
             $generator->generateSignalConnectionSupport($outputDir);
             $fileWriteStats->merge($generator->lastWriteStats());
         }

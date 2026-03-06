@@ -1,5 +1,7 @@
 @php
 /** @var \QtBuilder\Build\ExtensionBuildContext $ctx */
+/** @var \QtBuilder\Build\RuntimeModuleMetadata|null $buildInfoModule */
+$buildInfoModule = $ctx->currentModuleMetadata();
 @endphp
 #ifdef HAVE_CONFIG_H
 # include <config.h>
@@ -11,6 +13,9 @@
 @foreach($ctx->classHeaders() as $header)
 #include "{!! $header !!}"
 @endforeach
+@if($ctx->requiresBuildInfoRegistration())
+#include "qt_buildinfo.h"
+@endif
 
 PHP_MINFO_FUNCTION({!! $ctx->extensionName !!})
 {
@@ -27,6 +32,12 @@ PHP_MINIT_FUNCTION({!! $ctx->extensionName !!})
         return FAILURE;
     }
 @endforeach
+@if($ctx->requiresBuildInfoRegistration() && $buildInfoModule instanceof \QtBuilder\Build\RuntimeModuleMetadata && $ctx->runtimeManifest instanceof \QtBuilder\Build\RuntimeManifest)
+
+    if (qt_buildinfo_register_module("{!! $buildInfoModule->module !!}", "{!! $buildInfoModule->extensionName !!}", "{!! $ctx->runtimeManifest->qtVersion !!}", "{!! $ctx->runtimeManifest->builderAbiVersion !!}") != SUCCESS) {
+        return FAILURE;
+    }
+@endif
 
     return SUCCESS;
 }

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace QtBuilder\CodeGen;
 
 use eftec\bladeone\BladeOne;
+use QtBuilder\Build\ExtensionBuildContext;
 use QtBuilder\Definition\PhpClass;
 use QtBuilder\IO\FileWriteStats;
 use QtBuilder\IO\SmartFileWriter;
@@ -140,6 +141,16 @@ class ExtensionGenerator
     }
 
     /**
+     * @return list<string>
+     */
+    public function generateBuildInfoSupport(string $outputDir, ExtensionBuildContext $context): array
+    {
+        $this->lastWriteStats = new FileWriteStats();
+
+        return $this->writeBuildInfoSupport($outputDir, $context);
+    }
+
+    /**
      * Clean up Blade output: remove excessive blank lines, trim trailing whitespace.
      */
     private function cleanOutput(string $content): string
@@ -184,6 +195,41 @@ class ExtensionGenerator
         $stubResult = $this->fileWriter->write(
             $stubFile,
             $this->cleanOutput($this->blade->run('generation.support.qmetaobjectconnection_stub', [])),
+        );
+        $this->lastWriteStats->record($stubResult);
+        $files[] = $stubFile;
+
+        return $files;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function writeBuildInfoSupport(string $outputDir, ExtensionBuildContext $context): array
+    {
+        $files = [];
+
+        $headerFile = $outputDir . '/qt_buildinfo.h';
+        $sourceFile = $outputDir . '/qt_buildinfo.cpp';
+        $stubFile = $outputDir . '/qt_buildinfo.stub.php';
+
+        $headerResult = $this->fileWriter->write(
+            $headerFile,
+            $this->cleanOutput($this->blade->run('generation.support.buildinfo_header', ['ctx' => $context])),
+        );
+        $this->lastWriteStats->record($headerResult);
+        $files[] = $headerFile;
+
+        $sourceResult = $this->fileWriter->write(
+            $sourceFile,
+            $this->cleanOutput($this->blade->run('generation.support.buildinfo_source', ['ctx' => $context])),
+        );
+        $this->lastWriteStats->record($sourceResult);
+        $files[] = $sourceFile;
+
+        $stubResult = $this->fileWriter->write(
+            $stubFile,
+            $this->cleanOutput($this->blade->run('generation.support.buildinfo_stub', ['ctx' => $context])),
         );
         $this->lastWriteStats->record($stubResult);
         $files[] = $stubFile;

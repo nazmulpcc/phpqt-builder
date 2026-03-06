@@ -30,6 +30,11 @@ readonly class ExtensionBuildContext
         public bool $includeSignalConnectionSupport = false,
         public array $linkModules = [],
         public array $importIncludeRoots = [],
+        public bool $includeBuildInfoSupport = false,
+        public ?RuntimeManifest $runtimeManifest = null,
+        public ?string $currentQtModule = null,
+        public string $buildMode = RuntimeManifest::MODE_MONOLITHIC,
+        public string $builderAbiVersion = RuntimeManifest::BUILDER_ABI_VERSION,
     ) {}
 
     public function withGeneratedClasses(
@@ -52,6 +57,11 @@ readonly class ExtensionBuildContext
             $includeSignalConnectionSupport,
             $this->linkModules,
             $this->importIncludeRoots,
+            $this->includeBuildInfoSupport,
+            $this->runtimeManifest,
+            $this->currentQtModule,
+            $this->buildMode,
+            $this->builderAbiVersion,
         );
     }
 
@@ -128,6 +138,7 @@ readonly class ExtensionBuildContext
         $classes = array_values(array_unique([
             ...$this->generatedClasses,
             ...($this->includeSignalConnectionSupport ? ['QMetaObjectConnection'] : []),
+            ...($this->includeBuildInfoSupport ? ['BuildInfo'] : []),
         ]));
         if ($classes === []) {
             return [];
@@ -245,5 +256,21 @@ readonly class ExtensionBuildContext
         }
 
         return $module;
+    }
+
+    public function requiresBuildInfoRegistration(): bool
+    {
+        return $this->buildMode === RuntimeManifest::MODE_MODULAR
+            && !$this->includeBuildInfoSupport
+            && $this->currentQtModule !== null;
+    }
+
+    public function currentModuleMetadata(): ?RuntimeModuleMetadata
+    {
+        if ($this->runtimeManifest === null || $this->currentQtModule === null) {
+            return null;
+        }
+
+        return $this->runtimeManifest->module($this->currentQtModule);
     }
 }

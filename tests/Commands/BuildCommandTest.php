@@ -30,6 +30,8 @@ it('generates the extension tree from a fixture qt root', function (): void {
     expect(is_file($outputDir . '/config.m4'))->toBeTrue()
         ->and(is_file($outputDir . '/php_qt.h'))->toBeTrue()
         ->and(is_file($outputDir . '/qt.cpp'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_buildinfo.cpp'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_buildinfo.stub.php'))->toBeTrue()
         ->and(is_file($outputDir . '/classes/qt_qpoint.cpp'))->toBeTrue()
         ->and(is_file($outputDir . '/classes/qt_qtree.cpp'))->toBeTrue()
         ->and(is_file($outputDir . '/classes/qt_qnode.cpp'))->toBeTrue()
@@ -39,6 +41,7 @@ it('generates the extension tree from a fixture qt root', function (): void {
         ->and(is_file($outputDir . '/Makefile'))->toBeTrue()
         ->and(is_file($outputDir . '/classes/qt_qpoint_arginfo.h'))->toBeTrue()
         ->and(is_file($metadataDir . '/build_summary.json'))->toBeTrue()
+        ->and(is_file($metadataDir . '/runtime_manifest.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/allowed_classes.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/discovery_cache.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/accepted_candidates.json'))->toBeTrue()
@@ -73,8 +76,20 @@ it('generates the extension tree from a fixture qt root', function (): void {
     $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
     expect($summary['generated_classes'])->toBe(5)
         ->and($summary['skipped_classes'])->toBe(1)
+        ->and($summary['runtime_manifest'] ?? null)->toBe($metadataDir . '/runtime_manifest.json')
         ->and(array_column($summary['bootstrap'], 'name'))->toBe(['phpize', 'gen_stub', 'configure', 'make'])
         ->and($summary['file_writes']['total']['total'] ?? null)->toBeGreaterThan(0);
+
+    $runtimeManifest = qt_decode_json((string) file_get_contents($metadataDir . '/runtime_manifest.json'));
+    expect($runtimeManifest['build_mode'])->toBe('monolithic')
+        ->and($runtimeManifest['qt_version'])->toBe('6.7.1')
+        ->and($runtimeManifest['builder_abi_version'])->toBe('phpqt-builder-abi-v1')
+        ->and($runtimeManifest['built_modules'])->toBe(['QtCore'])
+        ->and($runtimeManifest['modules']['QtCore']['extension_name'] ?? null)->toBe('qt')
+        ->and($runtimeManifest['modules']['QtCore']['class_count'] ?? null)->toBe(5);
+
+    $extensionSource = (string) file_get_contents($outputDir . '/qt.cpp');
+    expect($extensionSource)->toContain('PHP_MINIT(qt_buildinfo)', '#include "classes/qt_buildinfo.h"');
 
     $classmap = qt_decode_json((string) file_get_contents($metadataDir . '/classmap.json'));
     expect(array_column($classmap, 'class'))->toBe(['QAbstractItemModel', 'QModelIndex', 'QNode', 'QPoint', 'QTree']);
@@ -281,8 +296,10 @@ it('supports generating a monolithic extension tree without bootstrapping', func
         ->and(is_file($outputDir . '/config.m4'))->toBeTrue()
         ->and(is_file($outputDir . '/php_qt.h'))->toBeTrue()
         ->and(is_file($outputDir . '/qt.cpp'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_buildinfo.cpp'))->toBeTrue()
         ->and(is_file($outputDir . '/classes/qt_qpoint.cpp'))->toBeTrue()
         ->and(is_file($outputDir . '/classes/qt_qpoint.stub.php'))->toBeTrue()
+        ->and(is_file($metadataDir . '/runtime_manifest.json'))->toBeTrue()
         ->and(is_file($outputDir . '/configure'))->toBeFalse()
         ->and(is_file($outputDir . '/Makefile'))->toBeFalse()
         ->and(is_file($outputDir . '/build/gen_stub.php'))->toBeFalse()
@@ -291,7 +308,8 @@ it('supports generating a monolithic extension tree without bootstrapping', func
     $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
     expect($summary['bootstrap_disabled'] ?? null)->toBeTrue()
         ->and($summary['bootstrap'])->toBeNull()
-        ->and($summary['bootstrap_error'])->toBeNull();
+        ->and($summary['bootstrap_error'])->toBeNull()
+        ->and($summary['runtime_manifest'] ?? null)->toBe($metadataDir . '/runtime_manifest.json');
 });
 
 it('rewrites cached allow lists to actual generated classes', function (): void {

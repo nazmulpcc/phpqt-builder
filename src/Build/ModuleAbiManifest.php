@@ -27,6 +27,13 @@ final readonly class ModuleAbiManifest
         public array $classes,
         public array $classNamespaces,
         public bool $includesSignalConnectionSupport,
+        public string $buildMode = RuntimeManifest::MODE_MONOLITHIC,
+        public string $qtVersion = '',
+        public int $qtVersionMajor = 0,
+        public int $qtVersionMinor = 0,
+        public int $qtVersionPatch = 0,
+        public string $extensionVersion = '',
+        public string $builderAbiVersion = RuntimeManifest::BUILDER_ABI_VERSION,
     ) {}
 
     /**
@@ -46,8 +53,17 @@ final readonly class ModuleAbiManifest
             'shared_include_dirs' => array_values($this->sharedIncludeDirs),
             'dependency_modules' => array_values($this->dependencyModules),
             'classes' => array_values($this->classes),
+            'class_count' => count($this->classes),
+            'namespaces' => $this->namespaces(),
             'class_namespaces' => $this->classNamespaces,
             'includes_signal_connection_support' => $this->includesSignalConnectionSupport,
+            'build_mode' => $this->buildMode,
+            'qt_version' => $this->qtVersion,
+            'qt_version_major' => $this->qtVersionMajor,
+            'qt_version_minor' => $this->qtVersionMinor,
+            'qt_version_patch' => $this->qtVersionPatch,
+            'extension_version' => $this->extensionVersion,
+            'builder_abi_version' => $this->builderAbiVersion,
         ];
     }
 
@@ -87,7 +103,25 @@ final readonly class ModuleAbiManifest
             classes: self::filterStringList($decoded['classes'] ?? []),
             classNamespaces: self::filterStringMap($decoded['class_namespaces'] ?? []),
             includesSignalConnectionSupport: (bool) ($decoded['includes_signal_connection_support'] ?? false),
+            buildMode: is_string($decoded['build_mode'] ?? null) ? $decoded['build_mode'] : RuntimeManifest::MODE_MONOLITHIC,
+            qtVersion: is_string($decoded['qt_version'] ?? null) ? $decoded['qt_version'] : '',
+            qtVersionMajor: max(0, (int) ($decoded['qt_version_major'] ?? 0)),
+            qtVersionMinor: max(0, (int) ($decoded['qt_version_minor'] ?? 0)),
+            qtVersionPatch: max(0, (int) ($decoded['qt_version_patch'] ?? 0)),
+            extensionVersion: is_string($decoded['extension_version'] ?? null) ? $decoded['extension_version'] : '',
+            builderAbiVersion: is_string($decoded['builder_abi_version'] ?? null) ? $decoded['builder_abi_version'] : RuntimeManifest::BUILDER_ABI_VERSION,
         );
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function namespaces(): array
+    {
+        $namespaces = array_values(array_unique(array_values($this->classNamespaces)));
+        sort($namespaces);
+
+        return $namespaces;
     }
 
     /**

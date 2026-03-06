@@ -17,6 +17,8 @@ use QtBuilder\Build\ModuleAbiManifest;
 use QtBuilder\Build\ModuleBuildGraph;
 use QtBuilder\Build\ModuleBuildGraphBuilder;
 use QtBuilder\Build\ProcessExtensionBootstrapper;
+use QtBuilder\Build\RuntimeManifest;
+use QtBuilder\Build\RuntimeManifestBuilder;
 use QtBuilder\Contracts\SystemInformation;
 use QtBuilder\IO\FileWriteStats;
 use QtBuilder\IO\SmartFileWriter;
@@ -109,11 +111,23 @@ class BuildModulesCommand extends Command
             return self::FAILURE;
         }
 
+        $runtimeManifest = (new RuntimeManifestBuilder())->buildForModular(
+            $modules,
+            $analysis,
+            $graph,
+            $extensionVersion,
+            $analysisInstallation,
+            $analysis->requiresSignalConnectionSupport,
+        );
+
         $sharedRoot = $baseLayout->extensionDir();
         $sharedClassesDir = $sharedRoot . '/classes';
         $this->ensureDirectory($sharedClassesDir);
 
         $this->writeGlobalModuleGraph($baseLayout, $analysis, $graph, $output);
+        $runtimeManifestPath = $baseLayout->metadataDir() . '/runtime_manifest.json';
+        $runtimeManifest->write($runtimeManifestPath);
+        $output->writeln(sprintf('  <comment>Wrote:</comment> %s', $runtimeManifestPath));
 
         $sharedWriter = new SmartFileWriter();
         $loadOrder = [];
@@ -143,6 +157,10 @@ class BuildModulesCommand extends Command
                 includeSignalConnectionSupport: $module === 'QtCore' && $analysis->requiresSignalConnectionSupport,
                 linkModules: $nativeModules,
                 importIncludeRoots: [$sharedRoot, $sharedClassesDir],
+                includeBuildInfoSupport: $module === 'QtCore',
+                runtimeManifest: $runtimeManifest,
+                currentQtModule: $module,
+                buildMode: RuntimeManifest::MODE_MODULAR,
             );
 
             $output->writeln(sprintf('<info>Building %s as %s...</info>', $module, $extensionName));
@@ -151,12 +169,11 @@ class BuildModulesCommand extends Command
             $scaffolder->prepare($context);
 
             $emission = $pipeline->emitGeneratedClasses(
-                $context->outputDir . '/classes',
+                $context,
                 $localClasses,
                 $analysis->generatedPhpClasses,
                 $analysis->classNamespaces,
                 $analysis->generatedClassHeaders,
-                $context->includeSignalConnectionSupport,
                 $output,
             );
             $scaffoldFiles = $scaffolder->finalize($context);
@@ -170,6 +187,7 @@ class BuildModulesCommand extends Command
                 $sharedClassesDir,
                 $emission['classmap'],
                 $context->includeSignalConnectionSupport,
+                $context->includeBuildInfoSupport,
                 $context->outputDir . '/classes',
             );
 
@@ -197,6 +215,8 @@ class BuildModulesCommand extends Command
                 localClasses: $localClasses,
                 dependencyModules: $graph->dependencies[$module] ?? [],
                 sharedIncludeDirs: [$sharedRoot, $sharedClassesDir],
+                runtimeManifest: $runtimeManifest,
+                runtimeManifestPath: $runtimeManifestPath,
                 output: $output,
             );
 
@@ -319,6 +339,7 @@ class BuildModulesCommand extends Command
         string $sharedClassesDir,
         array $classmap,
         bool $includeSignalConnectionSupport,
+        bool $includeBuildInfoSupport,
         string $moduleClassesDir,
     ): void {
         foreach ($classmap as $entry) {
@@ -336,21 +357,35 @@ class BuildModulesCommand extends Command
             }
         }
 
-        if (!$includeSignalConnectionSupport) {
+        if ($includeSignalConnectionSupport) {
+            $signalHeader = $moduleClassesDir . '/qt_qmetaobjectconnection.h';
+            if (!is_file($signalHeader)) {
+                throw new \RuntimeException(sprintf('Generated signal support header not found: %s', $signalHeader));
+            }
+
+            $content = file_get_contents($signalHeader);
+            if (!is_string($content)) {
+                throw new \RuntimeException(sprintf('Could not read generated header: %s', $signalHeader));
+            }
+
+            $writer->write($sharedClassesDir . '/qt_qmetaobjectconnection.h', $content);
+        }
+
+        if (!$includeBuildInfoSupport) {
             return;
         }
 
-        $signalHeader = $moduleClassesDir . '/qt_qmetaobjectconnection.h';
-        if (!is_file($signalHeader)) {
-            throw new \RuntimeException(sprintf('Generated signal support header not found: %s', $signalHeader));
+        $buildInfoHeader = $moduleClassesDir . '/qt_buildinfo.h';
+        if (!is_file($buildInfoHeader)) {
+            throw new \RuntimeException(sprintf('Generated BuildInfo support header not found: %s', $buildInfoHeader));
         }
 
-        $content = file_get_contents($signalHeader);
-        if (!is_string($content)) {
-            throw new \RuntimeException(sprintf('Could not read generated header: %s', $signalHeader));
+        $buildInfoContent = file_get_contents($buildInfoHeader);
+        if (!is_string($buildInfoContent)) {
+            throw new \RuntimeException(sprintf('Could not read generated header: %s', $buildInfoHeader));
         }
 
-        $writer->write($sharedClassesDir . '/qt_qmetaobjectconnection.h', $content);
+        $writer->write($sharedClassesDir . '/qt_buildinfo.h', $buildInfoContent);
     }
 
     /**
@@ -375,6 +410,8 @@ class BuildModulesCommand extends Command
         array $localClasses,
         array $dependencyModules,
         array $sharedIncludeDirs,
+        RuntimeManifest $runtimeManifest,
+        string $runtimeManifestPath,
         OutputInterface $output,
     ): void {
         $metadataDir = $moduleLayout->metadataDir();
@@ -459,6 +496,7 @@ class BuildModulesCommand extends Command
                 'core' => $coreWriteStats->toArray(),
                 'total' => $totalWriteStats->toArray(),
             ],
+            'runtime_manifest' => $runtimeManifestPath,
         ];
 
         $abiManifest = new ModuleAbiManifest(
@@ -475,6 +513,13 @@ class BuildModulesCommand extends Command
             classes: $localClasses,
             classNamespaces: $this->exportedClassNamespacesForModule($analysis, $module),
             includesSignalConnectionSupport: $context->includeSignalConnectionSupport,
+            buildMode: $runtimeManifest->buildMode,
+            qtVersion: $runtimeManifest->qtVersion,
+            qtVersionMajor: $runtimeManifest->qtVersionMajor,
+            qtVersionMinor: $runtimeManifest->qtVersionMinor,
+            qtVersionPatch: $runtimeManifest->qtVersionPatch,
+            extensionVersion: $runtimeManifest->extensionVersion,
+            builderAbiVersion: $runtimeManifest->builderAbiVersion,
         );
         $abiManifest->write($metadataDir . '/module_abi.json');
         $summary['abi_manifest'] = $metadataDir . '/module_abi.json';

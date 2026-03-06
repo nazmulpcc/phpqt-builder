@@ -20,6 +20,10 @@ readonly class QtInstallation
         public array $moduleHeaderRoots,
         public ?string $moduleLinkFlags = null,
         public array $tools = [],
+        public string $qtVersion = '',
+        public int $qtVersionMajor = 0,
+        public int $qtVersionMinor = 0,
+        public int $qtVersionPatch = 0,
     ) {}
 
     public function headerRootFor(string $module): ?string

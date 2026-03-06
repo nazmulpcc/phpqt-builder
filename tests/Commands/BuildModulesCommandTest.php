@@ -27,9 +27,12 @@ it('builds split module trees with a shared sdk and skips unavailable sibling ab
 
     expect($result)->toBeSuccessfulCommandResult()
         ->and(is_file($buildRoot . '/generated/module_graph.json'))->toBeTrue()
+        ->and(is_file($buildRoot . '/generated/runtime_manifest.json'))->toBeTrue()
         ->and(is_file($qtCoreRoot . '/generated/module_abi.json'))->toBeTrue()
         ->and(is_file($qtWidgetsRoot . '/generated/module_abi.json'))->toBeTrue()
+        ->and(is_file($qtCoreRoot . '/ext/classes/qt_buildinfo.cpp'))->toBeTrue()
         ->and(is_file($sharedClassesDir . '/qt_qobject.h'))->toBeTrue()
+        ->and(is_file($sharedClassesDir . '/qt_buildinfo.h'))->toBeTrue()
         ->and(is_file($sharedClassesDir . '/qt_qwidget.h'))->toBeTrue()
         ->and(is_file($sharedClassesDir . '/qt_qshortcutcarrier.h'))->toBeTrue()
         ->and(is_file($qtCoreRoot . '/ext/classes/qt_qmetaobjectconnection.h'))->toBeTrue()
@@ -37,6 +40,7 @@ it('builds split module trees with a shared sdk and skips unavailable sibling ab
         ->and(is_file($qtWidgetsRoot . '/ext/classes/qt_qshortcutcarrier.cpp'))->toBeTrue()
         ->and(is_file($qtWidgetsRoot . '/ext/classes/qt_qexternalwidget.cpp'))->toBeFalse()
         ->and(is_file($qtWidgetsRoot . '/ext/classes/qt_qmetaobjectconnection.h'))->toBeFalse()
+        ->and(is_file($qtWidgetsRoot . '/ext/classes/qt_buildinfo.cpp'))->toBeFalse()
         ->and($result['display'])->toContain(
             'Building QtCore as qtcore...',
             'Building QtWidgets as qtwidgets...',
@@ -57,8 +61,27 @@ it('builds split module trees with a shared sdk and skips unavailable sibling ab
         ->and($qtWidgetsManifest['extension_name'])->toBe('qtwidgets')
         ->and($qtWidgetsManifest['classes'])->toBe(['QShortcutCarrier', 'QWidget'])
         ->and($qtWidgetsManifest['dependency_modules'])->toBe(['QtCore'])
+        ->and($qtWidgetsManifest['build_mode'])->toBe('modular')
+        ->and($qtWidgetsManifest['qt_version'])->toBe('6.7.1')
+        ->and($qtWidgetsManifest['extension_version'])->toBe('0.1.0')
+        ->and($qtWidgetsManifest['builder_abi_version'])->toBe('phpqt-builder-abi-v1')
+        ->and($qtWidgetsManifest['class_count'])->toBe(2)
+        ->and($qtWidgetsManifest['namespaces'])->toBe(['Qt\\Widgets'])
         ->and($qtWidgetsManifest['shared_include_dirs'])->toBe([$sharedRoot, $sharedClassesDir])
         ->and($qtWidgetsManifest['includes_signal_connection_support'])->toBeFalse();
+
+    $runtimeManifest = qt_decode_json((string) file_get_contents($buildRoot . '/generated/runtime_manifest.json'));
+    expect($runtimeManifest['build_mode'])->toBe('modular')
+        ->and($runtimeManifest['qt_version'])->toBe('6.7.1')
+        ->and($runtimeManifest['built_modules'])->toBe(['QtCore', 'QtWidgets'])
+        ->and($runtimeManifest['modules']['QtCore']['extension_name'] ?? null)->toBe('qtcore')
+        ->and($runtimeManifest['modules']['QtWidgets']['dependencies'] ?? null)->toBe(['QtCore']);
+
+    $qtWidgetsSource = (string) file_get_contents($qtWidgetsRoot . '/ext/qtwidgets.cpp');
+    expect($qtWidgetsSource)->toContain(
+        '#include "qt_buildinfo.h"',
+        'qt_buildinfo_register_module("QtWidgets", "qtwidgets", "6.7.1", "phpqt-builder-abi-v1")',
+    );
 
     $qtWidgetsSummary = qt_decode_json((string) file_get_contents($qtWidgetsRoot . '/generated/build_summary.json'));
     expect($qtWidgetsSummary['generated_classes'])->toBe(2)
