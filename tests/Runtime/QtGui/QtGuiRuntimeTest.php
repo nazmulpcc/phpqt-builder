@@ -20,3 +20,13 @@ it('supports QList-derived value classes through synthetic list parents', functi
         ->and($payload['x'])->toBe(7)
         ->and($payload['y'])->toBe(9);
 });
+
+it('supports QList-derived floating point polygons through synthetic list parents', function (): void {
+    $payload = qt_runtime_payload('QtGui/qpolygonf_list_parent.php');
+
+    expect($payload['inherits_list'])->toBeTrue()
+        ->and($payload['count'])->toBe(1)
+        ->and($payload['item_class'])->toBe('Qt\\Core\\QPointF')
+        ->and($payload['x'])->toBe(1.5)
+        ->and($payload['y'])->toBe(2.5);
+});

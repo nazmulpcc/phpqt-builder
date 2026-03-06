@@ -57,3 +57,19 @@ it('writes back by-reference scalar out parameters', function (): void {
         ->and($payload['ok_value'])->toBeTrue()
         ->and($payload['value'])->toBeInt();
 });
+
+it('supports QList-derived item selections through synthetic list parents', function (): void {
+    $payload = qt_runtime_payload('QtCore/qitemselection_list_parent.php');
+
+    expect($payload['inherits_list'])->toBeTrue()
+        ->and($payload['count'])->toBe(1)
+        ->and($payload['item_class'])->toBe('Qt\\Core\\QItemSelectionRange');
+});
+
+it('supports QList-derived xml stream attributes through synthetic list parents', function (): void {
+    $payload = qt_runtime_payload('QtCore/qxmlstreamattributes_list_parent.php');
+
+    expect($payload['inherits_list'])->toBeTrue()
+        ->and($payload['count'])->toBe(1)
+        ->and($payload['item_class'])->toBe('Qt\\Core\\QXmlStreamAttribute');
+});
