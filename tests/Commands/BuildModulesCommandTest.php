@@ -72,3 +72,55 @@ it('builds split module trees with imported qtcore abi', function (): void {
 
     expect($skippedByClass['QExternalWidget'] ?? null)->toBe('unsupported_external_module_dependency');
 });
+
+it('normalizes relative split build roots to absolute imported include paths', function (): void {
+    $fixtureRoot = qt_fixture_path('module-split-qt');
+    $workspace = qt_temp_dir('qtbuilder-build-modules-relative-');
+    $resolvedWorkspace = realpath($workspace) ?: $workspace;
+    $previousCwd = getcwd();
+    if (!is_string($previousCwd) || $previousCwd === '') {
+        throw new RuntimeException('Could not read the current working directory.');
+    }
+
+    chdir($workspace);
+
+    try {
+        $bootstrapper = new FakeExtensionBootstrapper();
+
+        $result = qt_command_result(
+            new BuildModulesCommand(FakeSystemInformation::passing(), $bootstrapper),
+            [
+                '--qt-path' => $fixtureRoot,
+                '--modules' => 'QtWidgets',
+                '--output' => 'build',
+                '--jobs' => '2',
+            ],
+        );
+
+        $qtCoreRoot = $resolvedWorkspace . '/build/QtCore';
+        $qtWidgetsRoot = $resolvedWorkspace . '/build/QtWidgets';
+
+        expect($result)->toBeSuccessfulCommandResult()
+            ->and(is_file($qtCoreRoot . '/generated/module_abi.json'))->toBeTrue()
+            ->and(is_file($qtWidgetsRoot . '/generated/module_abi.json'))->toBeTrue();
+
+        $qtWidgetsConfig = (string) file_get_contents($qtWidgetsRoot . '/ext/config.m4');
+        expect($qtWidgetsConfig)->toContain(
+            'PHP_ADD_INCLUDE([' . $qtCoreRoot . '/ext])',
+            'PHP_ADD_INCLUDE([' . $qtCoreRoot . '/ext/classes])',
+        );
+
+        $qtCoreManifest = qt_decode_json((string) file_get_contents($qtCoreRoot . '/generated/module_abi.json'));
+        expect($qtCoreManifest['build_root_dir'])->toBe($qtCoreRoot)
+            ->and($qtCoreManifest['output_dir'])->toBe($qtCoreRoot . '/ext')
+            ->and($qtCoreManifest['metadata_dir'])->toBe($qtCoreRoot . '/generated')
+            ->and($qtCoreManifest['accepted_candidates_path'])->toBe($qtCoreRoot . '/generated/accepted_candidates.json')
+            ->and($qtCoreManifest['class_cache_dir'])->toBe($qtCoreRoot . '/classes')
+            ->and($qtCoreManifest['include_dirs'])->toBe([
+                $qtCoreRoot . '/ext',
+                $qtCoreRoot . '/ext/classes',
+            ]);
+    } finally {
+        chdir($previousCwd);
+    }
+});
