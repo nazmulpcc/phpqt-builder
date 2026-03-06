@@ -973,6 +973,7 @@ class BuildPipeline
         $fileWriteStats = new FileWriteStats();
         $classmap = [];
         $outputDir = $context->outputDir . '/classes';
+        $this->removeStaleEnumHolderFiles($outputDir, $context->enumHolders);
 
         if ($generatedClasses !== []) {
             $output->writeln(sprintf('<info>Emitting %d generated class wrapper(s)...</info>', count($generatedClasses)));
@@ -1034,6 +1035,43 @@ class BuildPipeline
             'file_write_stats' => $fileWriteStats,
             'classmap' => $classmap,
         ];
+    }
+
+    /**
+     * @param list<EnumHolderDefinition> $enumHolders
+     */
+    private function removeStaleEnumHolderFiles(string $outputDir, array $enumHolders): void
+    {
+        if (!is_dir($outputDir)) {
+            return;
+        }
+
+        $activePrefixes = array_fill_keys(
+            array_map(
+                static fn(EnumHolderDefinition $holder): string => $holder->filePrefix(),
+                $enumHolders,
+            ),
+            true,
+        );
+
+        foreach (glob($outputDir . '/qt_enum_*') ?: [] as $path) {
+            $basename = basename($path);
+            $prefix = null;
+
+            if (preg_match('/^(qt_enum_[^.]+)\.(?:h|cpp|stub\.php)$/', $basename, $matches) === 1) {
+                $prefix = $matches[1];
+            } elseif (preg_match('/^(qt_enum_[^_]+(?:_[^_]+)*)_arginfo\.h$/', $basename, $matches) === 1) {
+                $prefix = $matches[1];
+            }
+
+            if ($prefix === null || isset($activePrefixes[$prefix])) {
+                continue;
+            }
+
+            if (!@unlink($path) && file_exists($path)) {
+                throw new \RuntimeException(sprintf('Could not remove stale enum holder file: %s', $path));
+            }
+        }
     }
 
     /**

@@ -32,8 +32,11 @@ class EnumHolderExtractor
         $holders = [];
         /** @var array<string, string> $classModules */
         $classModules = [];
+        /** @var array<string, bool> $knownClassNames */
+        $knownClassNames = [];
         foreach ($acceptedCandidates as $candidate) {
             $classModules[$candidate->className] = $candidate->module;
+            $knownClassNames[$candidate->className] = true;
         }
 
         foreach ($preparedClassDataByClass as $className => $classData) {
@@ -61,7 +64,7 @@ class EnumHolderExtractor
 
         $builder = new ClangArgumentBuilder($includePaths);
         foreach ($headerModules as $headerPath => $fallbackModule) {
-            foreach ($this->extractNamespaceOwnedHolders($builder, $headerPath, $fallbackModule) as $holder) {
+            foreach ($this->extractNamespaceOwnedHolders($builder, $headerPath, $fallbackModule, $knownClassNames) as $holder) {
                 $holders[$holder->cppType] ??= $holder;
             }
         }
@@ -92,7 +95,11 @@ class EnumHolderExtractor
             $enumName = is_string($constant['enum_name'] ?? null) ? trim($constant['enum_name']) : '';
             $name = is_string($constant['name'] ?? null) ? trim($constant['name']) : '';
             $value = $constant['value'] ?? null;
-            if ($enumName === '' || $name === '' || (!is_int($value) && !is_float($value) && !is_string($value))) {
+            if (
+                !$this->isValidPhpHolderName($enumName)
+                || $name === ''
+                || (!is_int($value) && !is_float($value) && !is_string($value))
+            ) {
                 continue;
             }
 
@@ -115,7 +122,12 @@ class EnumHolderExtractor
 
         $flagAliases = is_array($classData['flag_aliases'] ?? null) ? $classData['flag_aliases'] : [];
         foreach ($flagAliases as $alias => $sourceEnum) {
-            if (!is_string($alias) || $alias === '' || !is_string($sourceEnum) || $sourceEnum === '') {
+            if (
+                !is_string($alias)
+                || !$this->isValidPhpHolderName($alias)
+                || !is_string($sourceEnum)
+                || !$this->isValidPhpHolderName($sourceEnum)
+            ) {
                 continue;
             }
 
@@ -142,7 +154,12 @@ class EnumHolderExtractor
     /**
      * @return list<EnumHolderDefinition>
      */
-    private function extractNamespaceOwnedHolders(ClangArgumentBuilder $builder, string $headerPath, string $fallbackModule): array
+    private function extractNamespaceOwnedHolders(
+        ClangArgumentBuilder $builder,
+        string $headerPath,
+        string $fallbackModule,
+        array $knownClassNames,
+    ): array
     {
         if (!is_file($headerPath)) {
             return [];
@@ -173,8 +190,12 @@ class EnumHolderExtractor
                 continue;
             }
 
+            if (!$this->isSupportedNamespaceOwner($owner['cpp_prefix'], $knownClassNames)) {
+                continue;
+            }
+
             $enumName = trim($cursor->getSpelling());
-            if ($enumName === '') {
+            if (!$this->isValidPhpHolderName($enumName)) {
                 continue;
             }
 
@@ -379,17 +400,47 @@ class EnumHolderExtractor
 
             foreach ($this->discoverNamespaceFlagAliases((string) file_get_contents($candidatePath)) as $owner => $aliases) {
                 foreach ($aliases as $alias => $source) {
+                    if (!$this->isValidPhpHolderName($alias) || trim($source) === '') {
+                        continue;
+                    }
+
                     $definitions[] = [
                         'header' => $candidatePath,
                         'owner' => $owner,
                         'alias' => $alias,
-                        'source' => $source,
+                        'source' => trim($source),
                     ];
                 }
             }
         }
 
         return $definitions;
+    }
+
+    private function isValidPhpHolderName(string $name): bool
+    {
+        return preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', trim($name)) === 1;
+    }
+
+    /**
+     * @param array<string, bool> $knownClassNames
+     */
+    private function isSupportedNamespaceOwner(string $ownerCppPrefix, array $knownClassNames): bool
+    {
+        $topLevel = explode('::', $ownerCppPrefix)[0] ?? '';
+        if ($topLevel === '') {
+            return false;
+        }
+
+        if ($topLevel !== 'Qt' && preg_match('/^Q[A-Z][A-Za-z0-9_]*$/', $topLevel) !== 1) {
+            return false;
+        }
+
+        if ($topLevel !== 'Qt' && isset($knownClassNames[$topLevel])) {
+            return false;
+        }
+
+        return true;
     }
 
     private function moduleForHeaderPath(string $headerPath, string $fallbackModule): string

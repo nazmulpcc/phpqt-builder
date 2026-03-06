@@ -359,6 +359,50 @@ it('generates enum holder classes and unblocks enum-based methods', function ():
     expect($enumBlockedMethods)->toBe([]);
 });
 
+it('removes stale enum holder files during incremental builds', function (): void {
+    $fixtureRoot = qt_fixture_path('enum-qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-enum-stale-' . bin2hex(random_bytes(4));
+    $outputDir = $buildRoot . '/ext';
+    $bootstrapper = new FakeExtensionBootstrapper();
+
+    $first = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            'modules' => 'QtCore,QtSql',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+            '--no-build' => true,
+        ],
+    );
+    expect($first)->toBeSuccessfulCommandResult();
+
+    file_put_contents(
+        $outputDir . '/classes/qt_enum_stale.stub.php',
+        "<?php\n\nnamespace Qt;\n\nfinal class Broken(\n{\n}\n",
+    );
+    file_put_contents($outputDir . '/classes/qt_enum_stale.cpp', "// stale\n");
+    file_put_contents($outputDir . '/classes/qt_enum_stale.h', "// stale\n");
+    file_put_contents($outputDir . '/classes/qt_enum_stale_arginfo.h', "// stale\n");
+
+    $second = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            'modules' => 'QtCore,QtSql',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+            '--no-build' => true,
+        ],
+    );
+
+    expect($second)->toBeSuccessfulCommandResult()
+        ->and(is_file($outputDir . '/classes/qt_enum_stale.stub.php'))->toBeFalse()
+        ->and(is_file($outputDir . '/classes/qt_enum_stale.cpp'))->toBeFalse()
+        ->and(is_file($outputDir . '/classes/qt_enum_stale.h'))->toBeFalse()
+        ->and(is_file($outputDir . '/classes/qt_enum_stale_arginfo.h'))->toBeFalse();
+});
+
 it('auto-adds static manifest dependencies for monolithic builds', function (): void {
     $fixtureRoot = qt_fixture_path('module-split-qt');
     $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-expanded-' . bin2hex(random_bytes(4));

@@ -21,6 +21,8 @@ readonly class EnumHolderContext
         public string $filePrefix,
         public string $minitName,
         public string $ceVarName,
+        public string $cppPhpNamespaceLiteral,
+        public string $cppPhpClassNameLiteral,
         public array $constants,
         public bool $isFlagAlias,
         public ?string $sourceCppType,
@@ -39,6 +41,8 @@ readonly class EnumHolderContext
             filePrefix: $definition->filePrefix(),
             minitName: $definition->minitName(),
             ceVarName: $definition->ceVarName(),
+            cppPhpNamespaceLiteral: self::cppStringLiteral($definition->phpNamespace),
+            cppPhpClassNameLiteral: self::cppStringLiteral($definition->phpClassName),
             constants: array_map(
                 static fn(EnumHolderConstant $constant): array => [
                     'name' => $constant->name,
@@ -51,6 +55,11 @@ readonly class EnumHolderContext
             isFlagAlias: $definition->isFlagAlias,
             sourceCppType: $definition->sourceCppType,
         );
+    }
+
+    private static function cppStringLiteral(string $value): string
+    {
+        return addcslashes($value, "\\\"\n\r\t\v\f");
     }
 
     private static function stubType(int|float|string $value): string

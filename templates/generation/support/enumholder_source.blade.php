@@ -15,7 +15,7 @@ static const zend_function_entry {!! $ctx->filePrefix !!}_methods[] = {
 PHP_MINIT_FUNCTION({!! $ctx->minitName !!})
 {
     zend_class_entry ce;
-    INIT_NS_CLASS_ENTRY(ce, "{!! $ctx->phpNamespace !!}", "{!! $ctx->phpClassName !!}", {!! $ctx->filePrefix !!}_methods);
+    INIT_NS_CLASS_ENTRY(ce, "{!! $ctx->cppPhpNamespaceLiteral !!}", "{!! $ctx->cppPhpClassNameLiteral !!}", {!! $ctx->filePrefix !!}_methods);
 
     {!! $ctx->ceVarName !!} = zend_register_internal_class(&ce);
     {!! $ctx->ceVarName !!}->ce_flags |= ZEND_ACC_FINAL;
