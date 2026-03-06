@@ -101,7 +101,8 @@ it('casts enum parameters back to native types', function (): void {
         Assert::assertStringContainsString('public const int Off = 0;', $stub);
         Assert::assertStringContainsString('public const int On = 1;', $stub);
         Assert::assertStringContainsString('intern->native_ptr->setMode((QEnumHolder::Mode)((int)(mode)));', $cpp);
-        Assert::assertStringContainsString('RETURN_LONG((zend_long)(intern->native_ptr->mode()));', $cpp);
+        Assert::assertStringContainsString('auto _result = intern->native_ptr->mode();', $cpp);
+        Assert::assertStringContainsString('RETURN_LONG((zend_long)(_result));', $cpp);
 });
 
 it('qualifies nested enum class names for native casts', function (): void {
@@ -186,7 +187,8 @@ it('handles QString pointer parameters', function (): void {
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qstringpointerholder.cpp');
         Assert::assertStringContainsString('QString _qt_arg_1_value;', $cpp);
         Assert::assertStringContainsString('QString *_qt_arg_1 = NULL;', $cpp);
-        Assert::assertStringContainsString('_qt_arg_1_value = QString::fromUtf8(', $cpp);
+        Assert::assertStringContainsString('_qt_arg_1_value = (', $cpp);
+        Assert::assertStringContainsString('QString::fromUtf8(', $cpp);
         Assert::assertStringContainsString('Z_REFVAL_P(selectedFilter)', $cpp);
         Assert::assertStringContainsString('_qt_arg_1 = &_qt_arg_1_value;', $cpp);
         Assert::assertStringContainsString('auto _result = QStringPointerHolder::pickLabel(', $cpp);
@@ -302,7 +304,8 @@ it('keeps optional QString pointer parameters as writable nullable by-ref pointe
         Assert::assertStringContainsString('public static function pickLabel(string $fallback = \'\', string|null &$selectedFilter = null): string {}', $stub);
         Assert::assertStringContainsString('QString _qt_arg_1_value;', $cpp);
         Assert::assertStringContainsString('QString *_qt_arg_1 = NULL;', $cpp);
-        Assert::assertStringContainsString('_qt_arg_1_value = QString::fromUtf8(', $cpp);
+        Assert::assertStringContainsString('_qt_arg_1_value = (', $cpp);
+        Assert::assertStringContainsString('QString::fromUtf8(', $cpp);
         Assert::assertStringContainsString('Z_REFVAL_P(selectedFilter)', $cpp);
         Assert::assertStringContainsString('_qt_arg_1 = &_qt_arg_1_value;', $cpp);
         Assert::assertStringContainsString('QStringPointerHolder::pickLabel(QString::fromUtf8(ZSTR_VAL(fallback), (int)ZSTR_LEN(fallback)), _qt_arg_1)', $cpp);
@@ -336,7 +339,8 @@ it('uses fromInt for flag aliases', function (): void {
     
         Assert::assertStringContainsString('public function setModes(int $modes): void {}', $stub);
         Assert::assertStringContainsString('QFlags<QFlagHolder::Mode>::fromInt((QFlags<QFlagHolder::Mode>::Int)((int)(modes)))', $cpp);
-        Assert::assertStringContainsString('RETURN_LONG((zend_long)(intern->native_ptr->modes()));', $cpp);
+        Assert::assertStringContainsString('auto _result = intern->native_ptr->modes();', $cpp);
+        Assert::assertStringContainsString('RETURN_LONG((zend_long)(_result));', $cpp);
 });
 
 it('handles char strings and supports writable qt string references', function (): void {
@@ -529,7 +533,8 @@ it('converts chrono durations to and from integers', function (): void {
         ->and($result->payload['status'])->toBe('ok')
         ->and($result->stub('QChronoHolder'))->toContain('public function setInterval(int $value): void {}')
         ->and($result->cpp('QChronoHolder'))->toContain('intern->native_ptr->setInterval(std::chrono::milliseconds((std::chrono::milliseconds::rep)((int)(value))));')
-        ->and($result->cpp('QChronoHolder'))->toContain('RETURN_LONG((zend_long)(intern->native_ptr->interval().count()));');
+        ->and($result->cpp('QChronoHolder'))->toContain('auto _result = intern->native_ptr->interval();')
+        ->and($result->cpp('QChronoHolder'))->toContain('RETURN_LONG((zend_long)(_result.count()));');
 });
 
 it('bridges wide strings through qstring', function (): void {

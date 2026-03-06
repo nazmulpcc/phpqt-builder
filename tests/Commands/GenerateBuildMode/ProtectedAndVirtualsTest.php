@@ -206,7 +206,8 @@ it('does not generate trampolines for final virtual methods', function (): void 
     
         Assert::assertStringContainsString('public function value(): int {}', $stub);
         Assert::assertStringNotContainsString('class qt_php_QFinalVirtualThing', $cpp);
-        Assert::assertStringContainsString('RETURN_LONG((zend_long)(intern->native_ptr->value()));', $cpp);
+        Assert::assertStringContainsString('auto _result = intern->native_ptr->value();', $cpp);
+        Assert::assertStringContainsString('RETURN_LONG((zend_long)(_result));', $cpp);
 });
 
 it('uses a shim only for the protected overload branch', function (): void {

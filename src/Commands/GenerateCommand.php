@@ -72,7 +72,7 @@ class GenerateCommand extends Command
         $includePaths = $this->resolveIncludePaths($input, $module, $buildMode);
 
         if ($buildMode) {
-            return $this->executeBuildMode($headerPath, $className, $namespace, $outputDir, $includePaths, $input, $output);
+            return $this->executeBuildMode($headerPath, $className, $namespace, $module, $outputDir, $includePaths, $input, $output);
         }
 
         $output->writeln(sprintf('<info>Parsing %s for class %s...</info>', basename($headerPath), $className));
@@ -122,6 +122,7 @@ class GenerateCommand extends Command
         string $headerPath,
         string $className,
         string $namespace,
+        string $module,
         string $outputDir,
         array $includePaths,
         InputInterface $input,
