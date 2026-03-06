@@ -19,6 +19,7 @@ readonly class PhpClass
      * @param list<PhpMethod> $methods
      * @param list<PhpMethod> $signals
      * @param list<PhpClassConstant> $classConstants
+     * @param list<string> $nativeIncludes
      */
     public function __construct(
         public string $name,
@@ -32,6 +33,8 @@ readonly class PhpClass
         public array $signals,
         public bool $isQObjectDerived = false,
         public array $classConstants = [],
+        public array $nativeIncludes = [],
+        public ?string $nativeAliasOf = null,
     ) {}
 
     /**
@@ -65,7 +68,7 @@ readonly class PhpClass
     }
 
     /**
-     * @return array{name: string, parent: ?string, is_abstract: bool, is_copy_constructible: bool, has_public_constructor: bool, has_public_destructor: bool, is_qobject_derived: bool, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, signals: list<array<string, mixed>>, class_constants: list<array<string, mixed>>, summary: array{total_methods: int, public_methods: int, protected_methods: int, overloaded_methods: int, total_signals: int, total_properties: int, total_class_constants: int}}
+     * @return array{name: string, parent: ?string, is_abstract: bool, is_copy_constructible: bool, has_public_constructor: bool, has_public_destructor: bool, is_qobject_derived: bool, native_includes: list<string>, native_alias_of: ?string, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, signals: list<array<string, mixed>>, class_constants: list<array<string, mixed>>, summary: array{total_methods: int, public_methods: int, protected_methods: int, overloaded_methods: int, total_signals: int, total_properties: int, total_class_constants: int}}
      */
     public function toArray(): array
     {
@@ -77,6 +80,8 @@ readonly class PhpClass
             'has_public_constructor' => $this->hasPublicConstructor,
             'has_public_destructor' => $this->hasPublicDestructor,
             'is_qobject_derived' => $this->isQObjectDerived,
+            'native_includes' => $this->nativeIncludes,
+            'native_alias_of' => $this->nativeAliasOf,
             'properties' => array_map(
                 static fn(PhpProperty $p): array => $p->toArray(),
                 $this->properties,

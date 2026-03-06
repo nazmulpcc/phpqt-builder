@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace QtBuilder\Build;
 
 use QtBuilder\CodeGen\TypeBridge;
+use QtBuilder\Containers\QListSpecializationResolver;
 use QtBuilder\Definition\PhpClass;
 use QtBuilder\Definition\PhpMethod;
 use QtBuilder\Definition\PhpParameter;
@@ -23,6 +24,7 @@ class ClassGenerationService
         private readonly ClassDefinitionBuilder $builder = new ClassDefinitionBuilder(),
         private readonly TypeBridge $typeBridge = new TypeBridge(),
         private readonly CppToPhpTypeMapper $typeMapper = new CppToPhpTypeMapper(),
+        private readonly QListSpecializationResolver $listSpecializationResolver = new QListSpecializationResolver(),
     ) {}
 
     /**
@@ -74,6 +76,8 @@ class ClassGenerationService
             },
         );
         $sourceClassData = $classData;
+        $allowedClasses = $this->augmentAllowedClassesWithSyntheticParents($classData, $allowedClasses, $headerPath, $className);
+        $classData = $this->normalizeSupportedListBases($classData, $headerPath, $className);
 
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
         if ($parentClass !== null && !in_array($parentClass, $allowedClasses, true)) {
@@ -270,6 +274,8 @@ class ClassGenerationService
                 : null,
         );
         $sourceClassData = $classData;
+        $allowedClasses = $this->augmentAllowedClassesWithSyntheticParents($classData, $allowedClasses, $headerPath, $className);
+        $classData = $this->normalizeSupportedListBases($classData, $headerPath, $className);
 
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
         if ($parentClass !== null && !in_array($parentClass, $allowedClasses, true)) {
@@ -483,6 +489,8 @@ class ClassGenerationService
                 methods: $methods,
                 signals: $phpClass->signals,
                 classConstants: $phpClass->classConstants,
+                nativeIncludes: $phpClass->nativeIncludes,
+                nativeAliasOf: $phpClass->nativeAliasOf,
             ),
             'skipped_methods' => $skippedMethods,
         ];
@@ -1438,6 +1446,8 @@ class ClassGenerationService
                 methods: $methods,
                 signals: $phpClass->signals,
                 classConstants: $phpClass->classConstants,
+                nativeIncludes: $phpClass->nativeIncludes,
+                nativeAliasOf: $phpClass->nativeAliasOf,
             ),
             'skipped_methods' => $skippedMethods,
         ];
@@ -1915,6 +1925,8 @@ class ClassGenerationService
                 methods: $methods,
                 signals: $phpClass->signals,
                 classConstants: $phpClass->classConstants,
+                nativeIncludes: $phpClass->nativeIncludes,
+                nativeAliasOf: $phpClass->nativeAliasOf,
             ),
             'skipped_methods' => [[
                 'name' => '__construct',
@@ -1983,6 +1995,8 @@ class ClassGenerationService
             methods: $methods,
             signals: $phpClass->signals,
             classConstants: $phpClass->classConstants,
+            nativeIncludes: $phpClass->nativeIncludes,
+            nativeAliasOf: $phpClass->nativeAliasOf,
         );
     }
 
@@ -2969,7 +2983,150 @@ class ClassGenerationService
             signals: $phpClass->signals,
             isQObjectDerived: $phpClass->isQObjectDerived,
             classConstants: $phpClass->classConstants,
+            nativeIncludes: $phpClass->nativeIncludes,
+            nativeAliasOf: $phpClass->nativeAliasOf,
         );
+    }
+
+    /**
+     * @param list<string> $allowedClasses
+     * @return list<string>
+     */
+    private function augmentAllowedClassesWithSyntheticParents(array $classData, array $allowedClasses, string $headerPath, string $className): array
+    {
+        foreach ($this->specializableBases($classData, $headerPath, $className) as $baseClass) {
+            if (!is_string($baseClass) || $baseClass === '') {
+                continue;
+            }
+
+            $specialized = $this->listSpecializationResolver->classNameFor($baseClass);
+            if ($specialized === null) {
+                continue;
+            }
+
+            $allowedClasses[] = $specialized;
+        }
+
+        return array_values(array_unique($allowedClasses));
+    }
+
+    /**
+     * @param array<string, mixed> $classData
+     * @return array<string, mixed>
+     */
+    private function normalizeSupportedListBases(array $classData, string $headerPath, string $className): array
+    {
+        $bases = $this->specializableBases($classData, $headerPath, $className);
+        if ($bases === []) {
+            return $classData;
+        }
+
+        $classData['bases'] = array_values(array_map(
+            fn(mixed $base): mixed => is_string($base)
+                ? ($this->listSpecializationResolver->classNameFor($base) ?? $base)
+                : $base,
+            $bases,
+        ));
+
+        return $classData;
+    }
+
+    /**
+     * @param array<string, mixed> $classData
+     * @return list<string>
+     */
+    private function specializableBases(array $classData, string $headerPath, string $className): array
+    {
+        $sourceBases = $this->classBaseDeclarationsFromSource($headerPath, $className);
+        if ($sourceBases !== []) {
+            return $sourceBases;
+        }
+
+        return array_values(array_filter(
+            array_map(static fn(mixed $base): string => is_string($base) ? trim($base) : '', (array) ($classData['bases'] ?? [])),
+            static fn(string $base): bool => $base !== '',
+        ));
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function classBaseDeclarationsFromSource(string $headerPath, string $className): array
+    {
+        $resolved = $this->resolveClassDefinitionSource($headerPath, $className);
+        if ($resolved === null || !is_string($resolved['contents'] ?? null)) {
+            return [];
+        }
+
+        $pattern = sprintf(
+            '/(?:^|\n)\s*(?:class|struct)\s+(?:[A-Za-z_][A-Za-z0-9_]*\s+)*%s\b(?P<bases>\s*:[^{]+)?\s*\{/s',
+            preg_quote($className, '/'),
+        );
+        if (preg_match($pattern, $resolved['contents'], $matches) !== 1) {
+            return [];
+        }
+
+        $basesClause = is_string($matches['bases'] ?? null) ? trim($matches['bases']) : '';
+        if ($basesClause === '' || !str_starts_with($basesClause, ':')) {
+            return [];
+        }
+
+        $basesClause = trim(substr($basesClause, 1));
+        if ($basesClause === '') {
+            return [];
+        }
+
+        $bases = [];
+        foreach ($this->splitTopLevelBaseList($basesClause) as $base) {
+            $base = preg_replace('/\b(public|protected|private|virtual)\b/', ' ', $base) ?? $base;
+            $base = trim(preg_replace('/\s+/', ' ', $base) ?? $base);
+            if ($base !== '') {
+                $bases[] = $base;
+            }
+        }
+
+        return $bases;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function splitTopLevelBaseList(string $basesClause): array
+    {
+        $parts = [];
+        $current = '';
+        $depth = 0;
+        $length = strlen($basesClause);
+
+        for ($i = 0; $i < $length; $i++) {
+            $char = $basesClause[$i];
+
+            if ($char === '<') {
+                $depth++;
+                $current .= $char;
+                continue;
+            }
+
+            if ($char === '>') {
+                $depth = max(0, $depth - 1);
+                $current .= $char;
+                continue;
+            }
+
+            if ($char === ',' && $depth === 0) {
+                $parts[] = trim($current);
+                $current = '';
+                continue;
+            }
+
+            $current .= $char;
+        }
+
+        if (trim($current) !== '') {
+            $parts[] = trim($current);
+        }
+
+        return $parts;
     }
 
     private function introspectionContents(string $headerPath, ?string $className = null): string

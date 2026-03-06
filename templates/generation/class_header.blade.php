@@ -17,7 +17,9 @@
 
 #include "php.h"
 #include "zend_exceptions.h"
-#include {!! $ctx->qtInclude !!}
+@foreach($ctx->nativeIncludes as $include)
+#include {!! $include !!}
+@endforeach
 @if($ctx->needsArgvStorage)
 #include <vector>
 #include <QByteArray>
@@ -33,6 +35,10 @@
 # endif
 #endif
 
+@if($ctx->nativeAliasOf)
+using {!! $ctx->nativeCppType !!} = {!! $ctx->nativeAliasOf !!};
+
+@endif
 /* ------------------------------------------------------------------ */
 /* Object struct                                                       */
 /* ------------------------------------------------------------------ */
