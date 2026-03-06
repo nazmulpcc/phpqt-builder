@@ -114,6 +114,9 @@ final class BuildInfoCommand extends Command
         $output->writeln(sprintf('Qt version: %s', $manifest->qtVersion));
         $output->writeln(sprintf('Extension version: %s', $manifest->extensionVersion));
         $output->writeln(sprintf('Builder ABI: %s', $manifest->builderAbiVersion));
+        $output->writeln(sprintf('Dependency source: %s', $manifest->dependencySource));
+        $output->writeln(sprintf('Requested modules: %s', $this->joinList($manifest->requestedModules)));
+        $output->writeln(sprintf('Expanded modules: %s', $this->joinList($manifest->expandedModules)));
         $output->writeln(sprintf('Build order: %s', $this->joinList($manifest->buildOrder)));
     }
 

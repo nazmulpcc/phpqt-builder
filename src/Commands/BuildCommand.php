@@ -9,6 +9,9 @@ use QtBuilder\Build\BuildExecutionRequest;
 use QtBuilder\Build\BuildDiscoveryService;
 use QtBuilder\Build\BuildLayout;
 use QtBuilder\Build\BuildPipeline;
+use QtBuilder\Build\Dependencies\ModuleDependencyResolver;
+use QtBuilder\Build\Dependencies\ResolvedModuleGraph;
+use QtBuilder\Build\Dependencies\StaticModuleDependencyResolver;
 use QtBuilder\Build\ExtensionBootstrapper;
 use QtBuilder\Build\ProcessExtensionBootstrapper;
 use QtBuilder\Contracts\SystemInformation;
@@ -23,14 +26,17 @@ use Symfony\Component\Console\Output\OutputInterface;
 class BuildCommand extends Command
 {
     private readonly ExtensionBootstrapper $bootstrapper;
+    private readonly ModuleDependencyResolver $dependencyResolver;
 
     public function __construct(
         private readonly SystemInformation $systemInformation,
         ?ExtensionBootstrapper $bootstrapper = null,
         private readonly BuildDiscoveryService $discoveryService = new BuildDiscoveryService(),
         private readonly BuildDirectoryCleaner $buildDirectoryCleaner = new BuildDirectoryCleaner(),
+        ?ModuleDependencyResolver $dependencyResolver = null,
     ) {
         $this->bootstrapper = $bootstrapper ?? new ProcessExtensionBootstrapper($systemInformation);
+        $this->dependencyResolver = $dependencyResolver ?? new StaticModuleDependencyResolver();
 
         parent::__construct();
     }
@@ -50,12 +56,20 @@ class BuildCommand extends Command
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        $modules = $this->parseModules((string) $input->getOption('modules'));
+        $requestedModules = $this->parseModules((string) $input->getOption('modules'));
+        try {
+            $resolvedGraph = $this->dependencyResolver->resolve($requestedModules);
+        } catch (\InvalidArgumentException|\RuntimeException $e) {
+            $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
+            return self::FAILURE;
+        }
+
+        $this->renderDependencyResolution($output, $resolvedGraph);
 
         $qtResolver = new QtInstallationResolver($this->systemInformation);
         $installation = $qtResolver->resolve(
             $input->getOption('qt-path') !== null ? (string) $input->getOption('qt-path') : null,
-            $modules,
+            $resolvedGraph->buildOrder,
         );
 
         try {
@@ -81,10 +95,13 @@ class BuildCommand extends Command
                 installation: $installation,
                 buildRootDir: $layout->buildRootDir,
                 outputDir: $layout->extensionDir(),
-                modules: $modules,
+                modules: $resolvedGraph->buildOrder,
+                requestedModules: $resolvedGraph->requestedModules,
                 extensionName: (string) $input->getOption('name'),
                 extensionVersion: (string) $input->getOption('ext-version'),
                 jobs: $this->resolveJobs($input->getOption('jobs')),
+                resolvedModuleGraph: $resolvedGraph,
+                dependencySource: $resolvedGraph->dependencySource,
                 bootstrapEnabled: !(bool) $input->getOption('no-build'),
             ),
             $output,
@@ -115,5 +132,25 @@ class BuildCommand extends Command
         $detected = trim((string) shell_exec($command . ' 2>/dev/null'));
 
         return max(1, (int) $detected ?: 1);
+    }
+
+    private function renderDependencyResolution(OutputInterface $output, ResolvedModuleGraph $graph): void
+    {
+        $output->writeln(sprintf(
+            '<comment>Requested modules:</comment> %s',
+            implode(', ', $graph->requestedModules),
+        ));
+
+        if ($graph->autoAddedModules() !== []) {
+            $output->writeln(sprintf(
+                '<comment>Auto-added dependency modules:</comment> %s',
+                implode(', ', $graph->autoAddedModules()),
+            ));
+        }
+
+        $output->writeln(sprintf(
+            '<comment>Expanded modules:</comment> %s',
+            implode(', ', $graph->expandedModules()),
+        ));
     }
 }

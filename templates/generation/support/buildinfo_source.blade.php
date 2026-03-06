@@ -45,6 +45,12 @@ static const char *qt_buildinfo_built_modules[] = {
 @endforeach
 };
 
+static const char *qt_buildinfo_requested_modules[] = {
+@foreach($manifest->requestedModules as $module)
+    "{{ $module }}",
+@endforeach
+};
+
 static const char *qt_buildinfo_build_order[] = {
 @foreach($manifest->buildOrder as $module)
     "{{ $module }}",
@@ -340,6 +346,8 @@ PHP_METHOD(BuildInfo, moduleInfo)
 
 PHP_METHOD(BuildInfo, manifest)
 {
+    zval requested_modules;
+    zval expanded_modules;
     zval built_modules;
     zval build_order;
     zval loaded_modules;
@@ -356,6 +364,21 @@ PHP_METHOD(BuildInfo, manifest)
     add_assoc_long(return_value, "qt_version_patch", {{ $manifest->qtVersionPatch }});
     add_assoc_string(return_value, "extension_version", "{{ $manifest->extensionVersion }}");
     add_assoc_string(return_value, "builder_abi_version", "{{ $manifest->builderAbiVersion }}");
+    add_assoc_string(return_value, "dependency_source", "{{ $manifest->dependencySource }}");
+
+    qt_buildinfo_append_string_list(
+        &requested_modules,
+        qt_buildinfo_requested_modules,
+        sizeof(qt_buildinfo_requested_modules) / sizeof(qt_buildinfo_requested_modules[0])
+    );
+    add_assoc_zval(return_value, "requested_modules", &requested_modules);
+
+    qt_buildinfo_append_string_list(
+        &expanded_modules,
+        qt_buildinfo_built_modules,
+        sizeof(qt_buildinfo_built_modules) / sizeof(qt_buildinfo_built_modules[0])
+    );
+    add_assoc_zval(return_value, "expanded_modules", &expanded_modules);
 
     qt_buildinfo_append_string_list(
         &built_modules,

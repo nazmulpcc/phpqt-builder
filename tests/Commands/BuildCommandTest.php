@@ -51,6 +51,8 @@ it('generates the extension tree from a fixture qt root', function (): void {
         ->and(is_file($metadataDir . '/configure.stdout.log'))->toBeTrue()
         ->and(is_file($metadataDir . '/make.stdout.log'))->toBeTrue()
         ->and($result['display'])->toContain(
+            'Requested modules:',
+            'Expanded modules: QtCore',
             'Running 2 parallel discovery worker(s)...',
             'Class structure cache:',
             'Discovery pass 1',
@@ -76,6 +78,9 @@ it('generates the extension tree from a fixture qt root', function (): void {
     $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
     expect($summary['generated_classes'])->toBe(5)
         ->and($summary['skipped_classes'])->toBe(1)
+        ->and($summary['requested_modules'] ?? null)->toBe(['QtCore'])
+        ->and($summary['expanded_modules'] ?? null)->toBe(['QtCore'])
+        ->and($summary['dependency_source'] ?? null)->toBe('static_manifest')
         ->and($summary['runtime_manifest'] ?? null)->toBe($metadataDir . '/runtime_manifest.json')
         ->and(array_column($summary['bootstrap'], 'name'))->toBe(['phpize', 'gen_stub', 'configure', 'make'])
         ->and($summary['file_writes']['total']['total'] ?? null)->toBeGreaterThan(0);
@@ -84,6 +89,9 @@ it('generates the extension tree from a fixture qt root', function (): void {
     expect($runtimeManifest['build_mode'])->toBe('monolithic')
         ->and($runtimeManifest['qt_version'])->toBe('6.7.1')
         ->and($runtimeManifest['builder_abi_version'])->toBe('phpqt-builder-abi-v1')
+        ->and($runtimeManifest['requested_modules'])->toBe(['QtCore'])
+        ->and($runtimeManifest['expanded_modules'])->toBe(['QtCore'])
+        ->and($runtimeManifest['dependency_source'])->toBe('static_manifest')
         ->and($runtimeManifest['built_modules'])->toBe(['QtCore'])
         ->and($runtimeManifest['modules']['QtCore']['extension_name'] ?? null)->toBe('qt')
         ->and($runtimeManifest['modules']['QtCore']['class_count'] ?? null)->toBe(5);
@@ -257,6 +265,44 @@ it('generates synthetic QList parents for supported list-derived classes', funct
     $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
     expect($summary['generated_classes'])->toBe(3)
         ->and($summary['skipped_classes'])->toBe(1);
+});
+
+it('auto-adds static manifest dependencies for monolithic builds', function (): void {
+    $fixtureRoot = qt_fixture_path('module-split-qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-expanded-' . bin2hex(random_bytes(4));
+    $metadataDir = $buildRoot . '/generated';
+    $bootstrapper = new FakeExtensionBootstrapper();
+
+    $result = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            '--modules' => 'QtWidgets',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+            '--no-build' => true,
+        ],
+    );
+
+    expect($result)->toBeSuccessfulCommandResult()
+        ->and($result['display'])->toContain(
+            'Requested modules: QtWidgets',
+            'Auto-added dependency modules: QtCore, QtGui',
+            'Expanded modules: QtCore, QtGui, QtWidgets',
+            'Skipping bootstrap (--no-build).',
+        );
+
+    $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
+    expect($summary['modules'] ?? null)->toBe(['QtCore', 'QtGui', 'QtWidgets'])
+        ->and($summary['requested_modules'] ?? null)->toBe(['QtWidgets'])
+        ->and($summary['expanded_modules'] ?? null)->toBe(['QtCore', 'QtGui', 'QtWidgets'])
+        ->and($summary['dependency_source'] ?? null)->toBe('static_manifest');
+
+    $runtimeManifest = qt_decode_json((string) file_get_contents($metadataDir . '/runtime_manifest.json'));
+    expect($runtimeManifest['requested_modules'] ?? null)->toBe(['QtWidgets'])
+        ->and($runtimeManifest['expanded_modules'] ?? null)->toBe(['QtCore', 'QtGui', 'QtWidgets'])
+        ->and($runtimeManifest['built_modules'] ?? null)->toBe(['QtCore', 'QtGui', 'QtWidgets'])
+        ->and($runtimeManifest['modules']['QtWidgets']['dependencies'] ?? null)->toBe(['QtCore', 'QtGui']);
 });
 
 it('fails when a bootstrap step fails', function (): void {
@@ -448,6 +494,29 @@ it('rejects an ext directory as the build root', function (): void {
 
     expect($result)->toBeFailureCommandResult()
         ->and($result['display'])->toContain('--output must be a build root directory, not an extension directory.');
+});
+
+it('fails fast on unsupported Qt modules', function (): void {
+    $fixtureRoot = qt_fixture_path('qt');
+    $bootstrapper = new FakeExtensionBootstrapper();
+
+    $result = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            '--modules' => 'QtBogus',
+            '--output' => sys_get_temp_dir() . '/qtbuilder-build-unsupported-' . bin2hex(random_bytes(4)),
+            '--jobs' => '2',
+        ],
+    );
+
+    expect($result)->toBeFailureCommandResult()
+        ->and($result['display'])->toContain(
+            'Unsupported Qt module',
+            'QtBogus',
+            'Supported modules:',
+            'QtQuick3D',
+        );
 });
 
 it('clears the build root before building when forced', function (): void {

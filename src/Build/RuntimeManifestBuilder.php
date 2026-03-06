@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace QtBuilder\Build;
 
-use QtBuilder\Definition\PhpClass;
+use QtBuilder\Build\Dependencies\ResolvedModuleGraph;
 use QtBuilder\Qt\QtInstallation;
 
 final class RuntimeManifestBuilder
@@ -14,13 +14,17 @@ final class RuntimeManifestBuilder
         BuildAnalysisResult $analysis,
         bool $includesSignalConnectionSupport,
     ): RuntimeManifest {
+        $graph = $request->resolvedModuleGraph;
+        if (!$graph instanceof ResolvedModuleGraph) {
+            throw new \RuntimeException('BuildExecutionRequest is missing a resolved module dependency graph.');
+        }
+
         return $this->buildManifest(
             buildMode: RuntimeManifest::MODE_MONOLITHIC,
             installation: $request->installation,
             extensionVersion: $request->extensionVersion,
-            requestedModules: $request->modules,
-            buildOrder: $request->modules,
-            dependencies: $this->deriveDependencies($request->modules, $analysis),
+            requestedModules: $request->effectiveRequestedModules(),
+            graph: $graph,
             analysis: $analysis,
             extensionNameResolver: static fn(string $module): string => $request->extensionName,
             signalSupportResolver: static fn(string $module): bool => $includesSignalConnectionSupport,
@@ -28,9 +32,8 @@ final class RuntimeManifestBuilder
     }
 
     public function buildForModular(
-        array $requestedModules,
+        ResolvedModuleGraph $graph,
         BuildAnalysisResult $analysis,
-        ModuleBuildGraph $graph,
         string $extensionVersion,
         QtInstallation $installation,
         bool $includesSignalConnectionSupport,
@@ -39,37 +42,33 @@ final class RuntimeManifestBuilder
             buildMode: RuntimeManifest::MODE_MODULAR,
             installation: $installation,
             extensionVersion: $extensionVersion,
-            requestedModules: $requestedModules,
-            buildOrder: $graph->buildOrder,
-            dependencies: $graph->dependencies,
+            requestedModules: $graph->requestedModules,
+            graph: $graph,
             analysis: $analysis,
-            extensionNameResolver: static fn(string $module): string => strtolower($module),
+            extensionNameResolver: static fn(string $module): string => $graph->extensionNameFor($module),
             signalSupportResolver: static fn(string $module): bool => $module === 'QtCore' && $includesSignalConnectionSupport,
         );
     }
 
     /**
      * @param list<string> $requestedModules
-     * @param list<string> $buildOrder
-     * @param array<string, list<string>> $dependencies
      */
     private function buildManifest(
         string $buildMode,
         QtInstallation $installation,
         string $extensionVersion,
         array $requestedModules,
-        array $buildOrder,
-        array $dependencies,
+        ResolvedModuleGraph $graph,
         BuildAnalysisResult $analysis,
         callable $extensionNameResolver,
         callable $signalSupportResolver,
     ): RuntimeManifest {
         $modules = [];
-        foreach ($requestedModules as $module) {
+        foreach ($graph->buildOrder as $module) {
             $modules[$module] = new RuntimeModuleMetadata(
                 module: $module,
                 extensionName: (string) $extensionNameResolver($module),
-                dependencies: array_values($dependencies[$module] ?? []),
+                dependencies: array_values($graph->dependencies[$module] ?? []),
                 namespaces: $this->namespacesForModule($analysis, $module),
                 classCount: $this->classCountForModule($analysis, $module),
                 includesSignalConnectionSupport: (bool) $signalSupportResolver($module),
@@ -84,94 +83,13 @@ final class RuntimeManifestBuilder
             qtVersionPatch: $installation->qtVersionPatch,
             extensionVersion: $extensionVersion,
             builderAbiVersion: RuntimeManifest::BUILDER_ABI_VERSION,
-            builtModules: array_values($buildOrder),
-            buildOrder: array_values($buildOrder),
+            requestedModules: array_values($requestedModules),
+            expandedModules: array_values($graph->expandedModules()),
+            dependencySource: $graph->dependencySource,
+            builtModules: array_values($graph->buildOrder),
+            buildOrder: array_values($graph->buildOrder),
             modules: $modules,
         );
-    }
-
-    /**
-     * @param list<string> $requestedModules
-     * @return array<string, list<string>>
-     */
-    private function deriveDependencies(array $requestedModules, BuildAnalysisResult $analysis): array
-    {
-        $moduleOrder = array_flip($requestedModules);
-        /** @var array<string, list<string>> $dependencies */
-        $dependencies = [];
-        foreach ($requestedModules as $module) {
-            $dependencies[$module] = [];
-        }
-
-        foreach ($analysis->generatedClasses as $className) {
-            $ownerModule = $analysis->generatedClassModules[$className] ?? null;
-            if (!is_string($ownerModule) || $ownerModule === '') {
-                continue;
-            }
-
-            $this->addDependency(
-                $dependencies,
-                $ownerModule,
-                $analysis->generatedClassParents[$className] ?? null,
-                $analysis->generatedClassModules,
-            );
-
-            foreach ($analysis->generatedClassDependencies[$className] ?? [] as $dependencyClass) {
-                $this->addDependency(
-                    $dependencies,
-                    $ownerModule,
-                    $dependencyClass,
-                    $analysis->generatedClassModules,
-                );
-            }
-
-            $phpClass = $analysis->generatedPhpClasses[$className] ?? null;
-            if ($phpClass instanceof PhpClass && $phpClass->signals !== [] && $ownerModule !== 'QtCore' && isset($dependencies['QtCore'])) {
-                $this->pushDependency($dependencies, $ownerModule, 'QtCore');
-            }
-        }
-
-        foreach ($dependencies as $module => $items) {
-            usort(
-                $items,
-                static fn(string $left, string $right): int => ($moduleOrder[$left] ?? PHP_INT_MAX) <=> ($moduleOrder[$right] ?? PHP_INT_MAX),
-            );
-            $dependencies[$module] = array_values(array_unique($items));
-        }
-
-        return $dependencies;
-    }
-
-    /**
-     * @param array<string, list<string>> $dependencies
-     * @param array<string, string> $classOwnership
-     */
-    private function addDependency(array &$dependencies, string $ownerModule, mixed $dependencyClass, array $classOwnership): void
-    {
-        if (!is_string($dependencyClass) || $dependencyClass === '') {
-            return;
-        }
-
-        $dependencyModule = $classOwnership[$dependencyClass] ?? null;
-        if (!is_string($dependencyModule) || $dependencyModule === '') {
-            return;
-        }
-
-        $this->pushDependency($dependencies, $ownerModule, $dependencyModule);
-    }
-
-    /**
-     * @param array<string, list<string>> $dependencies
-     */
-    private function pushDependency(array &$dependencies, string $ownerModule, string $dependencyModule): void
-    {
-        if ($ownerModule === $dependencyModule) {
-            return;
-        }
-
-        $dependencies[$ownerModule] ??= [];
-        $dependencies[$dependencyModule] ??= [];
-        $dependencies[$ownerModule][] = $dependencyModule;
     }
 
     /**

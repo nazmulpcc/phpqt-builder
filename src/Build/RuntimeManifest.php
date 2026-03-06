@@ -12,6 +12,8 @@ final readonly class RuntimeManifest
     public const string BUILDER_ABI_VERSION = 'phpqt-builder-abi-v1';
 
     /**
+     * @param list<string> $requestedModules
+     * @param list<string> $expandedModules
      * @param list<string> $builtModules
      * @param list<string> $buildOrder
      * @param array<string, RuntimeModuleMetadata> $modules
@@ -24,6 +26,9 @@ final readonly class RuntimeManifest
         public int $qtVersionPatch,
         public string $extensionVersion,
         public string $builderAbiVersion,
+        public array $requestedModules,
+        public array $expandedModules,
+        public string $dependencySource,
         public array $builtModules,
         public array $buildOrder,
         public array $modules,
@@ -54,6 +59,9 @@ final readonly class RuntimeManifest
             'qt_version_patch' => $this->qtVersionPatch,
             'extension_version' => $this->extensionVersion,
             'builder_abi_version' => $this->builderAbiVersion,
+            'requested_modules' => array_values($this->requestedModules),
+            'expanded_modules' => array_values($this->expandedModules),
+            'dependency_source' => $this->dependencySource,
             'built_modules' => array_values($this->builtModules),
             'build_order' => array_values($this->buildOrder),
             'modules' => $modules,
@@ -99,6 +107,9 @@ final readonly class RuntimeManifest
             qtVersionPatch: max(0, (int) ($decoded['qt_version_patch'] ?? 0)),
             extensionVersion: is_string($decoded['extension_version'] ?? null) ? $decoded['extension_version'] : '',
             builderAbiVersion: is_string($decoded['builder_abi_version'] ?? null) ? $decoded['builder_abi_version'] : self::BUILDER_ABI_VERSION,
+            requestedModules: self::filterStringList($decoded['requested_modules'] ?? []),
+            expandedModules: self::filterStringList($decoded['expanded_modules'] ?? []),
+            dependencySource: is_string($decoded['dependency_source'] ?? null) ? $decoded['dependency_source'] : 'analysis',
             builtModules: self::filterStringList($decoded['built_modules'] ?? []),
             buildOrder: self::filterStringList($decoded['build_order'] ?? []),
             modules: $modules,

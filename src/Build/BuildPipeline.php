@@ -283,6 +283,9 @@ class BuildPipeline
 
         $summary = [
             'modules' => $request->modules,
+            'requested_modules' => $request->effectiveRequestedModules(),
+            'expanded_modules' => $request->resolvedModuleGraph?->expandedModules() ?? $request->modules,
+            'dependency_source' => $request->resolvedModuleGraph?->dependencySource ?? $request->dependencySource,
             'candidate_classes' => $analysis->candidateCount,
             'generated_classes' => count($analysis->generatedClasses),
             'skipped_classes' => count($analysis->skippedClasses),
@@ -314,7 +317,7 @@ class BuildPipeline
         $abiManifest = null;
         if ($request->writeAbiManifest && $analysis->errors === [] && $bootstrap['error'] === null) {
             $abiManifest = new ModuleAbiManifest(
-                module: $request->modules[0] ?? 'QtCore',
+                module: $request->effectiveRequestedModules()[0] ?? ($request->modules[0] ?? 'QtCore'),
                 extensionName: $request->extensionName,
                 buildRootDir: $request->buildRootDir,
                 outputDir: $request->outputDir,
@@ -326,7 +329,7 @@ class BuildPipeline
                     $request->outputDir . '/classes',
                 ],
                 sharedIncludeDirs: [],
-                dependencyModules: $runtimeManifest->module($request->modules[0] ?? 'QtCore')?->dependencies ?? [],
+                dependencyModules: $runtimeManifest->module($request->effectiveRequestedModules()[0] ?? ($request->modules[0] ?? 'QtCore'))?->dependencies ?? [],
                 classes: $analysis->generatedClasses,
                 classNamespaces: $this->exportedClassNamespaces($analysis->acceptedCandidates, $analysis->generatedClasses),
                 includesSignalConnectionSupport: $context->includeSignalConnectionSupport,

@@ -1,0 +1,86 @@
+{
+    "schema_version": 1,
+    "qt_major": 6,
+    "modules": {
+        "QtCore": {
+            "extension_name": "qtcore",
+            "dependencies": []
+        },
+        "QtGui": {
+            "extension_name": "qtgui",
+            "dependencies": [
+                "QtCore"
+            ]
+        },
+        "QtWidgets": {
+            "extension_name": "qtwidgets",
+            "dependencies": [
+                "QtCore",
+                "QtGui"
+            ]
+        },
+        "QtNetwork": {
+            "extension_name": "qtnetwork",
+            "dependencies": [
+                "QtCore"
+            ]
+        },
+        "QtQml": {
+            "extension_name": "qtqml",
+            "dependencies": [
+                "QtCore",
+                "QtNetwork"
+            ]
+        },
+        "QtQuick": {
+            "extension_name": "qtquick",
+            "dependencies": [
+                "QtCore",
+                "QtGui",
+                "QtQml"
+            ]
+        },
+        "QtQuick3D": {
+            "extension_name": "qtquick3d",
+            "dependencies": [
+                "QtCore",
+                "QtGui",
+                "QtQml",
+                "QtQuick"
+            ]
+        },
+        "QtWebSockets": {
+            "extension_name": "qtwebsockets",
+            "dependencies": [
+                "QtCore",
+                "QtNetwork"
+            ]
+        },
+        "QtWebChannel": {
+            "extension_name": "qtwebchannel",
+            "dependencies": [
+                "QtQml"
+            ]
+        },
+        "QtWebEngineCore": {
+            "extension_name": "qtwebenginecore",
+            "dependencies": [
+                "QtCore",
+                "QtGui",
+                "QtNetwork",
+                "QtQuick",
+                "QtWebChannel"
+            ]
+        },
+        "QtWebEngineQuick": {
+            "extension_name": "qtwebenginequick",
+            "dependencies": [
+                "QtCore",
+                "QtGui",
+                "QtQml",
+                "QtQuick",
+                "QtWebEngineCore"
+            ]
+        }
+    }
+}

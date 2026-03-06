@@ -10,12 +10,13 @@ use QtBuilder\Build\BuildExecutionRequest;
 use QtBuilder\Build\BuildDiscoveryService;
 use QtBuilder\Build\BuildLayout;
 use QtBuilder\Build\BuildPipeline;
+use QtBuilder\Build\Dependencies\ModuleDependencyResolver;
+use QtBuilder\Build\Dependencies\ResolvedModuleGraph;
+use QtBuilder\Build\Dependencies\StaticModuleDependencyResolver;
 use QtBuilder\Build\ExtensionBuildContext;
 use QtBuilder\Build\ExtensionBootstrapper;
 use QtBuilder\Build\ExtensionScaffolder;
 use QtBuilder\Build\ModuleAbiManifest;
-use QtBuilder\Build\ModuleBuildGraph;
-use QtBuilder\Build\ModuleBuildGraphBuilder;
 use QtBuilder\Build\ProcessExtensionBootstrapper;
 use QtBuilder\Build\RuntimeManifest;
 use QtBuilder\Build\RuntimeManifestBuilder;
@@ -33,15 +34,17 @@ use Symfony\Component\Console\Output\OutputInterface;
 class BuildModulesCommand extends Command
 {
     private readonly ExtensionBootstrapper $bootstrapper;
+    private readonly ModuleDependencyResolver $dependencyResolver;
 
     public function __construct(
         private readonly SystemInformation $systemInformation,
         ?ExtensionBootstrapper $bootstrapper = null,
         private readonly BuildDiscoveryService $discoveryService = new BuildDiscoveryService(),
         private readonly BuildDirectoryCleaner $buildDirectoryCleaner = new BuildDirectoryCleaner(),
-        private readonly ModuleBuildGraphBuilder $graphBuilder = new ModuleBuildGraphBuilder(),
+        ?ModuleDependencyResolver $dependencyResolver = null,
     ) {
         $this->bootstrapper = $bootstrapper ?? new ProcessExtensionBootstrapper($systemInformation);
+        $this->dependencyResolver = $dependencyResolver ?? new StaticModuleDependencyResolver();
 
         parent::__construct();
     }
@@ -67,7 +70,16 @@ class BuildModulesCommand extends Command
             return self::FAILURE;
         }
 
-        $modules = $this->normalizeModules((string) $input->getOption('modules'));
+        $requestedModules = $this->normalizeModules((string) $input->getOption('modules'));
+        try {
+            $resolvedGraph = $this->dependencyResolver->resolve($requestedModules);
+        } catch (\InvalidArgumentException|\RuntimeException $e) {
+            $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
+            return self::FAILURE;
+        }
+
+        $this->renderDependencyResolution($output, $resolvedGraph);
+
         $jobs = $this->resolveJobs($input->getOption('jobs'));
         $qtPath = $input->getOption('qt-path') !== null ? (string) $input->getOption('qt-path') : null;
         $extensionVersion = (string) $input->getOption('ext-version');
@@ -77,23 +89,26 @@ class BuildModulesCommand extends Command
 
         if ((bool) $input->getOption('force')) {
             try {
-                $this->clearSharedOutputs($baseLayout, $modules, $output);
+                $this->clearSharedOutputs($baseLayout, $resolvedGraph->buildOrder, $output);
             } catch (\InvalidArgumentException|\RuntimeException $e) {
                 $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
                 return self::FAILURE;
             }
         }
 
-        $analysisInstallation = $qtResolver->resolve($qtPath, $modules);
+        $analysisInstallation = $qtResolver->resolve($qtPath, $resolvedGraph->buildOrder);
         $analysis = $pipeline->analyze(
             new BuildExecutionRequest(
                 installation: $analysisInstallation,
                 buildRootDir: $baseLayout->buildRootDir,
                 outputDir: $baseLayout->extensionDir(),
-                modules: $modules,
+                modules: $resolvedGraph->buildOrder,
+                requestedModules: $resolvedGraph->requestedModules,
                 extensionName: 'qt',
                 extensionVersion: $extensionVersion,
                 jobs: $jobs,
+                resolvedModuleGraph: $resolvedGraph,
+                dependencySource: $resolvedGraph->dependencySource,
                 reuseDiscoveryCache: true,
                 bootstrapEnabled: false,
             ),
@@ -104,17 +119,9 @@ class BuildModulesCommand extends Command
             return self::FAILURE;
         }
 
-        try {
-            $graph = $this->graphBuilder->build($modules, $analysis);
-        } catch (\RuntimeException $e) {
-            $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
-            return self::FAILURE;
-        }
-
         $runtimeManifest = (new RuntimeManifestBuilder())->buildForModular(
-            $modules,
+            $resolvedGraph,
             $analysis,
-            $graph,
             $extensionVersion,
             $analysisInstallation,
             $analysis->requiresSignalConnectionSupport,
@@ -124,7 +131,7 @@ class BuildModulesCommand extends Command
         $sharedClassesDir = $sharedRoot . '/classes';
         $this->ensureDirectory($sharedClassesDir);
 
-        $this->writeGlobalModuleGraph($baseLayout, $analysis, $graph, $output);
+        $this->writeGlobalModuleGraph($baseLayout, $analysis, $resolvedGraph, $output);
         $runtimeManifestPath = $baseLayout->metadataDir() . '/runtime_manifest.json';
         $runtimeManifest->write($runtimeManifestPath);
         $output->writeln(sprintf('  <comment>Wrote:</comment> %s', $runtimeManifestPath));
@@ -132,15 +139,15 @@ class BuildModulesCommand extends Command
         $sharedWriter = new SmartFileWriter();
         $loadOrder = [];
 
-        foreach ($graph->buildOrder as $index => $module) {
+        foreach ($resolvedGraph->buildOrder as $index => $module) {
             if ($index > 0) {
                 $output->writeln('');
             }
 
             $moduleBuildRoot = $baseLayout->buildRootDir . '/' . $module;
             $moduleLayout = new BuildLayout($moduleBuildRoot);
-            $extensionName = $this->extensionNameForModule($module);
-            $nativeModules = $this->nativeModulesForModule($graph, $module);
+            $extensionName = $resolvedGraph->extensionNameFor($module);
+            $nativeModules = $this->nativeModulesForModule($resolvedGraph, $module);
             $installation = $qtResolver->resolve($qtPath, $nativeModules);
             $localClasses = $this->generatedClassesForModule($analysis, $module);
 
@@ -213,7 +220,10 @@ class BuildModulesCommand extends Command
                 jobs: $jobs,
                 writeComparatorName: $scaffolder->writeComparatorName(),
                 localClasses: $localClasses,
-                dependencyModules: $graph->dependencies[$module] ?? [],
+                dependencyModules: $resolvedGraph->dependencies[$module] ?? [],
+                requestedModules: $resolvedGraph->requestedModules,
+                expandedModules: $resolvedGraph->expandedModules(),
+                dependencySource: $resolvedGraph->dependencySource,
                 sharedIncludeDirs: [$sharedRoot, $sharedClassesDir],
                 runtimeManifest: $runtimeManifest,
                 runtimeManifestPath: $runtimeManifestPath,
@@ -240,25 +250,8 @@ class BuildModulesCommand extends Command
     {
         $parts = array_map('trim', explode(',', $modules));
         $parts = array_values(array_filter($parts, static fn(string $part): bool => $part !== ''));
-        if ($parts === []) {
-            $parts = ['QtCore'];
-        }
 
-        $ordered = ['QtCore'];
-        foreach ($parts as $part) {
-            if ($part === 'QtCore') {
-                continue;
-            }
-
-            $ordered[] = $part;
-        }
-
-        return array_values(array_unique($ordered));
-    }
-
-    private function extensionNameForModule(string $module): string
-    {
-        return strtolower($module);
+        return $parts === [] ? ['QtCore'] : array_values(array_unique($parts));
     }
 
     private function clearSharedOutputs(BuildLayout $baseLayout, array $modules, OutputInterface $output): void
@@ -391,6 +384,8 @@ class BuildModulesCommand extends Command
     /**
      * @param list<array{class: string, header: string, files: list<string>}> $classmap
      * @param list<string> $dependencyModules
+     * @param list<string> $requestedModules
+     * @param list<string> $expandedModules
      * @param list<string> $sharedIncludeDirs
      * @param array{result: \QtBuilder\Build\BootstrapResult|null, error: string|null, skipped: bool, disabled: bool} $bootstrap
      */
@@ -409,6 +404,9 @@ class BuildModulesCommand extends Command
         string $writeComparatorName,
         array $localClasses,
         array $dependencyModules,
+        array $requestedModules,
+        array $expandedModules,
+        string $dependencySource,
         array $sharedIncludeDirs,
         RuntimeManifest $runtimeManifest,
         string $runtimeManifestPath,
@@ -480,6 +478,9 @@ class BuildModulesCommand extends Command
 
         $summary = [
             'modules' => [$module],
+            'requested_modules' => $requestedModules,
+            'expanded_modules' => $expandedModules,
+            'dependency_source' => $dependencySource,
             'candidate_classes' => count($localClasses) + count($moduleSkippedClasses),
             'generated_classes' => count($localClasses),
             'skipped_classes' => count($moduleSkippedClasses),
@@ -565,7 +566,7 @@ class BuildModulesCommand extends Command
     /**
      * @return list<string>
      */
-    private function nativeModulesForModule(ModuleBuildGraph $graph, string $module): array
+    private function nativeModulesForModule(ResolvedModuleGraph $graph, string $module): array
     {
         $required = [$module => true];
         $stack = [$module];
@@ -601,7 +602,7 @@ class BuildModulesCommand extends Command
     private function writeGlobalModuleGraph(
         BuildLayout $baseLayout,
         BuildAnalysisResult $analysis,
-        \QtBuilder\Build\ModuleBuildGraph $graph,
+        ResolvedModuleGraph $graph,
         OutputInterface $output,
     ): void {
         $path = $baseLayout->metadataDir() . '/module_graph.json';
@@ -614,6 +615,26 @@ class BuildModulesCommand extends Command
             'generation_passes' => $analysis->passes,
         ] + $graph->toArray(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '{}');
         $output->writeln(sprintf('  <comment>Wrote:</comment> %s', $path));
+    }
+
+    private function renderDependencyResolution(OutputInterface $output, ResolvedModuleGraph $graph): void
+    {
+        $output->writeln(sprintf(
+            '<comment>Requested modules:</comment> %s',
+            implode(', ', $graph->requestedModules),
+        ));
+
+        if ($graph->autoAddedModules() !== []) {
+            $output->writeln(sprintf(
+                '<comment>Auto-added dependency modules:</comment> %s',
+                implode(', ', $graph->autoAddedModules()),
+            ));
+        }
+
+        $output->writeln(sprintf(
+            '<comment>Expanded modules:</comment> %s',
+            implode(', ', $graph->expandedModules()),
+        ));
     }
 
     private function ensureDirectory(string $directory): void

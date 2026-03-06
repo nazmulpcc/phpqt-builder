@@ -17,6 +17,9 @@ it('prints a table summary for the runtime manifest', function (): void {
         qtVersionPatch: 1,
         extensionVersion: '0.1.0',
         builderAbiVersion: RuntimeManifest::BUILDER_ABI_VERSION,
+        requestedModules: ['QtWidgets'],
+        expandedModules: ['QtCore', 'QtGui', 'QtWidgets'],
+        dependencySource: 'static_manifest',
         builtModules: ['QtCore', 'QtGui', 'QtWidgets'],
         buildOrder: ['QtCore', 'QtGui', 'QtWidgets'],
         modules: [
@@ -58,6 +61,9 @@ it('prints a table summary for the runtime manifest', function (): void {
         'Qt version: 6.7.1',
         'Extension version: 0.1.0',
         'Builder ABI: phpqt-builder-abi-v1',
+        'Dependency source: static_manifest',
+        'Requested modules: QtWidgets',
+        'Expanded modules: QtCore, QtGui, QtWidgets',
         'Build order: QtCore, QtGui, QtWidgets',
         'QtCore',
         'qtcore',
@@ -80,6 +86,9 @@ it('prints a single module summary when --module is provided', function (): void
         qtVersionPatch: 1,
         extensionVersion: '0.1.0',
         builderAbiVersion: RuntimeManifest::BUILDER_ABI_VERSION,
+        requestedModules: ['QtWidgets'],
+        expandedModules: ['QtCore', 'QtGui', 'QtWidgets'],
+        dependencySource: 'static_manifest',
         builtModules: ['QtCore', 'QtGui', 'QtWidgets'],
         buildOrder: ['QtCore', 'QtGui', 'QtWidgets'],
         modules: [
@@ -125,6 +134,93 @@ it('prints a single module summary when --module is provided', function (): void
         '191',
         'Qt\\Widgets',
     )->not->toContain('qtcore');
+});
+
+it('shows static-manifest dependencies for QtQuick3D in module output', function (): void {
+    $buildRoot = qt_temp_dir('qtbuilder-build-info-quick3d-');
+    $manifestPath = $buildRoot . '/generated/runtime_manifest.json';
+    $manifest = new RuntimeManifest(
+        buildMode: RuntimeManifest::MODE_MODULAR,
+        qtVersion: '6.7.1',
+        qtVersionMajor: 6,
+        qtVersionMinor: 7,
+        qtVersionPatch: 1,
+        extensionVersion: '0.1.0',
+        builderAbiVersion: RuntimeManifest::BUILDER_ABI_VERSION,
+        requestedModules: ['QtQuick3D'],
+        expandedModules: ['QtCore', 'QtGui', 'QtNetwork', 'QtQml', 'QtQuick', 'QtQuick3D'],
+        dependencySource: 'static_manifest',
+        builtModules: ['QtCore', 'QtGui', 'QtNetwork', 'QtQml', 'QtQuick', 'QtQuick3D'],
+        buildOrder: ['QtCore', 'QtGui', 'QtNetwork', 'QtQml', 'QtQuick', 'QtQuick3D'],
+        modules: [
+            'QtCore' => new RuntimeModuleMetadata(
+                module: 'QtCore',
+                extensionName: 'qtcore',
+                dependencies: [],
+                namespaces: ['Qt\\Core'],
+                classCount: 182,
+                includesSignalConnectionSupport: true,
+            ),
+            'QtGui' => new RuntimeModuleMetadata(
+                module: 'QtGui',
+                extensionName: 'qtgui',
+                dependencies: ['QtCore'],
+                namespaces: ['Qt\\Gui'],
+                classCount: 195,
+                includesSignalConnectionSupport: false,
+            ),
+            'QtNetwork' => new RuntimeModuleMetadata(
+                module: 'QtNetwork',
+                extensionName: 'qtnetwork',
+                dependencies: ['QtCore'],
+                namespaces: ['Qt\\Network'],
+                classCount: 42,
+                includesSignalConnectionSupport: false,
+            ),
+            'QtQml' => new RuntimeModuleMetadata(
+                module: 'QtQml',
+                extensionName: 'qtqml',
+                dependencies: ['QtCore', 'QtNetwork'],
+                namespaces: ['Qt\\Qml'],
+                classCount: 31,
+                includesSignalConnectionSupport: false,
+            ),
+            'QtQuick' => new RuntimeModuleMetadata(
+                module: 'QtQuick',
+                extensionName: 'qtquick',
+                dependencies: ['QtCore', 'QtGui', 'QtQml'],
+                namespaces: ['Qt\\Quick'],
+                classCount: 44,
+                includesSignalConnectionSupport: false,
+            ),
+            'QtQuick3D' => new RuntimeModuleMetadata(
+                module: 'QtQuick3D',
+                extensionName: 'qtquick3d',
+                dependencies: ['QtCore', 'QtGui', 'QtQml', 'QtQuick'],
+                namespaces: ['Qt\\Quick3D'],
+                classCount: 6,
+                includesSignalConnectionSupport: false,
+            ),
+        ],
+    );
+    $manifest->write($manifestPath);
+
+    $result = qt_command_result(new BuildInfoCommand(), [
+        '--build-root' => $buildRoot,
+        '--module' => 'QtQuick3D',
+    ]);
+
+    expect($result)->toBeSuccessfulCommandResult();
+    expect($result['display'])->toContain(
+        'Build mode: modular',
+        'Dependency source: static_manifest',
+        'Requested modules: QtQuick3D',
+        'Expanded modules: QtCore, QtGui, QtNetwork, QtQml, QtQuick, QtQuick3D',
+        'Module: QtQuick3D',
+        'qtquick3d',
+        'QtCore, QtGui, QtQml, QtQuick',
+        'Qt\\Quick3D',
+    );
 });
 
 it('prints the manifest json unchanged when --format=json is used', function (): void {
