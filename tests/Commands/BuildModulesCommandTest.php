@@ -81,6 +81,17 @@ it('builds split module trees with a shared sdk and skips unavailable sibling ab
     expect($qtWidgetsSource)->toContain(
         '#include "qt_buildinfo.h"',
         'qt_buildinfo_register_module("QtWidgets", "qtwidgets", "6.7.1", "phpqt-builder-abi-v1")',
+        'php_info_print_table_row(2, "current module", "QtWidgets");',
+        'php_info_print_table_row(2, "dependency modules", "QtCore");',
+        'php_info_print_table_row(2, "loaded modules", ZSTR_VAL(qt_buildinfo_loaded_modules));',
+    );
+
+    $qtCoreSource = (string) file_get_contents($buildRoot . '/QtCore/ext/qtcore.cpp');
+    expect($qtCoreSource)->toContain(
+        'php_info_print_table_row(2, "current module", "QtCore");',
+        'php_info_print_table_row(2, "dependency modules", "-");',
+        'php_info_print_table_row(2, "built modules", ZSTR_VAL(qt_buildinfo_built_modules));',
+        'php_info_print_table_row(2, "loaded modules", ZSTR_VAL(qt_buildinfo_loaded_modules));',
     );
 
     $qtWidgetsSummary = qt_decode_json((string) file_get_contents($qtWidgetsRoot . '/generated/build_summary.json'));
@@ -161,6 +172,13 @@ it('supports sibling inheritance and method wrappers during split builds', funct
     $qtWidgetsManifest = qt_decode_json((string) file_get_contents($qtWidgetsRoot . '/generated/module_abi.json'));
     expect($qtWidgetsManifest['classes'])->toBe(['QExternalWidget', 'QShortcutCarrier', 'QWidget'])
         ->and($qtWidgetsManifest['dependency_modules'])->toBe(['QtCore', 'QtGui']);
+
+    $qtWidgetsSource = (string) file_get_contents($qtWidgetsRoot . '/ext/qtwidgets.cpp');
+    expect($qtWidgetsSource)->toContain(
+        'php_info_print_table_row(2, "current module", "QtWidgets");',
+        'php_info_print_table_row(2, "dependency modules", "QtCore, QtGui");',
+        'php_info_print_table_row(2, "loaded modules", ZSTR_VAL(qt_buildinfo_loaded_modules));',
+    );
 
     $qtWidgetsSkippedClasses = qt_decode_json((string) file_get_contents($qtWidgetsRoot . '/generated/skipped_classes.json'));
     expect($qtWidgetsSkippedClasses)->toBe([]);

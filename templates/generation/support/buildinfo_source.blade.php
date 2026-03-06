@@ -16,6 +16,7 @@ if (!$manifest instanceof \QtBuilder\Build\RuntimeManifest) {
 #include "qt_buildinfo_arginfo.h"
 
 #include <string.h>
+#include "Zend/zend_smart_str.h"
 
 zend_class_entry *qt_ce_BuildInfo = NULL;
 
@@ -143,6 +144,63 @@ static void qt_buildinfo_add_loaded_modules(zval *return_value)
 
         add_next_index_string(return_value, (char *) qt_buildinfo_modules[index].module_name);
     }
+}
+
+static zend_string *qt_buildinfo_finish_csv(smart_str *buffer)
+{
+    smart_str_0(buffer);
+    if (buffer->s != NULL) {
+        return buffer->s;
+    }
+
+    return zend_string_init("-", sizeof("-") - 1, 0);
+}
+
+static zend_string *qt_buildinfo_join_string_list(const char *const *items, size_t item_count)
+{
+    if (item_count == 0) {
+        return zend_string_init("-", sizeof("-") - 1, 0);
+    }
+
+    smart_str buffer = {0};
+    for (size_t index = 0; index < item_count; index++) {
+        if (index > 0) {
+            smart_str_appends(&buffer, ", ");
+        }
+
+        smart_str_appends(&buffer, items[index]);
+    }
+
+    return qt_buildinfo_finish_csv(&buffer);
+}
+
+PHP_QT_API zend_string *qt_buildinfo_join_built_modules(void)
+{
+    return qt_buildinfo_join_string_list(
+        qt_buildinfo_built_modules,
+        sizeof(qt_buildinfo_built_modules) / sizeof(qt_buildinfo_built_modules[0])
+    );
+}
+
+PHP_QT_API zend_string *qt_buildinfo_join_loaded_modules(void)
+{
+    smart_str buffer = {0};
+    bool first = true;
+
+    for (size_t index = 0; index < qt_buildinfo_module_count; index++) {
+        if (!qt_buildinfo_modules[index].loaded) {
+            continue;
+        }
+
+        if (!first) {
+            smart_str_appends(&buffer, ", ");
+        }
+
+        smart_str_appends(&buffer, qt_buildinfo_modules[index].module_name);
+        first = false;
+    }
+
+    return qt_buildinfo_finish_csv(&buffer);
 }
 
 PHP_QT_API zend_result qt_buildinfo_register_module(

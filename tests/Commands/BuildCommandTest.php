@@ -89,7 +89,13 @@ it('generates the extension tree from a fixture qt root', function (): void {
         ->and($runtimeManifest['modules']['QtCore']['class_count'] ?? null)->toBe(5);
 
     $extensionSource = (string) file_get_contents($outputDir . '/qt.cpp');
-    expect($extensionSource)->toContain('PHP_MINIT(qt_buildinfo)', '#include "classes/qt_buildinfo.h"');
+    expect($extensionSource)->toContain(
+        'PHP_MINIT(qt_buildinfo)',
+        '#include "classes/qt_buildinfo.h"',
+        'php_info_print_table_row(2, "build mode", "monolithic");',
+        'php_info_print_table_row(2, "Qt version", "6.7.1");',
+        'php_info_print_table_row(2, "built modules", ZSTR_VAL(qt_buildinfo_built_modules));',
+    );
 
     $classmap = qt_decode_json((string) file_get_contents($metadataDir . '/classmap.json'));
     expect(array_column($classmap, 'class'))->toBe(['QAbstractItemModel', 'QModelIndex', 'QNode', 'QPoint', 'QTree']);

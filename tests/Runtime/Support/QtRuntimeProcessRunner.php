@@ -68,6 +68,18 @@ final class QtRuntimeProcessRunner
         return self::runScript($fixturePath, $env, $timeout);
     }
 
+    public static function runPhpInfo(string $extensionName, array $env = [], int $timeout = 5): QtRuntimeProcessResult
+    {
+        $extensionPath = self::extensionPath();
+        if ($extensionPath === null) {
+            return new QtRuntimeProcessResult(77, '', '', [
+                'reason' => 'Built qt extension not found. Run `php qtb build` first or set PHPQT_EXTENSION.',
+            ]);
+        }
+
+        return self::runPhpCommand([$extensionPath], ['--ri', $extensionName], $env, $timeout);
+    }
+
     /**
      * @param list<string> $modules
      */
@@ -94,6 +106,27 @@ final class QtRuntimeProcessRunner
         }
 
         return self::runScript($fixturePath, $env, $timeout, $extensions);
+    }
+
+    /**
+     * @param list<string> $modules
+     */
+    public static function runPhpInfoWithModules(string $extensionName, array $modules, array $env = [], int $timeout = 5): QtRuntimeProcessResult
+    {
+        $loadOrder = self::resolveModuleLoadOrder($modules);
+        $extensions = [];
+        foreach ($loadOrder as $module) {
+            $path = self::moduleExtensionPath($module);
+            if ($path === null) {
+                return new QtRuntimeProcessResult(77, '', '', [
+                    'reason' => sprintf('Built %s extension not found. Run `php qtb build:modules --modules=%s` first.', strtolower($module), implode(',', $loadOrder)),
+                ]);
+            }
+
+            $extensions[] = $path;
+        }
+
+        return self::runPhpCommand($extensions, ['--ri', $extensionName], $env, $timeout);
     }
 
     /**
@@ -211,6 +244,40 @@ final class QtRuntimeProcessRunner
             $command[] = '-dextension=' . $extensionPath;
         }
         $command[] = $scriptPath;
+
+        $process = new Process(
+            $command,
+            dirname(__DIR__, 3),
+            $runtimeEnv,
+        );
+        $process->setTimeout($timeout);
+        $process->run();
+
+        return new QtRuntimeProcessResult(
+            $process->getExitCode() ?? 1,
+            $process->getOutput(),
+            $process->getErrorOutput(),
+            self::parsePayload($process->getOutput()),
+        );
+    }
+
+    /**
+     * @param list<string> $extensionPaths
+     * @param list<string> $args
+     */
+    private static function runPhpCommand(array $extensionPaths, array $args, array $env, int $timeout): QtRuntimeProcessResult
+    {
+        $runtimeEnv = array_merge($_ENV, [
+            'PHPQT_EXTENSION' => $extensionPaths[0] ?? '',
+            'PHPQT_TEST_MODE' => '1',
+            'QT_QPA_PLATFORM' => $env['QT_QPA_PLATFORM'] ?? 'offscreen',
+        ], $env);
+
+        $command = [PHP_BINARY];
+        foreach ($extensionPaths as $extensionPath) {
+            $command[] = '-dextension=' . $extensionPath;
+        }
+        array_push($command, ...$args);
 
         $process = new Process(
             $command,

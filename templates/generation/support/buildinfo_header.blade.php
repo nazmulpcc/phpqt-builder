@@ -42,6 +42,9 @@ typedef struct _qt_buildinfo_module_descriptor {
 
 extern PHP_QT_API zend_class_entry *qt_ce_BuildInfo;
 
+PHP_QT_API zend_string *qt_buildinfo_join_built_modules(void);
+PHP_QT_API zend_string *qt_buildinfo_join_loaded_modules(void);
+
 PHP_QT_API zend_result qt_buildinfo_register_module(
     const char *module_name,
     const char *extension_name,
