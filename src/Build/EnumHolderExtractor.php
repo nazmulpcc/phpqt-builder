@@ -14,12 +14,26 @@ use QtBuilder\Scanning\HeaderCandidate;
 
 class EnumHolderExtractor
 {
+    public function __construct(
+        private readonly EnumExtractionWorkerPool $workerPool = new EnumExtractionWorkerPool(__DIR__ . '/../..'),
+    ) {}
+
+    /**
+     * @param list<HeaderCandidate> $acceptedCandidates
+     * @param list<array<string, string|null>> $skippedClasses
+     */
+    public function namespaceHeaderCount(array $acceptedCandidates, array $skippedClasses): int
+    {
+        return count($this->headerModules($acceptedCandidates, $skippedClasses));
+    }
+
     /**
      * @param list<string> $includePaths
      * @param list<HeaderCandidate> $acceptedCandidates
      * @param list<array<string, string|null>> $skippedClasses
      * @param array<string, array<string, mixed>> $preparedClassDataByClass
      * @param array<string, string> $classNamespaces
+     * @param null|callable(int, int): void $onNamespaceHeaderProcessed
      */
     public function extract(
         array $includePaths,
@@ -27,6 +41,9 @@ class EnumHolderExtractor
         array $skippedClasses,
         array $preparedClassDataByClass,
         array $classNamespaces,
+        ?callable $onNamespaceHeaderProcessed = null,
+        int $jobs = 1,
+        string $metadataDir = '',
     ): EnumHolderRegistry {
         /** @var array<string, EnumHolderDefinition> $holders */
         $holders = [];
@@ -47,6 +64,85 @@ class EnumHolderExtractor
             }
         }
 
+        $headerModules = $this->headerModules($acceptedCandidates, $skippedClasses);
+
+        $processedHeaders = 0;
+        $totalHeaders = count($headerModules);
+        if ($totalHeaders > 0) {
+            if ($jobs > 1) {
+                $knownClassesFile = $metadataDir !== '' ? $this->writeKnownClassesFile($metadataDir, array_keys($knownClassNames)) : null;
+                $tasks = [];
+                foreach ($headerModules as $headerPath => $fallbackModule) {
+                    $tasks[] = new EnumExtractionTask(
+                        headerPath: $headerPath,
+                        module: $fallbackModule,
+                        includePaths: $includePaths,
+                        knownClassesFile: $knownClassesFile,
+                    );
+                }
+
+                $results = $this->workerPool->run(
+                    $tasks,
+                    $jobs,
+                    static function (int $completed, int $total, EnumExtractionResult $result) use ($onNamespaceHeaderProcessed): void {
+                        if ($onNamespaceHeaderProcessed !== null) {
+                            $onNamespaceHeaderProcessed($completed, $total);
+                        }
+                    },
+                );
+
+                foreach ($results as $result) {
+                    if ($result->status !== 'ok') {
+                        continue;
+                    }
+
+                    foreach ($result->holders as $holder) {
+                        $holders[$holder->cppType] ??= $holder;
+                    }
+                }
+            } else {
+                $builder = new ClangArgumentBuilder($includePaths);
+                foreach ($headerModules as $headerPath => $fallbackModule) {
+                    foreach ($this->extractNamespaceOwnedHolders($builder, $headerPath, $fallbackModule, $knownClassNames) as $holder) {
+                        $holders[$holder->cppType] ??= $holder;
+                    }
+
+                    $processedHeaders++;
+                    if ($onNamespaceHeaderProcessed !== null) {
+                        $onNamespaceHeaderProcessed($processedHeaders, $totalHeaders);
+                    }
+                }
+            }
+        }
+
+        ksort($holders);
+
+        return new EnumHolderRegistry($holders);
+    }
+
+    /**
+     * @param list<string> $includePaths
+     * @param array<string, bool> $knownClassNames
+     * @return list<EnumHolderDefinition>
+     */
+    public function extractNamespaceOwnedHoldersForHeader(
+        array $includePaths,
+        string $headerPath,
+        string $fallbackModule,
+        array $knownClassNames,
+    ): array {
+        $builder = new ClangArgumentBuilder($includePaths);
+
+        return $this->extractNamespaceOwnedHolders($builder, $headerPath, $fallbackModule, $knownClassNames);
+    }
+
+    /**
+     * @param list<HeaderCandidate> $acceptedCandidates
+     * @param list<array<string, string|null>> $skippedClasses
+     * @return array<string, string>
+     */
+    private function headerModules(array $acceptedCandidates, array $skippedClasses): array
+    {
         /** @var array<string, string> $headerModules */
         $headerModules = [];
         foreach ($acceptedCandidates as $candidate) {
@@ -62,16 +158,7 @@ class EnumHolderExtractor
             $headerModules[$header] ??= $module;
         }
 
-        $builder = new ClangArgumentBuilder($includePaths);
-        foreach ($headerModules as $headerPath => $fallbackModule) {
-            foreach ($this->extractNamespaceOwnedHolders($builder, $headerPath, $fallbackModule, $knownClassNames) as $holder) {
-                $holders[$holder->cppType] ??= $holder;
-            }
-        }
-
-        ksort($holders);
-
-        return new EnumHolderRegistry($holders);
+        return $headerModules;
     }
 
     /**
@@ -455,5 +542,17 @@ class EnumHolderExtractor
     private function moduleNamespaceFor(string $module): string
     {
         return 'Qt\\' . preg_replace('/^Qt/', '', $module);
+    }
+
+    /**
+     * @param list<string> $knownClasses
+     */
+    private function writeKnownClassesFile(string $metadataDir, array $knownClasses): ?string
+    {
+        @mkdir($metadataDir, 0755, true);
+        $path = $metadataDir . '/enum_known_classes.json';
+        file_put_contents($path, json_encode(array_values($knownClasses), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]');
+
+        return $path;
     }
 }

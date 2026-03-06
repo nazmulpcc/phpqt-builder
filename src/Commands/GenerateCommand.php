@@ -45,6 +45,7 @@ class GenerateCommand extends Command
             ->addOption('extension-name', null, InputOption::VALUE_REQUIRED, 'Extension name for build mode', 'qt')
             ->addOption('allowed-classes', null, InputOption::VALUE_REQUIRED, 'Comma-separated allow-list of generated classes')
             ->addOption('allowed-classes-file', null, InputOption::VALUE_REQUIRED, 'Path to a JSON file containing the allow-list of generated classes')
+            ->addOption('known-classes-file', null, InputOption::VALUE_REQUIRED, 'Path to a JSON file containing known class names for enum worker mode')
             ->addOption('class-namespaces-file', null, InputOption::VALUE_REQUIRED, 'Path to a JSON file containing class-to-namespace mappings')
             ->addOption('class-headers-file', null, InputOption::VALUE_REQUIRED, 'Path to a JSON file containing class-to-header mappings')
             ->addOption('worker-mode', null, InputOption::VALUE_REQUIRED, 'Internal worker mode for build pipelines', 'generate')
@@ -140,7 +141,7 @@ class GenerateCommand extends Command
         }
 
         $workerMode = (string) $input->getOption('worker-mode');
-        if (!in_array($workerMode, ['generate', 'probe', 'facts'], true)) {
+        if (!in_array($workerMode, ['generate', 'probe', 'facts', 'enum-facts'], true)) {
             return $this->renderFailure(
                 $output,
                 true,
@@ -180,6 +181,40 @@ class GenerateCommand extends Command
         $service = new ClassGenerationService();
         if ($workerMode === 'facts') {
             $output->writeln($this->encodeJson($service->prepareDiscoveryFacts($headerPath, $className, $includePaths)));
+
+            return self::SUCCESS;
+        }
+
+        if ($workerMode === 'enum-facts') {
+            try {
+                $knownClasses = $this->resolveKnownClasses($input);
+            } catch (\RuntimeException $e) {
+                return $this->renderFailure(
+                    $output,
+                    true,
+                    $className,
+                    $headerPath,
+                    'known_classes_load_failed',
+                    $e->getMessage(),
+                );
+            }
+
+            $extractor = new \QtBuilder\Build\EnumHolderExtractor();
+            $holders = $extractor->extractNamespaceOwnedHoldersForHeader(
+                $includePaths,
+                $headerPath,
+                $module,
+                array_fill_keys($knownClasses, true),
+            );
+
+            $output->writeln($this->encodeJson([
+                'status' => 'ok',
+                'header' => $headerPath,
+                'holders' => array_map(
+                    static fn(\QtBuilder\Build\EnumHolderDefinition $holder): array => $holder->toArray(),
+                    $holders,
+                ),
+            ]));
 
             return self::SUCCESS;
         }
@@ -346,6 +381,31 @@ class GenerateCommand extends Command
         }
 
         return $classHeaders;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function resolveKnownClasses(InputInterface $input): array
+    {
+        $knownClassesFile = $input->getOption('known-classes-file');
+        if (!is_string($knownClassesFile) || trim($knownClassesFile) === '') {
+            return [];
+        }
+
+        if (!is_file($knownClassesFile)) {
+            throw new \RuntimeException(sprintf('Known classes file not found: %s', $knownClassesFile));
+        }
+
+        $decoded = json_decode((string) file_get_contents($knownClassesFile), true);
+        if (!is_array($decoded)) {
+            throw new \RuntimeException(sprintf('Known classes file is not valid JSON: %s', $knownClassesFile));
+        }
+
+        return array_values(array_filter(
+            array_map(static fn(mixed $value): string => is_string($value) ? trim($value) : '', $decoded),
+            static fn(string $value): bool => $value !== '',
+        ));
     }
 
     /**

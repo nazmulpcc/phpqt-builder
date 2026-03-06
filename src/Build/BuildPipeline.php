@@ -158,6 +158,7 @@ class BuildPipeline
 
         $classNamespaces = $this->classNamespaces($acceptedCandidates, $request->importedAbi);
         $enumHolderCache = new EnumHolderCache();
+        $enumExtractor = new EnumHolderExtractor();
         $enumRegistry = $enumHolderCache->load(
             $metadataDir,
             $request->installation->includeRoots,
@@ -173,13 +174,41 @@ class BuildPipeline
             ));
         } else {
             $output->writeln('<comment>Enum holder cache:</comment> miss.');
-            $enumRegistry = (new EnumHolderExtractor())->extract(
+            $enumHeaderCount = $enumExtractor->namespaceHeaderCount($acceptedCandidates, $skippedClasses);
+            if ($enumHeaderCount > 0 && $request->jobs > 1) {
+                $output->writeln(sprintf(
+                    '<info>Extracting enum holders with %d parallel worker(s)...</info>',
+                    $request->jobs,
+                ));
+            }
+            $enumProgressBar = $this->createBuildProgressBar(
+                $output,
+                $enumHeaderCount,
+                'qt_enum_discovery',
+                'Enum discovery',
+            );
+            $enumProgressBar?->start();
+            $enumRegistry = $enumExtractor->extract(
                 $request->installation->includeRoots,
                 $acceptedCandidates,
                 $skippedClasses,
                 $classStructures['prepared_class_data'],
                 $classNamespaces,
+                static function (int $completed, int $total) use ($enumProgressBar): void {
+                    if ($enumProgressBar === null) {
+                        return;
+                    }
+
+                    $enumProgressBar->setMaxSteps(max(1, $total));
+                    $enumProgressBar->setProgress($completed);
+                },
+                $request->jobs,
+                $metadataDir,
             );
+            if ($enumProgressBar !== null) {
+                $enumProgressBar->finish();
+                $output->write(PHP_EOL);
+            }
             $enumHolderCache->write(
                 $metadataDir,
                 $request->installation->includeRoots,
