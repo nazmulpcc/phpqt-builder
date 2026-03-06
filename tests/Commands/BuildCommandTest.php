@@ -496,27 +496,41 @@ it('rejects an ext directory as the build root', function (): void {
         ->and($result['display'])->toContain('--output must be a build root directory, not an extension directory.');
 });
 
-it('fails fast on unsupported Qt modules', function (): void {
-    $fixtureRoot = qt_fixture_path('qt');
+it('builds unmapped Qt modules with a manifest warning', function (): void {
+    $fixtureRoot = qt_fixture_path('module-split-qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-unmapped-' . bin2hex(random_bytes(4));
     $bootstrapper = new FakeExtensionBootstrapper();
 
     $result = qt_command_result(
         new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
         [
             '--qt-path' => $fixtureRoot,
-            'modules' => 'QtBogus',
-            '--output' => sys_get_temp_dir() . '/qtbuilder-build-unsupported-' . bin2hex(random_bytes(4)),
+            'modules' => 'QtSvg',
+            '--output' => $buildRoot,
             '--jobs' => '2',
+            '--no-build' => true,
         ],
     );
 
-    expect($result)->toBeFailureCommandResult()
+    expect($result)->toBeSuccessfulCommandResult()
         ->and($result['display'])->toContain(
-            'Unsupported Qt module',
-            'QtBogus',
-            'Supported modules:',
-            'QtQuick3D',
+            'Requested modules: QtSvg',
+            'Auto-added dependency modules: QtCore',
+            'Manifest warning: QtSvg has no static dependency manifest entry; only the implicit QtCore dependency will be applied for that module.',
+            'Expanded modules: QtCore, QtSvg',
+            'Skipping bootstrap (--no-build).',
         );
+
+    $metadataDir = $buildRoot . '/generated';
+    $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
+    expect($summary['modules'] ?? null)->toBe(['QtCore', 'QtSvg'])
+        ->and($summary['requested_modules'] ?? null)->toBe(['QtSvg'])
+        ->and($summary['expanded_modules'] ?? null)->toBe(['QtCore', 'QtSvg'])
+        ->and($summary['generated_classes'] ?? null)->toBe(2);
+
+    $runtimeManifest = qt_decode_json((string) file_get_contents($metadataDir . '/runtime_manifest.json'));
+    expect($runtimeManifest['built_modules'] ?? null)->toBe(['QtCore', 'QtSvg'])
+        ->and($runtimeManifest['modules']['QtSvg']['dependencies'] ?? null)->toBe(['QtCore']);
 });
 
 it('clears the build root before building when forced', function (): void {

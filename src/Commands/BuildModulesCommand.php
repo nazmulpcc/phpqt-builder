@@ -593,10 +593,6 @@ class BuildModulesCommand extends Command
             static fn(string $candidate): bool => isset($required[$candidate]),
         ));
 
-        if (!in_array('QtCore', $ordered, true)) {
-            array_unshift($ordered, 'QtCore');
-        }
-
         return array_values(array_unique($ordered));
     }
 
@@ -629,6 +625,15 @@ class BuildModulesCommand extends Command
             $output->writeln(sprintf(
                 '<comment>Auto-added dependency modules:</comment> %s',
                 implode(', ', $graph->autoAddedModules()),
+            ));
+        }
+
+        if ($graph->unmappedModules !== []) {
+            $output->writeln(sprintf(
+                '<comment>Manifest warning:</comment> %s %s no static dependency manifest entry; only the implicit QtCore dependency will be applied for %s.',
+                implode(', ', $graph->unmappedModules),
+                count($graph->unmappedModules) === 1 ? 'has' : 'have',
+                count($graph->unmappedModules) === 1 ? 'that module' : 'those modules',
             ));
         }
 

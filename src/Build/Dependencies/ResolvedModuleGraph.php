@@ -11,12 +11,14 @@ final readonly class ResolvedModuleGraph
      * @param array<string, list<string>> $dependencies
      * @param list<string> $buildOrder
      * @param array<string, string> $extensionNames
+     * @param list<string> $unmappedModules
      */
     public function __construct(
         public array $requestedModules,
         public array $dependencies,
         public array $buildOrder,
         public array $extensionNames,
+        public array $unmappedModules = [],
         public string $dependencySource = 'static_manifest',
     ) {}
 
@@ -60,6 +62,7 @@ final readonly class ResolvedModuleGraph
         return [
             'requested_modules' => array_values($this->requestedModules),
             'expanded_modules' => array_values($this->expandedModules()),
+            'unmapped_modules' => array_values($this->unmappedModules),
             'dependency_source' => $this->dependencySource,
             'extension_names' => $this->extensionNames,
             'dependencies' => $this->dependencies,

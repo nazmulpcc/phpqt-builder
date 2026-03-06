@@ -55,14 +55,17 @@ it('defaults to QtCore when no modules are requested', function (): void {
         ->and($graph->buildOrder)->toBe(['QtCore']);
 });
 
-it('rejects unknown requested modules with the supported-module list', function (): void {
+it('passes through unmapped requested modules with a warning-ready graph', function (): void {
     $resolver = new StaticModuleDependencyResolver();
 
-    expect(fn () => $resolver->resolve(['QtBogus']))
-        ->toThrow(
-            InvalidArgumentException::class,
-            'Unsupported Qt module: QtBogus. Supported modules: QtCore, QtGui, QtWidgets, QtNetwork, QtQml, QtQuick, QtQuick3D, QtWebSockets, QtWebChannel, QtWebEngineCore, QtWebEngineQuick',
-        );
+    $graph = $resolver->resolve(['QtBogus', 'QtQuick3D']);
+
+    expect($graph->requestedModules)->toBe(['QtBogus', 'QtQuick3D'])
+        ->and($graph->unmappedModules)->toBe(['QtBogus'])
+        ->and($graph->expandedModules())->toBe(['QtCore', 'QtGui', 'QtNetwork', 'QtQml', 'QtQuick', 'QtQuick3D', 'QtBogus'])
+        ->and($graph->autoAddedModules())->toBe(['QtCore', 'QtGui', 'QtNetwork', 'QtQml', 'QtQuick'])
+        ->and($graph->dependenciesFor('QtBogus'))->toBe(['QtCore'])
+        ->and($graph->extensionNameFor('QtBogus'))->toBe('qtbogus');
 });
 
 it('rejects manifest entries that reference unknown dependencies', function (): void {

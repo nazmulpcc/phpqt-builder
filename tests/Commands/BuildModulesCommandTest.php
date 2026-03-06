@@ -331,23 +331,40 @@ it('supports generating split module trees without bootstrapping', function (): 
         ->and($qtWidgetsSummary['bootstrap'])->toBeNull();
 });
 
-it('fails fast on unsupported split modules', function (): void {
+it('builds unmapped split modules with a manifest warning', function (): void {
     $fixtureRoot = qt_fixture_path('module-split-qt');
-    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-modules-unsupported-' . bin2hex(random_bytes(4));
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-modules-unmapped-' . bin2hex(random_bytes(4));
     $bootstrapper = new FakeExtensionBootstrapper();
 
     $result = qt_command_result(
         new BuildModulesCommand(FakeSystemInformation::passing(), $bootstrapper),
         [
             '--qt-path' => $fixtureRoot,
-            'modules' => 'QtBogus',
+            'modules' => 'QtSvg',
             '--output' => $buildRoot,
             '--jobs' => '2',
         ],
     );
 
-    expect($result)->toBeFailureCommandResult()
-        ->and($result['display'])->toContain('Unsupported Qt module', 'QtBogus', 'Supported modules:')
-        ->and($bootstrapper->contexts)->toHaveCount(0)
-        ->and(is_file($buildRoot . '/generated/module_graph.json'))->toBeFalse();
+    expect($result)->toBeSuccessfulCommandResult()
+        ->and($result['display'])->toContain(
+            'Requested modules: QtSvg',
+            'Auto-added dependency modules: QtCore',
+            'Manifest warning: QtSvg has no static dependency manifest entry; only the implicit QtCore dependency will be applied for that module.',
+            'Expanded modules: QtCore, QtSvg',
+            'Building QtCore as qtcore...',
+            'Building QtSvg as qtsvg...',
+            'Extension load order: qtcore, qtsvg',
+        );
+    expect($bootstrapper->contexts)->toHaveCount(2)
+        ->and(array_map(static fn($context): string => $context->extensionName, $bootstrapper->contexts))->toBe(['qtcore', 'qtsvg'])
+        ->and(is_file($buildRoot . '/QtCore/generated/module_abi.json'))->toBeTrue()
+        ->and(is_file($buildRoot . '/QtSvg/generated/module_abi.json'))->toBeTrue()
+        ->and(is_file($buildRoot . '/generated/module_graph.json'))->toBeTrue();
+
+    $manifest = qt_decode_json((string) file_get_contents($buildRoot . '/QtSvg/generated/module_abi.json'));
+    expect($manifest['module'])->toBe('QtSvg')
+        ->and($manifest['extension_name'])->toBe('qtsvg')
+        ->and($manifest['dependency_modules'])->toBe(['QtCore'])
+        ->and($manifest['classes'])->toBe(['QSvgPoint']);
 });

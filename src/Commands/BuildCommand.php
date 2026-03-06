@@ -149,6 +149,15 @@ class BuildCommand extends Command
             ));
         }
 
+        if ($graph->unmappedModules !== []) {
+            $output->writeln(sprintf(
+                '<comment>Manifest warning:</comment> %s %s no static dependency manifest entry; only the implicit QtCore dependency will be applied for %s.',
+                implode(', ', $graph->unmappedModules),
+                count($graph->unmappedModules) === 1 ? 'has' : 'have',
+                count($graph->unmappedModules) === 1 ? 'that module' : 'those modules',
+            ));
+        }
+
         $output->writeln(sprintf(
             '<comment>Expanded modules:</comment> %s',
             implode(', ', $graph->expandedModules()),

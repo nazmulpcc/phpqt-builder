@@ -26,22 +26,16 @@ final class StaticModuleDependencyResolver implements ModuleDependencyResolver
 
         $definitions = $this->definitions();
         $supportedModules = array_keys($definitions);
-        $unsupported = array_values(array_filter(
+        $unmappedModules = array_values(array_filter(
             $requestedModules,
             static fn(string $module): bool => !isset($definitions[$module]),
         ));
 
-        if ($unsupported !== []) {
-            throw new \InvalidArgumentException(sprintf(
-                'Unsupported Qt module%s: %s. Supported modules: %s',
-                count($unsupported) === 1 ? '' : 's',
-                implode(', ', $unsupported),
-                implode(', ', $supportedModules),
-            ));
-        }
-
         $resolvedSet = [];
-        $stack = array_reverse($requestedModules);
+        $stack = array_reverse(array_values(array_filter(
+            $requestedModules,
+            static fn(string $module): bool => isset($definitions[$module]),
+        )));
         while ($stack !== []) {
             $module = array_pop($stack);
             if (!is_string($module) || $module === '' || isset($resolvedSet[$module])) {
@@ -51,6 +45,17 @@ final class StaticModuleDependencyResolver implements ModuleDependencyResolver
             $resolvedSet[$module] = true;
             foreach ($definitions[$module]['dependencies'] as $dependencyModule) {
                 $stack[] = $dependencyModule;
+            }
+        }
+
+        if ($unmappedModules !== [] && isset($definitions['QtCore'])) {
+            foreach ($unmappedModules as $module) {
+                if ($module === 'QtCore') {
+                    continue;
+                }
+
+                $resolvedSet['QtCore'] = true;
+                break;
             }
         }
 
@@ -71,13 +76,24 @@ final class StaticModuleDependencyResolver implements ModuleDependencyResolver
             $extensionNames[$module] = $definitions[$module]['extension_name'];
         }
 
-        $orderIndex = array_flip($supportedModules);
+        foreach ($unmappedModules as $module) {
+            $dependencies[$module] = $module === 'QtCore' ? [] : ['QtCore'];
+            $extensionNames[$module] = strtolower($module);
+        }
+
+        $orderIndex = array_flip(array_merge($supportedModules, $unmappedModules));
+        $buildOrder = $this->topologicalSort(
+            array_values(array_unique(array_merge($resolvedModules, $unmappedModules))),
+            $dependencies,
+            $orderIndex,
+        );
 
         return new ResolvedModuleGraph(
             requestedModules: $requestedModules,
             dependencies: $dependencies,
-            buildOrder: $this->topologicalSort($resolvedModules, $dependencies, $orderIndex),
+            buildOrder: $buildOrder,
             extensionNames: $extensionNames,
+            unmappedModules: $unmappedModules,
         );
     }
 
@@ -150,6 +166,18 @@ final class StaticModuleDependencyResolver implements ModuleDependencyResolver
                     ));
                 }
             }
+        }
+
+        foreach ($definitions as $module => $payload) {
+            if ($module === 'QtCore') {
+                continue;
+            }
+
+            if (!in_array('QtCore', $payload['dependencies'], true)) {
+                $payload['dependencies'][] = 'QtCore';
+            }
+
+            $definitions[$module]['dependencies'] = array_values(array_unique($payload['dependencies']));
         }
 
         $this->definitions = $definitions;
