@@ -11,6 +11,8 @@ readonly class ExtensionBuildContext
 {
     /**
      * @param list<string> $modules
+     * @param list<string> $linkModules
+     * @param list<string> $importIncludeRoots
      * @param list<string> $generatedClasses
      * @param array<string, string|null> $generatedClassParents
      * @param array<string, list<string>> $generatedClassDependencies
@@ -26,6 +28,8 @@ readonly class ExtensionBuildContext
         public array $generatedClassParents = [],
         public array $generatedClassDependencies = [],
         public bool $includeSignalConnectionSupport = false,
+        public array $linkModules = [],
+        public array $importIncludeRoots = [],
     ) {}
 
     public function withGeneratedClasses(
@@ -46,6 +50,8 @@ readonly class ExtensionBuildContext
             $generatedClassParents,
             $generatedClassDependencies,
             $includeSignalConnectionSupport,
+            $this->linkModules,
+            $this->importIncludeRoots,
         );
     }
 
@@ -62,6 +68,17 @@ readonly class ExtensionBuildContext
     public function metadataDir(): string
     {
         return $this->buildRootDir . '/generated';
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function compileIncludeRoots(): array
+    {
+        return array_values(array_unique([
+            ...$this->installation->includeRoots,
+            ...$this->importIncludeRoots,
+        ]));
     }
 
     /**
@@ -199,9 +216,10 @@ readonly class ExtensionBuildContext
      */
     public function moduleLibraryNames(): array
     {
+        $modules = $this->linkModules !== [] ? $this->linkModules : $this->modules;
         $libraries = array_map(
             fn(string $module): string => $this->libraryNameForModule($module),
-            $this->modules,
+            $modules,
         );
 
         return array_values(array_unique($libraries));

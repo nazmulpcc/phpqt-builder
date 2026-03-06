@@ -24,7 +24,13 @@
 @endif
 
 #ifndef PHP_QT_API
-#define PHP_QT_API
+# if defined(PHP_WIN32)
+#  define PHP_QT_API __declspec(dllexport)
+# elif defined(__GNUC__) && __GNUC__ >= 4
+#  define PHP_QT_API __attribute__ ((visibility("default")))
+# else
+#  define PHP_QT_API
+# endif
 #endif
 
 /* ------------------------------------------------------------------ */

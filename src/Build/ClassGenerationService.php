@@ -36,6 +36,7 @@ class ClassGenerationService
         array $includePaths,
         array $allowedClasses = [],
         array $classHeaders = [],
+        bool $preferExternalDependencyReasons = false,
     ): ClassGenerationResult
     {
         $facts = $this->prepareDiscoveryFacts($headerPath, $className, $includePaths);
@@ -86,13 +87,15 @@ class ClassGenerationService
             return ClassGenerationResult::skipped(
                 $className,
                 $headerPath,
-                'unsupported_parent_class',
-                sprintf('Parent class %s is not available for generation.', $parentClass),
+                $preferExternalDependencyReasons ? 'unsupported_external_module_dependency' : 'unsupported_parent_class',
+                $preferExternalDependencyReasons
+                    ? sprintf('Parent class %s requires unavailable external module ABI.', $parentClass)
+                    : sprintf('Parent class %s is not available for generation.', $parentClass),
             );
             }
         }
 
-        $filtered = $this->methodPolicy->filter($classData, $allowedClasses);
+        $filtered = $this->methodPolicy->filter($classData, $allowedClasses, $preferExternalDependencyReasons);
         $signalFilter = $this->filterSignalCallbackMethods(
             $filtered['selected_methods'],
             $includePaths,
@@ -243,6 +246,7 @@ class ClassGenerationService
         string $headerPath,
         array $allowedClasses = [],
         array $preparedClassDataByClass = [],
+        bool $preferExternalDependencyReasons = false,
     ): ClassGenerationResult {
         $className = (string) ($classData['name'] ?? '');
         if ($className === '') {
@@ -279,13 +283,15 @@ class ClassGenerationService
             return ClassGenerationResult::skipped(
                 $className,
                 $headerPath,
-                'unsupported_parent_class',
-                sprintf('Parent class %s is not available for generation.', $parentClass),
+                $preferExternalDependencyReasons ? 'unsupported_external_module_dependency' : 'unsupported_parent_class',
+                $preferExternalDependencyReasons
+                    ? sprintf('Parent class %s requires unavailable external module ABI.', $parentClass)
+                    : sprintf('Parent class %s is not available for generation.', $parentClass),
             );
             }
         }
 
-        $filtered = $this->methodPolicy->filter($classData, $allowedClasses);
+        $filtered = $this->methodPolicy->filter($classData, $allowedClasses, $preferExternalDependencyReasons);
         $signalFilter = $this->filterSignalCallbackMethods(
             $filtered['selected_methods'],
             [],

@@ -44,7 +44,7 @@ class MethodExposurePolicy
      * @param list<string> $allowedClasses
      * @return array{selected_methods: list<array<string, mixed>>, skipped_methods: list<array<string, string>>}
      */
-    public function filter(array $classData, array $allowedClasses = []): array
+    public function filter(array $classData, array $allowedClasses = [], bool $preferExternalDependencyReasons = false): array
     {
         $selectedMethods = [];
         $skippedMethods = [];
@@ -82,6 +82,7 @@ class MethodExposurePolicy
                 $hasPublicDefaultConstructor,
                 $hasPublicDestructor,
                 $isAbstractClass,
+                $preferExternalDependencyReasons,
             );
             foreach ($result['selected'] as $selectedVariant) {
                 $selectedMethods[] = $selectedVariant;
@@ -116,6 +117,7 @@ class MethodExposurePolicy
         bool $hasPublicDefaultConstructor,
         bool $hasPublicDestructor,
         bool $isAbstractClass,
+        bool $preferExternalDependencyReasons = false,
     ): array
     {
         if ($this->isFilteredMethodName($methodName)) {
@@ -152,6 +154,7 @@ class MethodExposurePolicy
                 $hasPublicDefaultConstructor,
                 $hasPublicDestructor,
                 $isAbstractClass,
+                $preferExternalDependencyReasons,
             );
             if ($unsupportedReason !== null) {
                 $skipped[] = [
@@ -251,6 +254,7 @@ class MethodExposurePolicy
         bool $hasPublicDefaultConstructor = true,
         bool $hasPublicDestructor = true,
         bool $isAbstractClass = false,
+        bool $preferExternalDependencyReasons = false,
     ): ?array
     {
         $access = (string) ($variant['access'] ?? 'unknown');
@@ -304,6 +308,20 @@ class MethodExposurePolicy
             return ['code' => 'unsupported_buffer_return', 'message' => sprintf('Return type %s exposes a raw internal buffer.', $returnType)];
         }
 
+        $externalReturnDependency = $preferExternalDependencyReasons
+            ? $this->unavailableExternalClassDependency($returnType, $className, $allowedClasses)
+            : null;
+        if ($externalReturnDependency !== null) {
+            return [
+                'code' => 'unsupported_external_module_dependency',
+                'message' => sprintf(
+                    'Return type %s requires unavailable external class %s.',
+                    $returnType,
+                    $externalReturnDependency,
+                ),
+            ];
+        }
+
         if (!$this->isSupportedType($returnType, $className, $allowedClasses, true, $flagAliases, $enumNames)) {
             return ['code' => 'unsupported_return_type', 'message' => sprintf('Return type %s is not supported.', $returnType)];
         }
@@ -313,12 +331,53 @@ class MethodExposurePolicy
             if ($this->isUnsupportedWritableByRefParameter($type)) {
                 return ['code' => 'unsupported_output_parameter', 'message' => sprintf('Parameter type %s looks like an output parameter.', $type)];
             }
+            $externalParameterDependency = $preferExternalDependencyReasons
+                ? $this->unavailableExternalClassDependency($type, $className, $allowedClasses)
+                : null;
+            if ($externalParameterDependency !== null) {
+                return [
+                    'code' => 'unsupported_external_module_dependency',
+                    'message' => sprintf(
+                        'Parameter type %s requires unavailable external class %s.',
+                        $type,
+                        $externalParameterDependency,
+                    ),
+                ];
+            }
             if (!$this->isSupportedType($type, $className, $allowedClasses, false, $flagAliases, $enumNames)) {
                 return ['code' => 'unsupported_parameter_type', 'message' => sprintf('Parameter type %s is not supported.', $type)];
             }
         }
 
         return null;
+    }
+
+    /**
+     * @param list<string> $allowedClasses
+     */
+    private function unavailableExternalClassDependency(string $cppType, string $className, array $allowedClasses): ?string
+    {
+        $trimmed = trim($cppType);
+        if ($trimmed === '') {
+            return null;
+        }
+
+        if ($this->containerBridge->isSupported($trimmed)) {
+            foreach ($this->containerBridge->classRefs($trimmed) as $classRef) {
+                if ($classRef !== $className && !in_array($classRef, $allowedClasses, true)) {
+                    return $classRef;
+                }
+            }
+
+            return null;
+        }
+
+        $phpType = $this->typeMapper->map($trimmed);
+        if (!$this->typeBridge->isObjectType($phpType) || $phpType === $className) {
+            return null;
+        }
+
+        return in_array($phpType, $allowedClasses, true) ? null : $phpType;
     }
 
     /**

@@ -57,7 +57,13 @@ class ExtensionGenerator
      * @param array<string, string> $classNamespaces Class-to-namespace map used for stub generation
      * @return list<string> List of files written (absolute paths)
      */
-    public function generate(PhpClass $phpClass, string $namespace, string $outputDir, array $classNamespaces = []): array
+    public function generate(
+        PhpClass $phpClass,
+        string $namespace,
+        string $outputDir,
+        array $classNamespaces = [],
+        bool $emitSignalConnectionSupport = true,
+    ): array
     {
         $this->lastWriteStats = new FileWriteStats();
         $ctx = new ClassContext($phpClass, $namespace, $this->typeBridge, $classNamespaces);
@@ -90,8 +96,8 @@ class ExtensionGenerator
         $this->lastWriteStats->record($stubResult);
         $files[] = $stubFile;
 
-        if ($ctx->hasSignals()) {
-            $files = [...$files, ...$this->generateSignalConnectionSupport($outputDir)];
+        if ($emitSignalConnectionSupport && $ctx->hasSignals()) {
+            $files = [...$files, ...$this->writeSignalConnectionSupport($outputDir)];
         }
 
         return $files;
@@ -124,6 +130,16 @@ class ExtensionGenerator
     }
 
     /**
+     * @return list<string>
+     */
+    public function generateSignalConnectionSupport(string $outputDir): array
+    {
+        $this->lastWriteStats = new FileWriteStats();
+
+        return $this->writeSignalConnectionSupport($outputDir);
+    }
+
+    /**
      * Clean up Blade output: remove excessive blank lines, trim trailing whitespace.
      */
     private function cleanOutput(string $content): string
@@ -143,7 +159,7 @@ class ExtensionGenerator
     /**
      * @return list<string>
      */
-    private function generateSignalConnectionSupport(string $outputDir): array
+    private function writeSignalConnectionSupport(string $outputDir): array
     {
         $files = [];
 
