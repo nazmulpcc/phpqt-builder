@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace QtBuilder\Filtering;
 
+use QtBuilder\Build\EnumHolderRegistry;
 use QtBuilder\CodeGen\ContainerBridge;
 use QtBuilder\CodeGen\TypeBridge;
 use QtBuilder\Parsing\CppToPhpTypeMapper;
@@ -44,7 +45,12 @@ class MethodExposurePolicy
      * @param list<string> $allowedClasses
      * @return array{selected_methods: list<array<string, mixed>>, skipped_methods: list<array<string, string>>}
      */
-    public function filter(array $classData, array $allowedClasses = [], bool $preferExternalDependencyReasons = false): array
+    public function filter(
+        array $classData,
+        array $allowedClasses = [],
+        bool $preferExternalDependencyReasons = false,
+        ?EnumHolderRegistry $enumRegistry = null,
+    ): array
     {
         $selectedMethods = [];
         $skippedMethods = [];
@@ -83,6 +89,7 @@ class MethodExposurePolicy
                 $hasPublicDestructor,
                 $isAbstractClass,
                 $preferExternalDependencyReasons,
+                $enumRegistry,
             );
             foreach ($result['selected'] as $selectedVariant) {
                 $selectedMethods[] = $selectedVariant;
@@ -118,6 +125,7 @@ class MethodExposurePolicy
         bool $hasPublicDestructor,
         bool $isAbstractClass,
         bool $preferExternalDependencyReasons = false,
+        ?EnumHolderRegistry $enumRegistry = null,
     ): array
     {
         if ($this->isFilteredMethodName($methodName)) {
@@ -155,6 +163,7 @@ class MethodExposurePolicy
                 $hasPublicDestructor,
                 $isAbstractClass,
                 $preferExternalDependencyReasons,
+                $enumRegistry,
             );
             if ($unsupportedReason !== null) {
                 $skipped[] = [
@@ -165,7 +174,7 @@ class MethodExposurePolicy
                 continue;
             }
 
-            $normalizedVariant = $this->normalizeSpecialTypes($className, $variant, $flagAliases, $enumNames, $isAbstractClass);
+            $normalizedVariant = $this->normalizeSpecialTypes($className, $variant, $flagAliases, $enumNames, $isAbstractClass, $enumRegistry);
             $dispatchSignature = $this->dispatchSignature($normalizedVariant);
             $score = $this->score($normalizedVariant);
             $existing = $selectedByDispatch[$dispatchSignature] ?? null;
@@ -255,6 +264,7 @@ class MethodExposurePolicy
         bool $hasPublicDestructor = true,
         bool $isAbstractClass = false,
         bool $preferExternalDependencyReasons = false,
+        ?EnumHolderRegistry $enumRegistry = null,
     ): ?array
     {
         $access = (string) ($variant['access'] ?? 'unknown');
@@ -322,7 +332,7 @@ class MethodExposurePolicy
             ];
         }
 
-        if (!$this->isSupportedType($returnType, $className, $allowedClasses, true, $flagAliases, $enumNames)) {
+        if (!$this->isSupportedType($returnType, $className, $allowedClasses, true, $flagAliases, $enumNames, $enumRegistry)) {
             return ['code' => 'unsupported_return_type', 'message' => sprintf('Return type %s is not supported.', $returnType)];
         }
 
@@ -344,7 +354,7 @@ class MethodExposurePolicy
                     ),
                 ];
             }
-            if (!$this->isSupportedType($type, $className, $allowedClasses, false, $flagAliases, $enumNames)) {
+            if (!$this->isSupportedType($type, $className, $allowedClasses, false, $flagAliases, $enumNames, $enumRegistry)) {
                 return ['code' => 'unsupported_parameter_type', 'message' => sprintf('Parameter type %s is not supported.', $type)];
             }
         }
@@ -476,7 +486,15 @@ class MethodExposurePolicy
      * @param array<string, string> $flagAliases
      * @param list<string> $enumNames
      */
-    private function isSupportedType(string $cppType, string $className, array $allowedClasses, bool $isReturn, array $flagAliases = [], array $enumNames = []): bool
+    private function isSupportedType(
+        string $cppType,
+        string $className,
+        array $allowedClasses,
+        bool $isReturn,
+        array $flagAliases = [],
+        array $enumNames = [],
+        ?EnumHolderRegistry $enumRegistry = null,
+    ): bool
     {
         $trimmed = trim($cppType);
         if ($trimmed === '') {
@@ -511,6 +529,10 @@ class MethodExposurePolicy
         }
 
         if ($this->isEnumOrFlagType($trimmed, $className, $flagAliases, $enumNames)) {
+            return true;
+        }
+
+        if ($enumRegistry?->supportsType($trimmed) === true) {
             return true;
         }
 
@@ -628,12 +650,19 @@ class MethodExposurePolicy
      * @param list<string> $enumNames
      * @return array<string, mixed>
      */
-    private function normalizeSpecialTypes(string $className, array $variant, array $flagAliases, array $enumNames = [], bool $isAbstractClass = false): array
+    private function normalizeSpecialTypes(
+        string $className,
+        array $variant,
+        array $flagAliases,
+        array $enumNames = [],
+        bool $isAbstractClass = false,
+        ?EnumHolderRegistry $enumRegistry = null,
+    ): array
     {
-        $variant['return_type'] = $this->normalizeEnumType($className, (string) $variant['return_type'], $flagAliases, $enumNames);
+        $variant['return_type'] = $this->normalizeEnumType($className, (string) $variant['return_type'], $flagAliases, $enumNames, $enumRegistry);
         $variant['parameters'] = array_map(
-            function (array $parameter) use ($className, $flagAliases, $enumNames): array {
-                $parameter['type'] = $this->normalizeEnumType($className, (string) ($parameter['type'] ?? ''), $flagAliases, $enumNames);
+            function (array $parameter) use ($className, $flagAliases, $enumNames, $enumRegistry): array {
+                $parameter['type'] = $this->normalizeEnumType($className, (string) ($parameter['type'] ?? ''), $flagAliases, $enumNames, $enumRegistry);
 
                 return $parameter;
             },
@@ -651,7 +680,13 @@ class MethodExposurePolicy
      * @param array<string, string> $flagAliases
      * @param list<string> $enumNames
      */
-    private function normalizeEnumType(string $className, string $cppType, array $flagAliases = [], array $enumNames = []): string
+    private function normalizeEnumType(
+        string $className,
+        string $cppType,
+        array $flagAliases = [],
+        array $enumNames = [],
+        ?EnumHolderRegistry $enumRegistry = null,
+    ): string
     {
         $trimmed = trim($cppType);
 
@@ -691,6 +726,10 @@ class MethodExposurePolicy
         }
 
         if (!$this->isEnumOrFlagType($trimmed, $className, $flagAliases, $enumNames)) {
+            if ($enumRegistry?->supportsType($trimmed) === true) {
+                return $trimmed;
+            }
+
             return $trimmed;
         }
 

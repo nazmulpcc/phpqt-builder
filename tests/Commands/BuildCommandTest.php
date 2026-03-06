@@ -274,6 +274,91 @@ it('generates synthetic QList parents for supported list-derived classes', funct
         ->and($summary['skipped_classes'])->toBe(1);
 });
 
+it('generates enum holder classes and unblocks enum-based methods', function (): void {
+    $fixtureRoot = qt_fixture_path('enum-qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-enums-' . bin2hex(random_bytes(4));
+    $outputDir = $buildRoot . '/ext';
+    $metadataDir = $buildRoot . '/generated';
+    $bootstrapper = new FakeExtensionBootstrapper();
+
+    $result = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            'modules' => 'QtCore,QtSql',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+            '--no-build' => true,
+        ],
+    );
+
+    expect($result)->toBeSuccessfulCommandResult()
+        ->and(is_file($outputDir . '/classes/qt_enum_qt_connection_type.stub.php'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_enum_qt_connection_types.stub.php'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_enum_qt_core_q_connection_carrier_mode.stub.php'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_enum_qt_core_q_connection_carrier_modes.stub.php'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_enum_qt_sql_q_sql_param_type_flag.stub.php'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_enum_qt_sql_q_sql_param_type.stub.php'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_enum_qt_sql_q_sql_table_type.stub.php'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_qconnectioncarrier.stub.php'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_qsqlquerylike.stub.php'))->toBeTrue();
+
+    $globalEnumStub = (string) file_get_contents($outputDir . '/classes/qt_enum_qt_connection_type.stub.php');
+    expect($globalEnumStub)->toContain(
+        'namespace Qt;',
+        'final class ConnectionType',
+        'public const int AutoConnection = 0;',
+        'public const int DirectConnection = 1;',
+    );
+
+    $classEnumStub = (string) file_get_contents($outputDir . '/classes/qt_enum_qt_core_q_connection_carrier_modes.stub.php');
+    expect($classEnumStub)->toContain(
+        'namespace Qt\\Core\\QConnectionCarrier;',
+        'final class Modes',
+        'public const int Idle = 0;',
+        'public const int Busy = 1;',
+    );
+
+    $namespaceEnumStub = (string) file_get_contents($outputDir . '/classes/qt_enum_qt_sql_q_sql_param_type.stub.php');
+    expect($namespaceEnumStub)->toContain(
+        'namespace Qt\\Sql\\QSql;',
+        'final class ParamType',
+        'public const int In = 1;',
+        'public const int Out = 2;',
+        'public const int InOut = 3;',
+        'public const int Binary = 4;',
+    );
+
+    $carrierStub = (string) file_get_contents($outputDir . '/classes/qt_qconnectioncarrier.stub.php');
+    expect($carrierStub)->toContain(
+        'public function setConnectionType(int $type): void',
+        'public function connectionType(): int',
+        'public function setConnectionFlags(int $flags): void',
+        'public function connectionFlags(): int',
+        'public function setMode(int $mode): void',
+        'public function mode(): int',
+        'public function setModes(int $modes): void',
+        'public function modes(): int',
+    );
+
+    $sqlStub = (string) file_get_contents($outputDir . '/classes/qt_qsqlquerylike.stub.php');
+    expect($sqlStub)->toContain(
+        'public function bindValue(int $position, int $value, int $type): void',
+        'public function bindingType(): int',
+        'public function tableType(): int',
+    );
+
+    $classmap = qt_decode_json((string) file_get_contents($metadataDir . '/classmap.json'));
+    expect(array_column($classmap, 'class'))->toBe(['QConnectionCarrier', 'QSqlQueryLike']);
+
+    $skippedMethods = qt_decode_json((string) file_get_contents($metadataDir . '/skipped_methods.json'));
+    $enumBlockedMethods = array_values(array_filter(
+        $skippedMethods,
+        static fn(array $entry): bool => in_array($entry['class'] ?? '', ['QConnectionCarrier', 'QSqlQueryLike'], true),
+    ));
+    expect($enumBlockedMethods)->toBe([]);
+});
+
 it('auto-adds static manifest dependencies for monolithic builds', function (): void {
     $fixtureRoot = qt_fixture_path('module-split-qt');
     $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-expanded-' . bin2hex(random_bytes(4));

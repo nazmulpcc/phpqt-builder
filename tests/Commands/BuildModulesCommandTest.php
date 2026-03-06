@@ -331,6 +331,45 @@ it('supports generating split module trees without bootstrapping', function (): 
         ->and($qtWidgetsSummary['bootstrap'])->toBeNull();
 });
 
+it('generates enum holder classes into their owning split modules', function (): void {
+    $fixtureRoot = qt_fixture_path('enum-qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-modules-enums-' . bin2hex(random_bytes(4));
+    $qtCoreRoot = $buildRoot . '/QtCore';
+    $qtSqlRoot = $buildRoot . '/QtSql';
+    $sharedClassesDir = $buildRoot . '/ext/classes';
+    $bootstrapper = new FakeExtensionBootstrapper();
+
+    $result = qt_command_result(
+        new BuildModulesCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            'modules' => 'QtCore,QtSql',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+            '--no-build' => true,
+        ],
+    );
+
+    expect($result)->toBeSuccessfulCommandResult()
+        ->and(is_file($qtCoreRoot . '/ext/classes/qt_enum_qt_connection_type.stub.php'))->toBeTrue()
+        ->and(is_file($qtCoreRoot . '/ext/classes/qt_enum_qt_core_q_connection_carrier_mode.stub.php'))->toBeTrue()
+        ->and(is_file($qtSqlRoot . '/ext/classes/qt_enum_qt_sql_q_sql_param_type.stub.php'))->toBeTrue()
+        ->and(is_file($qtSqlRoot . '/ext/classes/qt_enum_qt_sql_q_sql_table_type.stub.php'))->toBeTrue()
+        ->and(is_file($sharedClassesDir . '/qt_enum_qt_connection_type.h'))->toBeFalse()
+        ->and(is_file($sharedClassesDir . '/qt_enum_qt_sql_q_sql_param_type.h'))->toBeFalse();
+
+    $qtCoreStub = (string) file_get_contents($qtCoreRoot . '/ext/classes/qt_enum_qt_connection_types.stub.php');
+    expect($qtCoreStub)->toContain('namespace Qt;', 'final class ConnectionTypes');
+
+    $qtSqlStub = (string) file_get_contents($qtSqlRoot . '/ext/classes/qt_enum_qt_sql_q_sql_param_type_flag.stub.php');
+    expect($qtSqlStub)->toContain('namespace Qt\\Sql\\QSql;', 'final class ParamTypeFlag');
+
+    $qtSqlManifest = qt_decode_json((string) file_get_contents($qtSqlRoot . '/generated/module_abi.json'));
+    expect($qtSqlManifest['module'])->toBe('QtSql')
+        ->and($qtSqlManifest['dependency_modules'])->toBe(['QtCore'])
+        ->and($qtSqlManifest['classes'])->toBe(['QSqlQueryLike']);
+});
+
 it('builds unmapped split modules with a manifest warning', function (): void {
     $fixtureRoot = qt_fixture_path('module-split-qt');
     $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-modules-unmapped-' . bin2hex(random_bytes(4));

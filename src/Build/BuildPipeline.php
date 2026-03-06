@@ -82,6 +82,7 @@ class BuildPipeline
                     generatedClassHeaders: [],
                     generatedClassModules: [],
                     classNamespaces: [],
+                    enumHolders: [],
                     moduleMethodTotals: [],
                     moduleAcceptedMethodTotals: [],
                     moduleGeneratedMethodTotals: [],
@@ -141,6 +142,7 @@ class BuildPipeline
                 generatedClassHeaders: [],
                 generatedClassModules: [],
                 classNamespaces: [],
+                enumHolders: [],
                 moduleMethodTotals: $moduleMethodTotals,
                 moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
                 moduleGeneratedMethodTotals: [],
@@ -152,6 +154,15 @@ class BuildPipeline
         $acceptedCandidates = $classStructures['accepted_candidates'];
         $skippedClasses = [...$skippedClasses, ...$classStructures['skipped_classes']];
 
+        $classNamespaces = $this->classNamespaces($acceptedCandidates, $request->importedAbi);
+        $enumRegistry = (new EnumHolderExtractor())->extract(
+            $request->installation->includeRoots,
+            $acceptedCandidates,
+            $skippedClasses,
+            $classStructures['prepared_class_data'],
+            $classNamespaces,
+        );
+
         $output->writeln('<info>Evaluating generated class set from cached class structures...</info>');
         $generation = $this->resolveGeneratedCandidates(
             $acceptedCandidates,
@@ -160,6 +171,7 @@ class BuildPipeline
             $classStructures['prepared_class_data'],
             $output,
             $request->importedAbi,
+            $enumRegistry,
         );
 
         $acceptedCandidates = $generation['accepted_candidates'];
@@ -205,9 +217,10 @@ class BuildPipeline
             generatedClassHeaders: $generation['generated_class_headers'],
             generatedClassModules: $generation['generated_class_modules'],
             classNamespaces: array_replace(
-                $this->classNamespaces($acceptedCandidates, $request->importedAbi),
+                $classNamespaces,
                 $generation['synthetic_class_namespaces'] ?? [],
             ),
+            enumHolders: $enumRegistry->holdersForModules($request->modules),
             moduleMethodTotals: $moduleMethodTotals,
             moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
             moduleGeneratedMethodTotals: $generation['module_generated_method_totals'] ?? [],
@@ -245,6 +258,7 @@ class BuildPipeline
             $analysis->generatedClasses,
             $analysis->generatedClassParents,
             $analysis->generatedClassDependencies,
+            $analysis->enumHolders,
             $analysis->requiresSignalConnectionSupport || $request->forceSignalConnectionSupport,
         );
 
@@ -502,6 +516,7 @@ class BuildPipeline
         array $preparedClassDataByClass,
         OutputInterface $output,
         ?ImportedModuleAbi $importedAbi = null,
+        ?EnumHolderRegistry $enumRegistry = null,
     ): array {
         $generationService = new ClassGenerationService();
         $currentCandidates = array_values($acceptedCandidates);
@@ -594,6 +609,7 @@ class BuildPipeline
                     $availableClasses,
                     $allPreparedClassData,
                     $importedAbi !== null,
+                    $enumRegistry,
                 );
                 unset($errorsByClass[$result->className]);
 
@@ -1001,6 +1017,11 @@ class BuildPipeline
 
         if ($context->includeBuildInfoSupport) {
             $generator->generateBuildInfoSupport($outputDir, $context);
+            $fileWriteStats->merge($generator->lastWriteStats());
+        }
+
+        foreach ($context->enumHolders as $holder) {
+            $generator->generateEnumHolderSupport($outputDir, $holder);
             $fileWriteStats->merge($generator->lastWriteStats());
         }
 
