@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 use QtBuilder\Tests\Runtime\Support\QtRuntimeProcessRunner;
 
-it('loads qtcore before qtwidgets in split module builds', function (): void {
+it('loads dependency-ordered split modules for qtwidgets builds', function (): void {
     $result = QtRuntimeProcessRunner::runFixtureWithModules(
         'Modules/qtcore_qtwidgets_smoke.php',
-        ['QtCore', 'QtWidgets'],
+        ['QtWidgets'],
     );
 
     if ($result->isSkipped()) {

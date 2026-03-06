@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace QtBuilder\Build;
 
 use QtBuilder\CodeGen\ExtensionGenerator;
+use QtBuilder\Containers\QListSpecializationResolver;
 use QtBuilder\IO\FileWriteStats;
 use QtBuilder\Scanning\HeaderCandidate;
 use Symfony\Component\Console\Helper\ProgressBar;
@@ -203,7 +204,10 @@ class BuildPipeline
             generatedClassDependencies: $generation['generated_class_dependencies'],
             generatedClassHeaders: $generation['generated_class_headers'],
             generatedClassModules: $generation['generated_class_modules'],
-            classNamespaces: $this->classNamespaces($acceptedCandidates, $request->importedAbi),
+            classNamespaces: array_replace(
+                $this->classNamespaces($acceptedCandidates, $request->importedAbi),
+                $generation['synthetic_class_namespaces'] ?? [],
+            ),
             moduleMethodTotals: $moduleMethodTotals,
             moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
             moduleGeneratedMethodTotals: $generation['module_generated_method_totals'] ?? [],
@@ -462,6 +466,7 @@ class BuildPipeline
      *   generated_class_dependencies: array<string, list<string>>,
      *   generated_class_headers: array<string, string>,
      *   generated_class_modules: array<string, string>,
+     *   synthetic_class_namespaces: array<string, string>,
      *   skipped_classes: list<array<string, string|null>>,
      *   skipped_methods: list<array<string, string>>,
      *   errors: list<array<string, string|null>>,
@@ -633,6 +638,22 @@ class BuildPipeline
             $currentAllowedClasses = $generatedClasses;
         } while (!$stable && $errorsByClass === [] && $currentCandidates !== []);
 
+        $syntheticClasses = $this->synthesizeListWrapperClasses(
+            $generatedPhpClasses,
+            $preparedClassDataByClass,
+            $generatedClassHeaders,
+        );
+        foreach ($syntheticClasses['generated_php_classes'] as $className => $phpClass) {
+            $generatedPhpClasses[$className] = $phpClass;
+            $generatedClassParents[$className] = $syntheticClasses['generated_class_parents'][$className] ?? null;
+            $generatedClassDependencies[$className] = $syntheticClasses['generated_class_dependencies'][$className] ?? [];
+            $generatedClassHeaders[$className] = $syntheticClasses['generated_class_headers'][$className] ?? '';
+            $generatedClassModules[$className] = $syntheticClasses['generated_class_modules'][$className] ?? 'QtCore';
+            $generatedClasses[] = $className;
+        }
+        $generatedClasses = array_values(array_unique($generatedClasses));
+        sort($generatedClasses);
+
         $requiresSignalConnectionSupport = false;
         foreach ($generatedPhpClasses as $phpClass) {
             if ($phpClass->signals !== []) {
@@ -650,7 +671,7 @@ class BuildPipeline
 
         $moduleGeneratedMethodTotals = [];
         foreach ($generatedPhpClasses as $className => $phpClass) {
-            $module = $candidateModules[$className] ?? null;
+            $module = $generatedClassModules[$className] ?? $candidateModules[$className] ?? null;
             if ($module === null || $module === '') {
                 continue;
             }
@@ -667,12 +688,223 @@ class BuildPipeline
             'generated_class_dependencies' => $generatedClassDependencies,
             'generated_class_headers' => $generatedClassHeaders,
             'generated_class_modules' => $generatedClassModules,
+            'synthetic_class_namespaces' => $syntheticClasses['class_namespaces'],
             'skipped_classes' => array_values($skippedByClass),
             'skipped_methods' => $skippedMethods,
             'errors' => array_values($errorsByClass),
             'passes' => $passes,
             'requires_signal_connection_support' => $requiresSignalConnectionSupport,
         ];
+    }
+
+    /**
+     * @param array<string, \QtBuilder\Definition\PhpClass> $generatedPhpClasses
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @param array<string, string> $generatedClassHeaders
+     * @return array{
+     *   generated_php_classes: array<string, \QtBuilder\Definition\PhpClass>,
+     *   generated_class_parents: array<string, string|null>,
+     *   generated_class_dependencies: array<string, list<string>>,
+     *   generated_class_headers: array<string, string>,
+     *   generated_class_modules: array<string, string>,
+     *   class_namespaces: array<string, string>
+     * }
+     */
+    private function synthesizeListWrapperClasses(
+        array $generatedPhpClasses,
+        array $preparedClassDataByClass,
+        array $generatedClassHeaders,
+    ): array
+    {
+        $resolver = new QListSpecializationResolver();
+        $availableClasses = array_keys($generatedPhpClasses);
+        $syntheticPhpClasses = [];
+        $syntheticParents = [];
+        $syntheticDependencies = [];
+        $syntheticHeaders = [];
+        $syntheticModules = [];
+        $syntheticNamespaces = [];
+
+        foreach ($generatedPhpClasses as $className => $phpClass) {
+            if (!$resolver->isSyntheticListClassName($phpClass->parent ?? '')) {
+                continue;
+            }
+
+            $headerPath = $generatedClassHeaders[$className] ?? null;
+            if (!is_string($headerPath) || $headerPath === '') {
+                continue;
+            }
+
+            $sourceBases = $this->classBaseDeclarationsFromSource($headerPath, $className);
+            $specialization = null;
+            foreach ($sourceBases as $baseClass) {
+                $specialization = $resolver->specializationFor($baseClass);
+                if ($specialization !== null) {
+                    break;
+                }
+            }
+            if ($specialization === null || isset($syntheticPhpClasses[$specialization->className])) {
+                continue;
+            }
+
+            $syntheticClass = $resolver->buildPhpClass($specialization, $availableClasses);
+            $syntheticPhpClasses[$specialization->className] = $syntheticClass;
+            $syntheticParents[$specialization->className] = null;
+            $syntheticDependencies[$specialization->className] = $this->classDependenciesForPhpClass($syntheticClass);
+            $syntheticHeaders[$specialization->className] = 'synthetic:' . $specialization->rawType;
+            $syntheticModules[$specialization->className] = 'QtCore';
+            $syntheticNamespaces[$specialization->className] = 'Qt\\Core';
+            $availableClasses[] = $specialization->className;
+            $availableClasses = array_values(array_unique($availableClasses));
+        }
+
+        return [
+            'generated_php_classes' => $syntheticPhpClasses,
+            'generated_class_parents' => $syntheticParents,
+            'generated_class_dependencies' => $syntheticDependencies,
+            'generated_class_headers' => $syntheticHeaders,
+            'generated_class_modules' => $syntheticModules,
+            'class_namespaces' => $syntheticNamespaces,
+        ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function classBaseDeclarationsFromSource(string $headerPath, string $className): array
+    {
+        $contents = @file_get_contents($headerPath);
+        if (!is_string($contents) || $contents === '') {
+            return [];
+        }
+
+        $pattern = sprintf(
+            '/(?:^|\n)\s*(?:class|struct)\s+(?:[A-Za-z_][A-Za-z0-9_]*\s+)*%s\b(?P<bases>\s*:[^{]+)?\s*\{/s',
+            preg_quote($className, '/'),
+        );
+        if (preg_match($pattern, $contents, $matches) !== 1) {
+            return [];
+        }
+
+        $basesClause = is_string($matches['bases'] ?? null) ? trim($matches['bases']) : '';
+        if ($basesClause === '' || !str_starts_with($basesClause, ':')) {
+            return [];
+        }
+
+        $basesClause = trim(substr($basesClause, 1));
+        if ($basesClause === '') {
+            return [];
+        }
+
+        $bases = [];
+        foreach ($this->splitTopLevelBaseList($basesClause) as $base) {
+            $base = preg_replace('/\b(public|protected|private|virtual)\b/', ' ', $base) ?? $base;
+            $base = trim(preg_replace('/\s+/', ' ', $base) ?? $base);
+            if ($base !== '') {
+                $bases[] = $base;
+            }
+        }
+
+        return $bases;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function splitTopLevelBaseList(string $basesClause): array
+    {
+        $parts = [];
+        $current = '';
+        $depth = 0;
+        $length = strlen($basesClause);
+
+        for ($i = 0; $i < $length; $i++) {
+            $char = $basesClause[$i];
+
+            if ($char === '<') {
+                $depth++;
+                $current .= $char;
+                continue;
+            }
+
+            if ($char === '>') {
+                $depth = max(0, $depth - 1);
+                $current .= $char;
+                continue;
+            }
+
+            if ($char === ',' && $depth === 0) {
+                $parts[] = trim($current);
+                $current = '';
+                continue;
+            }
+
+            $current .= $char;
+        }
+
+        if (trim($current) !== '') {
+            $parts[] = trim($current);
+        }
+
+        return $parts;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function classDependenciesForPhpClass(\QtBuilder\Definition\PhpClass $phpClass): array
+    {
+        $dependencies = [];
+
+        foreach ($phpClass->methods as $method) {
+            foreach ($this->phpTypeParts($method->returnType) as $type) {
+                $dependencies[$type] = true;
+            }
+
+            foreach ($method->parameters as $parameter) {
+                foreach ($this->phpTypeParts($parameter->phpType) as $type) {
+                    $dependencies[$type] = true;
+                }
+            }
+        }
+
+        unset($dependencies[$phpClass->name]);
+
+        $resolved = array_keys($dependencies);
+        sort($resolved);
+
+        return $resolved;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function phpTypeParts(string $phpType): array
+    {
+        $parts = [];
+
+        foreach (explode('|', $phpType) as $part) {
+            $part = trim($part);
+            if ($part === '' || $part === 'null' || $part === 'mixed') {
+                continue;
+            }
+
+            if (in_array($part, ['int', 'float', 'string', 'bool', 'array', 'void'], true)) {
+                continue;
+            }
+
+            $part = ltrim($part, '\\');
+            if (str_contains($part, '\\')) {
+                $segments = explode('\\', $part);
+                $part = end($segments) ?: $part;
+            }
+
+            if ($part !== '') {
+                $parts[] = $part;
+            }
+        }
+
+        return array_values(array_unique($parts));
     }
 
     /**

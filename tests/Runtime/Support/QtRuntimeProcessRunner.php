@@ -51,6 +51,11 @@ final class QtRuntimeProcessRunner
         return dirname(__DIR__) . '/Fixtures/' . ltrim($fixture, '/');
     }
 
+    public static function moduleGraphPath(): string
+    {
+        return dirname(__DIR__, 3) . '/build/generated/module_graph.json';
+    }
+
     public static function runFixture(string $fixture, array $env = [], int $timeout = 5): QtRuntimeProcessResult
     {
         $fixturePath = self::fixturePath($fixture);
@@ -75,12 +80,13 @@ final class QtRuntimeProcessRunner
             ]);
         }
 
+        $loadOrder = self::resolveModuleLoadOrder($modules);
         $extensions = [];
-        foreach ($modules as $module) {
+        foreach ($loadOrder as $module) {
             $path = self::moduleExtensionPath($module);
             if ($path === null) {
                 return new QtRuntimeProcessResult(77, '', '', [
-                    'reason' => sprintf('Built %s extension not found. Run `php qtb build:modules --modules=%s` first.', strtolower($module), implode(',', $modules)),
+                    'reason' => sprintf('Built %s extension not found. Run `php qtb build:modules --modules=%s` first.', strtolower($module), implode(',', $loadOrder)),
                 ]);
             }
 
@@ -88,6 +94,69 @@ final class QtRuntimeProcessRunner
         }
 
         return self::runScript($fixturePath, $env, $timeout, $extensions);
+    }
+
+    /**
+     * @param list<string> $modules
+     * @return list<string>
+     */
+    private static function resolveModuleLoadOrder(array $modules): array
+    {
+        $graphPath = self::moduleGraphPath();
+        if (!is_file($graphPath)) {
+            return array_values(array_unique($modules));
+        }
+
+        try {
+            $decoded = json_decode((string) file_get_contents($graphPath), true, 512, JSON_THROW_ON_ERROR);
+        } catch (\Throwable) {
+            return array_values(array_unique($modules));
+        }
+
+        if (!is_array($decoded)) {
+            return array_values(array_unique($modules));
+        }
+
+        /** @var array<string, list<string>> $dependencies */
+        $dependencies = [];
+        foreach (($decoded['dependencies'] ?? []) as $module => $moduleDependencies) {
+            if (!is_string($module) || !is_array($moduleDependencies)) {
+                continue;
+            }
+
+            $dependencies[$module] = array_values(array_filter($moduleDependencies, static fn (mixed $value): bool => is_string($value) && $value !== ''));
+        }
+
+        $needed = [];
+        $visit = static function (string $module) use (&$visit, &$needed, $dependencies): void {
+            if (isset($needed[$module])) {
+                return;
+            }
+
+            $needed[$module] = true;
+
+            foreach ($dependencies[$module] ?? [] as $dependency) {
+                $visit($dependency);
+            }
+        };
+
+        foreach ($modules as $module) {
+            $visit($module);
+        }
+
+        $resolved = [];
+        foreach (($decoded['build_order'] ?? []) as $module) {
+            if (is_string($module) && isset($needed[$module])) {
+                $resolved[] = $module;
+                unset($needed[$module]);
+            }
+        }
+
+        foreach (array_keys($needed) as $module) {
+            $resolved[] = $module;
+        }
+
+        return $resolved;
     }
 
     /**

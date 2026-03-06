@@ -193,6 +193,45 @@ it('generates abstract shells and concrete children', function (): void {
     expect($abstractStub)->toContain('abstract class QAbstractParentThing');
 });
 
+it('generates synthetic QList parents for supported list-derived classes', function (): void {
+    $fixtureRoot = qt_fixture_path('list-parent-qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-list-parent-' . bin2hex(random_bytes(4));
+    $outputDir = $buildRoot . '/ext';
+    $metadataDir = $buildRoot . '/generated';
+    $bootstrapper = new FakeExtensionBootstrapper();
+
+    $result = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            '--modules' => 'QtCore,QtGui',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+        ],
+    );
+
+    expect($result)->toBeSuccessfulCommandResult()
+        ->and(is_file($outputDir . '/classes/qt_qlistofqpoint.cpp'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_qpolygon.cpp'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_qpoint.cpp'))->toBeTrue();
+
+    $classmap = qt_decode_json((string) file_get_contents($metadataDir . '/classmap.json'));
+    expect(array_column($classmap, 'class'))->toBe(['QListOfQPoint', 'QPoint', 'QPolygon']);
+
+    $polygonStub = (string) file_get_contents($outputDir . '/classes/qt_qpolygon.stub.php');
+    expect($polygonStub)->toContain('class QPolygon extends \\Qt\\Core\\QListOfQPoint');
+
+    $listHeader = (string) file_get_contents($outputDir . '/classes/qt_qlistofqpoint.h');
+    expect($listHeader)->toContain('using QListOfQPoint = QList<QPoint>;');
+
+    $polygonHeader = (string) file_get_contents($outputDir . '/classes/qt_qpolygon.h');
+    expect($polygonHeader)->not->toContain('prevent_destroy');
+
+    $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
+    expect($summary['generated_classes'])->toBe(3)
+        ->and($summary['skipped_classes'])->toBe(1);
+});
+
 it('fails when a bootstrap step fails', function (): void {
     $fixtureRoot = qt_fixture_path('qt');
     $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-fail-' . bin2hex(random_bytes(4));
