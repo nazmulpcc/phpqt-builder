@@ -438,26 +438,20 @@ class BuildModulesCommand extends Command
         ));
 
         $moduleClassSet = array_fill_keys($this->generatedClassesForModule($analysis, $module), true);
-        foreach ($moduleSkippedClasses as $entry) {
-            $className = is_string($entry['class'] ?? null) ? $entry['class'] : null;
-            if ($className !== null && $className !== '') {
-                $moduleClassSet[$className] = true;
-            }
-        }
 
         $moduleSkippedMethods = array_values(array_filter(
             $analysis->skippedMethods,
-            static function (array $entry) use ($moduleClassSet, $analysis, $module): bool {
+            static function (array $entry) use ($moduleClassSet, $module): bool {
+                if (($entry['module'] ?? null) !== $module) {
+                    return false;
+                }
+
                 $className = is_string($entry['class'] ?? null) ? $entry['class'] : null;
                 if ($className === null || $className === '') {
                     return false;
                 }
 
-                if (isset($moduleClassSet[$className])) {
-                    return true;
-                }
-
-                return ($analysis->generatedClassModules[$className] ?? null) === $module;
+                return isset($moduleClassSet[$className]);
             },
         ));
 

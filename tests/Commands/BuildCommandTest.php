@@ -117,6 +117,13 @@ it('generates the extension tree from a fixture qt root', function (): void {
     $allowedClasses = qt_decode_json((string) file_get_contents($metadataDir . '/allowed_classes.json'));
     expect($allowedClasses)->toBe(['QAbstractItemModel', 'QModelIndex', 'QNode', 'QPoint', 'QTree']);
 
+    $skippedMethods = qt_decode_json((string) file_get_contents($metadataDir . '/skipped_methods.json'));
+    $skippedMethodClasses = array_values(array_unique(array_filter(array_column($skippedMethods, 'class'), 'is_string')));
+    expect($skippedMethods)->not->toBe([])
+        ->and(array_values(array_unique(array_column($skippedMethods, 'module'))))->toBe(['QtCore'])
+        ->and($skippedMethodClasses)->toBe(['QPoint'])
+        ->and(array_values(array_intersect($skippedMethodClasses, array_column($classmap, 'class'))))->toBe($skippedMethodClasses);
+
     $stub = (string) file_get_contents($outputDir . '/classes/qt_qtree.stub.php');
     expect($stub)->toContain('QNode|null $node = null');
 });

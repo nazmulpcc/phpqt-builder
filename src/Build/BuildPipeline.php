@@ -632,9 +632,16 @@ class BuildPipeline
                     ];
                 }
 
-                $skippedMethodsByClass[$result->className] = [];
-                foreach ($result->skippedMethods as $skippedMethod) {
-                    $skippedMethodsByClass[$result->className][] = ['class' => $result->className] + $skippedMethod;
+                if ($result->status === 'ok') {
+                    $skippedMethodsByClass[$result->className] = [];
+                    foreach ($result->skippedMethods as $skippedMethod) {
+                        $skippedMethodsByClass[$result->className][] = [
+                            'module' => $candidateModules[$result->className] ?? null,
+                            'class' => $result->className,
+                        ] + $skippedMethod;
+                    }
+                } else {
+                    unset($skippedMethodsByClass[$result->className]);
                 }
 
                 $progressBar?->advance();
