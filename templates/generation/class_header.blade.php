@@ -85,7 +85,7 @@ static inline {!! $ctx->objectStructName !!} *{!! $ctx->fromObjFunc !!}(zend_obj
 /* wrap_native — wrap an existing C++ pointer in a PHP object          */
 /* ------------------------------------------------------------------ */
 
-void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativeCppType !!} *native,
+PHP_QT_API void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativeCppType !!} *native,
     zend_class_entry *ce, bool prevent_destroy);
 
 @endif

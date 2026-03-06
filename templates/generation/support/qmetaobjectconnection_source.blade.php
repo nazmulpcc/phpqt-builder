@@ -42,7 +42,7 @@ static HashTable *qt_qmetaobjectconnection_get_gc(zend_object *object, zval **ta
     return zend_std_get_properties(object);
 }
 
-void qt_qmetaobjectconnection_wrap(zval *return_value, const QMetaObject::Connection &connection)
+PHP_QT_API void qt_qmetaobjectconnection_wrap(zval *return_value, const QMetaObject::Connection &connection)
 {
     object_init_ex(return_value, qt_ce_QMetaObjectConnection);
     qt_qmetaobjectconnection_object *intern = Z_QMETAOBJECTCONNECTION_P(return_value);

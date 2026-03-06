@@ -11,6 +11,7 @@ readonly class BuildExecutionRequest
     /**
      * @param list<string> $modules
      * @param list<string> $linkModules
+     * @param list<string> $importIncludeRoots
      */
     public function __construct(
         public QtInstallation $installation,
@@ -21,10 +22,12 @@ readonly class BuildExecutionRequest
         public string $extensionVersion,
         public int $jobs,
         public array $linkModules = [],
+        public array $importIncludeRoots = [],
         public ?ImportedModuleAbi $importedAbi = null,
         public bool $forceSignalConnectionSupport = false,
         public bool $writeAbiManifest = false,
         public bool $reuseDiscoveryCache = true,
+        public bool $bootstrapEnabled = true,
     ) {}
 
     /**

@@ -8,6 +8,8 @@ final readonly class ModuleAbiManifest
 {
     /**
      * @param list<string> $includeDirs
+     * @param list<string> $sharedIncludeDirs
+     * @param list<string> $dependencyModules
      * @param list<string> $classes
      * @param array<string, string> $classNamespaces
      */
@@ -20,6 +22,8 @@ final readonly class ModuleAbiManifest
         public string $acceptedCandidatesPath,
         public string $classCacheDir,
         public array $includeDirs,
+        public array $sharedIncludeDirs,
+        public array $dependencyModules,
         public array $classes,
         public array $classNamespaces,
         public bool $includesSignalConnectionSupport,
@@ -39,6 +43,8 @@ final readonly class ModuleAbiManifest
             'accepted_candidates_path' => $this->acceptedCandidatesPath,
             'class_cache_dir' => $this->classCacheDir,
             'include_dirs' => array_values($this->includeDirs),
+            'shared_include_dirs' => array_values($this->sharedIncludeDirs),
+            'dependency_modules' => array_values($this->dependencyModules),
             'classes' => array_values($this->classes),
             'class_namespaces' => $this->classNamespaces,
             'includes_signal_connection_support' => $this->includesSignalConnectionSupport,
@@ -76,6 +82,8 @@ final readonly class ModuleAbiManifest
             acceptedCandidatesPath: (string) ($decoded['accepted_candidates_path'] ?? ''),
             classCacheDir: (string) ($decoded['class_cache_dir'] ?? ''),
             includeDirs: self::filterStringList($decoded['include_dirs'] ?? []),
+            sharedIncludeDirs: self::filterStringList($decoded['shared_include_dirs'] ?? []),
+            dependencyModules: self::filterStringList($decoded['dependency_modules'] ?? []),
             classes: self::filterStringList($decoded['classes'] ?? []),
             classNamespaces: self::filterStringMap($decoded['class_namespaces'] ?? []),
             includesSignalConnectionSupport: (bool) ($decoded['includes_signal_connection_support'] ?? false),

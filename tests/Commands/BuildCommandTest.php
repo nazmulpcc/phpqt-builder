@@ -219,6 +219,42 @@ it('fails when a bootstrap step fails', function (): void {
     expect($summary['bootstrap_error'])->toBe('configure failed');
 });
 
+it('supports generating a monolithic extension tree without bootstrapping', function (): void {
+    $fixtureRoot = qt_fixture_path('qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-no-build-' . bin2hex(random_bytes(4));
+    $outputDir = $buildRoot . '/ext';
+    $metadataDir = $buildRoot . '/generated';
+    $bootstrapper = new FakeExtensionBootstrapper();
+
+    $result = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            '--modules' => 'QtCore',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+            '--no-build' => true,
+        ],
+    );
+
+    expect($result)->toBeSuccessfulCommandResult()
+        ->and($bootstrapper->contexts)->toHaveCount(0)
+        ->and(is_file($outputDir . '/config.m4'))->toBeTrue()
+        ->and(is_file($outputDir . '/php_qt.h'))->toBeTrue()
+        ->and(is_file($outputDir . '/qt.cpp'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_qpoint.cpp'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_qpoint.stub.php'))->toBeTrue()
+        ->and(is_file($outputDir . '/configure'))->toBeFalse()
+        ->and(is_file($outputDir . '/Makefile'))->toBeFalse()
+        ->and(is_file($outputDir . '/build/gen_stub.php'))->toBeFalse()
+        ->and($result['display'])->toContain('Skipping bootstrap (--no-build).');
+
+    $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
+    expect($summary['bootstrap_disabled'] ?? null)->toBeTrue()
+        ->and($summary['bootstrap'])->toBeNull()
+        ->and($summary['bootstrap_error'])->toBeNull();
+});
+
 it('rewrites cached allow lists to actual generated classes', function (): void {
     $fixtureRoot = qt_fixture_path('policy-qt');
     $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-stable-' . bin2hex(random_bytes(4));

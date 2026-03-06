@@ -39,7 +39,7 @@ static inline qt_qmetaobjectconnection_object *qt_qmetaobjectconnection_from_obj
 
 #define Z_QMETAOBJECTCONNECTION_P(zv) qt_qmetaobjectconnection_from_obj(Z_OBJ_P(zv))
 
-void qt_qmetaobjectconnection_wrap(zval *return_value, const QMetaObject::Connection &connection);
+PHP_QT_API void qt_qmetaobjectconnection_wrap(zval *return_value, const QMetaObject::Connection &connection);
 PHP_MINIT_FUNCTION(qt_qmetaobjectconnection);
 
 #endif /* QT_QMETAOBJECTCONNECTION_H */

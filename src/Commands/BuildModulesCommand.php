@@ -4,15 +4,22 @@ declare(strict_types=1);
 
 namespace QtBuilder\Commands;
 
+use QtBuilder\Build\BuildAnalysisResult;
 use QtBuilder\Build\BuildDirectoryCleaner;
 use QtBuilder\Build\BuildExecutionRequest;
 use QtBuilder\Build\BuildDiscoveryService;
 use QtBuilder\Build\BuildLayout;
 use QtBuilder\Build\BuildPipeline;
+use QtBuilder\Build\ExtensionBuildContext;
 use QtBuilder\Build\ExtensionBootstrapper;
-use QtBuilder\Build\ImportedModuleAbi;
+use QtBuilder\Build\ExtensionScaffolder;
+use QtBuilder\Build\ModuleAbiManifest;
+use QtBuilder\Build\ModuleBuildGraph;
+use QtBuilder\Build\ModuleBuildGraphBuilder;
 use QtBuilder\Build\ProcessExtensionBootstrapper;
 use QtBuilder\Contracts\SystemInformation;
+use QtBuilder\IO\FileWriteStats;
+use QtBuilder\IO\SmartFileWriter;
 use QtBuilder\Qt\QtInstallationResolver;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -30,6 +37,7 @@ class BuildModulesCommand extends Command
         ?ExtensionBootstrapper $bootstrapper = null,
         private readonly BuildDiscoveryService $discoveryService = new BuildDiscoveryService(),
         private readonly BuildDirectoryCleaner $buildDirectoryCleaner = new BuildDirectoryCleaner(),
+        private readonly ModuleBuildGraphBuilder $graphBuilder = new ModuleBuildGraphBuilder(),
     ) {
         $this->bootstrapper = $bootstrapper ?? new ProcessExtensionBootstrapper($systemInformation);
 
@@ -44,6 +52,7 @@ class BuildModulesCommand extends Command
             ->addOption('ext-version', null, InputOption::VALUE_REQUIRED, 'Extension version', '0.1.0')
             ->addOption('output', 'o', InputOption::VALUE_REQUIRED, 'Base output directory; each module is written under <output>/<Module>', 'build')
             ->addOption('force', 'F', InputOption::VALUE_NONE, 'Clear each selected module build root before starting')
+            ->addOption('no-build', null, InputOption::VALUE_NONE, 'Generate sources only and skip phpize/configure/make')
             ->addOption('jobs', 'j', InputOption::VALUE_REQUIRED, 'Number of parallel discovery/bootstrap workers');
     }
 
@@ -60,69 +69,142 @@ class BuildModulesCommand extends Command
         $jobs = $this->resolveJobs($input->getOption('jobs'));
         $qtPath = $input->getOption('qt-path') !== null ? (string) $input->getOption('qt-path') : null;
         $extensionVersion = (string) $input->getOption('ext-version');
+        $bootstrapEnabled = !(bool) $input->getOption('no-build');
         $pipeline = new BuildPipeline($this->bootstrapper, $this->discoveryService);
         $qtResolver = new QtInstallationResolver($this->systemInformation);
-        $qtCoreImport = null;
+
+        if ((bool) $input->getOption('force')) {
+            try {
+                $this->clearSharedOutputs($baseLayout, $modules, $output);
+            } catch (\InvalidArgumentException|\RuntimeException $e) {
+                $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
+                return self::FAILURE;
+            }
+        }
+
+        $analysisInstallation = $qtResolver->resolve($qtPath, $modules);
+        $analysis = $pipeline->analyze(
+            new BuildExecutionRequest(
+                installation: $analysisInstallation,
+                buildRootDir: $baseLayout->buildRootDir,
+                outputDir: $baseLayout->extensionDir(),
+                modules: $modules,
+                extensionName: 'qt',
+                extensionVersion: $extensionVersion,
+                jobs: $jobs,
+                reuseDiscoveryCache: true,
+                bootstrapEnabled: false,
+            ),
+            $output,
+        );
+
+        if ($analysis->errors !== []) {
+            return self::FAILURE;
+        }
+
+        try {
+            $graph = $this->graphBuilder->build($modules, $analysis);
+        } catch (\RuntimeException $e) {
+            $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
+            return self::FAILURE;
+        }
+
+        $sharedRoot = $baseLayout->extensionDir();
+        $sharedClassesDir = $sharedRoot . '/classes';
+        $this->ensureDirectory($sharedClassesDir);
+
+        $this->writeGlobalModuleGraph($baseLayout, $analysis, $graph, $output);
+
+        $sharedWriter = new SmartFileWriter();
         $loadOrder = [];
 
-        foreach ($modules as $index => $module) {
+        foreach ($graph->buildOrder as $index => $module) {
             if ($index > 0) {
                 $output->writeln('');
             }
 
             $moduleBuildRoot = $baseLayout->buildRootDir . '/' . $module;
             $moduleLayout = new BuildLayout($moduleBuildRoot);
-
-            if ((bool) $input->getOption('force')) {
-                try {
-                    $this->buildDirectoryCleaner->clear($moduleLayout->buildRootDir);
-                    $output->writeln(sprintf('<comment>Cleared build root:</comment> %s', $moduleLayout->buildRootDir));
-                } catch (\InvalidArgumentException|\RuntimeException $e) {
-                    $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
-                    return self::FAILURE;
-                }
-            }
-
             $extensionName = $this->extensionNameForModule($module);
-            $nativeModules = $module === 'QtCore'
-                ? ['QtCore']
-                : array_values(array_unique(['QtCore', $module]));
+            $nativeModules = $this->nativeModulesForModule($graph, $module);
             $installation = $qtResolver->resolve($qtPath, $nativeModules);
+            $localClasses = $this->generatedClassesForModule($analysis, $module);
+
+            $context = new ExtensionBuildContext(
+                extensionName: $extensionName,
+                extensionVersion: $extensionVersion,
+                buildRootDir: $moduleLayout->buildRootDir,
+                outputDir: $moduleLayout->extensionDir(),
+                installation: $installation,
+                modules: [$module],
+                generatedClasses: $localClasses,
+                generatedClassParents: $this->filterClassParents($analysis->generatedClassParents, $localClasses),
+                generatedClassDependencies: $this->filterClassDependencies($analysis->generatedClassDependencies, $localClasses),
+                includeSignalConnectionSupport: $module === 'QtCore' && $analysis->requiresSignalConnectionSupport,
+                linkModules: $nativeModules,
+                importIncludeRoots: [$sharedRoot, $sharedClassesDir],
+            );
 
             $output->writeln(sprintf('<info>Building %s as %s...</info>', $module, $extensionName));
 
-            $result = $pipeline->build(
-                new BuildExecutionRequest(
-                    installation: $installation,
-                    buildRootDir: $moduleLayout->buildRootDir,
-                    outputDir: $moduleLayout->extensionDir(),
-                    modules: [$module],
-                    extensionName: $extensionName,
-                    extensionVersion: $extensionVersion,
-                    jobs: $jobs,
-                    linkModules: $nativeModules,
-                    importedAbi: $module === 'QtCore' ? null : $qtCoreImport,
-                    forceSignalConnectionSupport: $module === 'QtCore',
-                    writeAbiManifest: true,
-                    reuseDiscoveryCache: $module === 'QtCore',
-                ),
+            $scaffolder = new ExtensionScaffolder();
+            $scaffolder->prepare($context);
+
+            $emission = $pipeline->emitGeneratedClasses(
+                $context->outputDir . '/classes',
+                $localClasses,
+                $analysis->generatedPhpClasses,
+                $analysis->classNamespaces,
+                $analysis->generatedClassHeaders,
+                $context->includeSignalConnectionSupport,
+                $output,
+            );
+            $scaffoldFiles = $scaffolder->finalize($context);
+            $coreWriteStats = $scaffolder->lastWriteStats();
+            $totalWriteStats = new FileWriteStats();
+            $totalWriteStats->merge($emission['file_write_stats']);
+            $totalWriteStats->merge($coreWriteStats);
+
+            $this->publishSharedHeaders(
+                $sharedWriter,
+                $sharedClassesDir,
+                $emission['classmap'],
+                $context->includeSignalConnectionSupport,
+                $context->outputDir . '/classes',
+            );
+
+            $bootstrap = $pipeline->bootstrapExtension(
+                $context,
+                $jobs,
+                $bootstrapEnabled,
+                $totalWriteStats,
                 $output,
             );
 
-            if (!$result->successful) {
+            $this->writeModuleArtifacts(
+                module: $module,
+                moduleLayout: $moduleLayout,
+                context: $context,
+                analysis: $analysis,
+                classmap: $emission['classmap'],
+                classWriteStats: $emission['file_write_stats'],
+                coreWriteStats: $coreWriteStats,
+                totalWriteStats: $totalWriteStats,
+                scaffoldFiles: $scaffoldFiles,
+                bootstrap: $bootstrap,
+                jobs: $jobs,
+                writeComparatorName: $scaffolder->writeComparatorName(),
+                localClasses: $localClasses,
+                dependencyModules: $graph->dependencies[$module] ?? [],
+                sharedIncludeDirs: [$sharedRoot, $sharedClassesDir],
+                output: $output,
+            );
+
+            if ($bootstrap['error'] !== null) {
                 return self::FAILURE;
             }
 
             $loadOrder[] = $extensionName;
-            if ($module === 'QtCore') {
-                $abiManifestPath = $result->abiManifest?->metadataDir . '/module_abi.json';
-                if ($abiManifestPath === null || !is_file($abiManifestPath)) {
-                    $output->writeln('<error>QtCore build completed without a module ABI manifest.</error>');
-                    return self::FAILURE;
-                }
-
-                $qtCoreImport = ImportedModuleAbi::load($abiManifestPath);
-            }
         }
 
         $output->writeln('');
@@ -157,6 +239,347 @@ class BuildModulesCommand extends Command
     private function extensionNameForModule(string $module): string
     {
         return strtolower($module);
+    }
+
+    private function clearSharedOutputs(BuildLayout $baseLayout, array $modules, OutputInterface $output): void
+    {
+        foreach ([$baseLayout->extensionDir(), $baseLayout->metadataDir(), $baseLayout->classCacheDir()] as $path) {
+            $this->buildDirectoryCleaner->clear($path);
+            $output->writeln(sprintf('<comment>Cleared shared build path:</comment> %s', $path));
+        }
+
+        foreach ($modules as $module) {
+            $moduleLayout = new BuildLayout($baseLayout->buildRootDir . '/' . $module);
+            $this->buildDirectoryCleaner->clear($moduleLayout->buildRootDir);
+            $output->writeln(sprintf('<comment>Cleared build root:</comment> %s', $moduleLayout->buildRootDir));
+        }
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function generatedClassesForModule(BuildAnalysisResult $analysis, string $module): array
+    {
+        $classes = array_values(array_filter(
+            $analysis->generatedClasses,
+            static fn(string $className): bool => ($analysis->generatedClassModules[$className] ?? null) === $module,
+        ));
+        sort($classes);
+
+        return $classes;
+    }
+
+    /**
+     * @param array<string, string|null> $generatedClassParents
+     * @param list<string> $localClasses
+     * @return array<string, string|null>
+     */
+    private function filterClassParents(array $generatedClassParents, array $localClasses): array
+    {
+        $localSet = array_fill_keys($localClasses, true);
+        $filtered = [];
+
+        foreach ($generatedClassParents as $className => $parentClass) {
+            if (!isset($localSet[$className])) {
+                continue;
+            }
+
+            $filtered[$className] = $parentClass;
+        }
+
+        return $filtered;
+    }
+
+    /**
+     * @param array<string, list<string>> $generatedClassDependencies
+     * @param list<string> $localClasses
+     * @return array<string, list<string>>
+     */
+    private function filterClassDependencies(array $generatedClassDependencies, array $localClasses): array
+    {
+        $localSet = array_fill_keys($localClasses, true);
+        $filtered = [];
+
+        foreach ($generatedClassDependencies as $className => $dependencies) {
+            if (!isset($localSet[$className])) {
+                continue;
+            }
+
+            $filtered[$className] = $dependencies;
+        }
+
+        return $filtered;
+    }
+
+    /**
+     * @param list<array{class: string, header: string, files: list<string>}> $classmap
+     */
+    private function publishSharedHeaders(
+        SmartFileWriter $writer,
+        string $sharedClassesDir,
+        array $classmap,
+        bool $includeSignalConnectionSupport,
+        string $moduleClassesDir,
+    ): void {
+        foreach ($classmap as $entry) {
+            foreach ($entry['files'] as $file) {
+                if (!str_ends_with($file, '.h') || str_ends_with($file, '_arginfo.h')) {
+                    continue;
+                }
+
+                $content = file_get_contents($file);
+                if (!is_string($content)) {
+                    throw new \RuntimeException(sprintf('Could not read generated header: %s', $file));
+                }
+
+                $writer->write($sharedClassesDir . '/' . basename($file), $content);
+            }
+        }
+
+        if (!$includeSignalConnectionSupport) {
+            return;
+        }
+
+        $signalHeader = $moduleClassesDir . '/qt_qmetaobjectconnection.h';
+        if (!is_file($signalHeader)) {
+            throw new \RuntimeException(sprintf('Generated signal support header not found: %s', $signalHeader));
+        }
+
+        $content = file_get_contents($signalHeader);
+        if (!is_string($content)) {
+            throw new \RuntimeException(sprintf('Could not read generated header: %s', $signalHeader));
+        }
+
+        $writer->write($sharedClassesDir . '/qt_qmetaobjectconnection.h', $content);
+    }
+
+    /**
+     * @param list<array{class: string, header: string, files: list<string>}> $classmap
+     * @param list<string> $dependencyModules
+     * @param list<string> $sharedIncludeDirs
+     * @param array{result: \QtBuilder\Build\BootstrapResult|null, error: string|null, skipped: bool, disabled: bool} $bootstrap
+     */
+    private function writeModuleArtifacts(
+        string $module,
+        BuildLayout $moduleLayout,
+        ExtensionBuildContext $context,
+        BuildAnalysisResult $analysis,
+        array $classmap,
+        FileWriteStats $classWriteStats,
+        FileWriteStats $coreWriteStats,
+        FileWriteStats $totalWriteStats,
+        array $scaffoldFiles,
+        array $bootstrap,
+        int $jobs,
+        string $writeComparatorName,
+        array $localClasses,
+        array $dependencyModules,
+        array $sharedIncludeDirs,
+        OutputInterface $output,
+    ): void {
+        $metadataDir = $moduleLayout->metadataDir();
+        $this->ensureDirectory($metadataDir);
+
+        $acceptedCandidates = array_values(array_filter(
+            $analysis->acceptedCandidates,
+            static fn($candidate): bool => $candidate instanceof \QtBuilder\Scanning\HeaderCandidate && $candidate->module === $module,
+        ));
+        $acceptedCandidatesPath = $metadataDir . '/accepted_candidates.json';
+        file_put_contents($acceptedCandidatesPath, json_encode(array_map(
+            static fn($candidate): array => [
+                'module' => $candidate->module,
+                'class' => $candidate->className,
+                'public_header' => $candidate->publicHeader,
+                'parse_header' => $candidate->parseHeader,
+            ],
+            $acceptedCandidates,
+        ), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]');
+        $output->writeln(sprintf('  <comment>Wrote:</comment> %s', $acceptedCandidatesPath));
+
+        $moduleSkippedClasses = array_values(array_filter(
+            $analysis->skippedClasses,
+            static fn(array $entry): bool => ($entry['module'] ?? null) === $module,
+        ));
+
+        $moduleClassSet = array_fill_keys($this->generatedClassesForModule($analysis, $module), true);
+        foreach ($moduleSkippedClasses as $entry) {
+            $className = is_string($entry['class'] ?? null) ? $entry['class'] : null;
+            if ($className !== null && $className !== '') {
+                $moduleClassSet[$className] = true;
+            }
+        }
+
+        $moduleSkippedMethods = array_values(array_filter(
+            $analysis->skippedMethods,
+            static function (array $entry) use ($moduleClassSet, $analysis, $module): bool {
+                $className = is_string($entry['class'] ?? null) ? $entry['class'] : null;
+                if ($className === null || $className === '') {
+                    return false;
+                }
+
+                if (isset($moduleClassSet[$className])) {
+                    return true;
+                }
+
+                return ($analysis->generatedClassModules[$className] ?? null) === $module;
+            },
+        ));
+
+        $moduleErrors = array_values(array_filter(
+            $analysis->errors,
+            static fn(array $entry): bool => ($entry['module'] ?? null) === $module,
+        ));
+
+        file_put_contents($metadataDir . '/classmap.json', json_encode($classmap, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]');
+        file_put_contents($metadataDir . '/skipped_classes.json', json_encode($moduleSkippedClasses, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]');
+        file_put_contents($metadataDir . '/skipped_methods.json', json_encode($moduleSkippedMethods, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]');
+
+        foreach ($scaffoldFiles as $file) {
+            $output->writeln(sprintf('  <comment>Wrote:</comment> %s', $file));
+        }
+        $output->writeln(sprintf('  <comment>Wrote:</comment> %s', $metadataDir . '/classmap.json'));
+        $output->writeln(sprintf('  <comment>Wrote:</comment> %s', $metadataDir . '/skipped_classes.json'));
+        $output->writeln(sprintf('  <comment>Wrote:</comment> %s', $metadataDir . '/skipped_methods.json'));
+
+        $summary = [
+            'modules' => [$module],
+            'candidate_classes' => count($localClasses) + count($moduleSkippedClasses),
+            'generated_classes' => count($localClasses),
+            'skipped_classes' => count($moduleSkippedClasses),
+            'failed_classes' => count($moduleErrors),
+            'jobs' => $jobs,
+            'generation_passes' => $analysis->passes,
+            'bootstrap' => $bootstrap['result']?->toArray(),
+            'bootstrap_error' => $bootstrap['error'],
+            'bootstrap_skipped' => $bootstrap['skipped'],
+            'bootstrap_disabled' => $bootstrap['disabled'],
+            'file_writes' => [
+                'comparator' => $writeComparatorName,
+                'class' => $classWriteStats->toArray(),
+                'core' => $coreWriteStats->toArray(),
+                'total' => $totalWriteStats->toArray(),
+            ],
+        ];
+
+        $abiManifest = new ModuleAbiManifest(
+            module: $module,
+            extensionName: $context->extensionName,
+            buildRootDir: $moduleLayout->buildRootDir,
+            outputDir: $context->outputDir,
+            metadataDir: $metadataDir,
+            acceptedCandidatesPath: $acceptedCandidatesPath,
+            classCacheDir: dirname($moduleLayout->buildRootDir) . '/classes',
+            includeDirs: [$context->outputDir, $context->outputDir . '/classes'],
+            sharedIncludeDirs: $sharedIncludeDirs,
+            dependencyModules: $dependencyModules,
+            classes: $localClasses,
+            classNamespaces: $this->exportedClassNamespacesForModule($analysis, $module),
+            includesSignalConnectionSupport: $context->includeSignalConnectionSupport,
+        );
+        $abiManifest->write($metadataDir . '/module_abi.json');
+        $summary['abi_manifest'] = $metadataDir . '/module_abi.json';
+
+        file_put_contents($metadataDir . '/build_summary.json', json_encode($summary + ['errors' => $moduleErrors], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '{}');
+        $output->writeln(sprintf('  <comment>Wrote:</comment> %s', $metadataDir . '/module_abi.json'));
+        $output->writeln(sprintf('  <comment>Wrote:</comment> %s', $metadataDir . '/build_summary.json'));
+
+        $output->writeln(sprintf(
+            '<comment>File writes:</comment> %d written (%d created, %d updated), %d unchanged [comparator: %s]',
+            $totalWriteStats->written(),
+            $totalWriteStats->created(),
+            $totalWriteStats->updated(),
+            $totalWriteStats->unchanged(),
+            $writeComparatorName,
+        ));
+        $output->writeln(sprintf(
+            '<info>Generated %d class wrapper(s); %d class(es) skipped; %d error(s).</info>',
+            count($localClasses),
+            count($moduleSkippedClasses),
+            count($moduleErrors),
+        ));
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function exportedClassNamespacesForModule(BuildAnalysisResult $analysis, string $module): array
+    {
+        $payload = [];
+        foreach ($this->generatedClassesForModule($analysis, $module) as $className) {
+            $namespace = $analysis->classNamespaces[$className] ?? null;
+            if (!is_string($namespace) || $namespace === '') {
+                continue;
+            }
+
+            $payload[$className] = $namespace;
+        }
+
+        return $payload;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function nativeModulesForModule(ModuleBuildGraph $graph, string $module): array
+    {
+        $required = [$module => true];
+        $stack = [$module];
+
+        while ($stack !== []) {
+            $current = array_pop($stack);
+            if (!is_string($current) || $current === '') {
+                continue;
+            }
+
+            foreach ($graph->dependencies[$current] ?? [] as $dependencyModule) {
+                if (isset($required[$dependencyModule])) {
+                    continue;
+                }
+
+                $required[$dependencyModule] = true;
+                $stack[] = $dependencyModule;
+            }
+        }
+
+        $ordered = array_values(array_filter(
+            $graph->buildOrder,
+            static fn(string $candidate): bool => isset($required[$candidate]),
+        ));
+
+        if (!in_array('QtCore', $ordered, true)) {
+            array_unshift($ordered, 'QtCore');
+        }
+
+        return array_values(array_unique($ordered));
+    }
+
+    private function writeGlobalModuleGraph(
+        BuildLayout $baseLayout,
+        BuildAnalysisResult $analysis,
+        \QtBuilder\Build\ModuleBuildGraph $graph,
+        OutputInterface $output,
+    ): void {
+        $path = $baseLayout->metadataDir() . '/module_graph.json';
+        $this->ensureDirectory(dirname($path));
+        file_put_contents($path, json_encode([
+            'modules' => $graph->buildOrder,
+            'candidate_classes' => $analysis->candidateCount,
+            'generated_classes' => count($analysis->generatedClasses),
+            'skipped_classes' => count($analysis->skippedClasses),
+            'generation_passes' => $analysis->passes,
+        ] + $graph->toArray(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '{}');
+        $output->writeln(sprintf('  <comment>Wrote:</comment> %s', $path));
+    }
+
+    private function ensureDirectory(string $directory): void
+    {
+        if (is_dir($directory)) {
+            return;
+        }
+
+        if (!mkdir($directory, 0755, true) && !is_dir($directory)) {
+            throw new \RuntimeException(sprintf('Could not create directory: %s', $directory));
+        }
     }
 
     private function resolveJobs(mixed $jobsOption): int

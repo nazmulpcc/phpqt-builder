@@ -44,6 +44,7 @@ class BuildCommand extends Command
             ->addOption('ext-version', null, InputOption::VALUE_REQUIRED, 'Extension version', '0.1.0')
             ->addOption('output', 'o', InputOption::VALUE_REQUIRED, 'Build root directory; extension sources go under <output>/ext', 'build')
             ->addOption('force', 'F', InputOption::VALUE_NONE, 'Clear the selected build root before starting')
+            ->addOption('no-build', null, InputOption::VALUE_NONE, 'Generate sources only and skip phpize/configure/make')
             ->addOption('jobs', 'j', InputOption::VALUE_REQUIRED, 'Number of parallel discovery/bootstrap workers');
     }
 
@@ -84,6 +85,7 @@ class BuildCommand extends Command
                 extensionName: (string) $input->getOption('name'),
                 extensionVersion: (string) $input->getOption('ext-version'),
                 jobs: $this->resolveJobs($input->getOption('jobs')),
+                bootstrapEnabled: !(bool) $input->getOption('no-build'),
             ),
             $output,
         );

@@ -18,22 +18,12 @@ class BuildPipeline
         private readonly BuildDiscoveryService $discoveryService = new BuildDiscoveryService(),
     ) {}
 
-    public function build(BuildExecutionRequest $request, OutputInterface $output): BuildExecutionResult
+    public function analyze(BuildExecutionRequest $request, OutputInterface $output): BuildAnalysisResult
     {
-        $context = new ExtensionBuildContext(
-            $request->extensionName,
-            $request->extensionVersion,
-            $request->buildRootDir,
-            $request->outputDir,
-            $request->installation,
-            $request->modules,
-            linkModules: $request->effectiveLinkModules(),
-            importIncludeRoots: $request->importedAbi?->includeDirs() ?? [],
-        );
-
-        $scaffolder = new ExtensionScaffolder();
-        $scaffolder->prepare($context);
-        $metadataDir = $context->metadataDir();
+        $metadataDir = $request->buildRootDir . '/generated';
+        $this->ensureDirectory($request->outputDir);
+        $this->ensureDirectory($request->outputDir . '/classes');
+        $this->ensureDirectory($metadataDir);
 
         $cachedDiscovery = null;
         if ($request->reuseDiscoveryCache) {
@@ -56,7 +46,7 @@ class BuildPipeline
             if ($request->reuseDiscoveryCache) {
                 $output->writeln('<comment>Discovery cache miss; invoking build:discover.</comment>');
             } elseif ($request->importedAbi !== null) {
-                $output->writeln('<comment>Discovery cache bypassed; imported QtCore ABI requires a fresh viability pass.</comment>');
+                $output->writeln('<comment>Discovery cache bypassed; imported module ABI requires a fresh viability pass.</comment>');
             }
 
             $output->writeln(sprintf('<info>Running %d parallel discovery worker(s)...</info>', $request->jobs));
@@ -77,7 +67,26 @@ class BuildPipeline
                     $output->writeln(sprintf('<error>%s</error>', $message));
                 }
 
-                return new BuildExecutionResult(false, $context, [], $discovery->skippedClasses, $discovery->errors, []);
+                return new BuildAnalysisResult(
+                    metadataDir: $metadataDir,
+                    candidateCount: $discovery->candidateCount,
+                    acceptedCandidates: [],
+                    skippedClasses: $discovery->skippedClasses,
+                    skippedMethods: [],
+                    errors: $discovery->errors,
+                    generatedClasses: [],
+                    generatedPhpClasses: [],
+                    generatedClassParents: [],
+                    generatedClassDependencies: [],
+                    generatedClassHeaders: [],
+                    generatedClassModules: [],
+                    classNamespaces: [],
+                    moduleMethodTotals: [],
+                    moduleAcceptedMethodTotals: [],
+                    moduleGeneratedMethodTotals: [],
+                    passes: 0,
+                    requiresSignalConnectionSupport: false,
+                );
             }
 
             $acceptedCandidates = $discovery->acceptedCandidates;
@@ -117,33 +126,46 @@ class BuildPipeline
                 $output->writeln(sprintf('<error>%s</error>', $message));
             }
 
-            return new BuildExecutionResult(false, $context, [], [...$skippedClasses, ...$classStructures['skipped_classes']], $classStructures['errors'], []);
+            return new BuildAnalysisResult(
+                metadataDir: $metadataDir,
+                candidateCount: $candidateCount,
+                acceptedCandidates: [],
+                skippedClasses: [...$skippedClasses, ...$classStructures['skipped_classes']],
+                skippedMethods: [],
+                errors: $classStructures['errors'],
+                generatedClasses: [],
+                generatedPhpClasses: [],
+                generatedClassParents: [],
+                generatedClassDependencies: [],
+                generatedClassHeaders: [],
+                generatedClassModules: [],
+                classNamespaces: [],
+                moduleMethodTotals: $moduleMethodTotals,
+                moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
+                moduleGeneratedMethodTotals: [],
+                passes: 0,
+                requiresSignalConnectionSupport: false,
+            );
         }
 
         $acceptedCandidates = $classStructures['accepted_candidates'];
         $skippedClasses = [...$skippedClasses, ...$classStructures['skipped_classes']];
 
         $output->writeln('<info>Evaluating generated class set from cached class structures...</info>');
-        $generation = $this->stabilizeGeneratedCandidates(
+        $generation = $this->resolveGeneratedCandidates(
             $acceptedCandidates,
             $skippedClasses,
             $allowedClasses,
             $classStructures['prepared_class_data'],
-            $request->outputDir,
             $output,
             $request->importedAbi,
-            $request->forceSignalConnectionSupport,
         );
 
         $acceptedCandidates = $generation['accepted_candidates'];
         $generatedClasses = $generation['generated_classes'];
-        $generatedClassParents = $generation['generated_class_parents'];
         $skippedClasses = $generation['skipped_classes'];
         $skippedMethods = $generation['skipped_methods'];
         $errors = $generation['errors'];
-        $classmap = $generation['classmap'];
-        /** @var FileWriteStats $classWriteStats */
-        $classWriteStats = $generation['file_write_stats'];
 
         $this->renderModuleAcceptance(
             $output,
@@ -168,71 +190,114 @@ class BuildPipeline
             ),
         );
 
-        $context = $context->withGeneratedClasses(
-            $generatedClasses,
-            $generatedClassParents,
-            $generation['generated_class_dependencies'],
-            (bool) ($generation['emits_signal_connection_support'] ?? false),
+        return new BuildAnalysisResult(
+            metadataDir: $metadataDir,
+            candidateCount: $candidateCount,
+            acceptedCandidates: $acceptedCandidates,
+            skippedClasses: $skippedClasses,
+            skippedMethods: $skippedMethods,
+            errors: $errors,
+            generatedClasses: $generatedClasses,
+            generatedPhpClasses: $generation['generated_php_classes'],
+            generatedClassParents: $generation['generated_class_parents'],
+            generatedClassDependencies: $generation['generated_class_dependencies'],
+            generatedClassHeaders: $generation['generated_class_headers'],
+            generatedClassModules: $generation['generated_class_modules'],
+            classNamespaces: $this->classNamespaces($acceptedCandidates, $request->importedAbi),
+            moduleMethodTotals: $moduleMethodTotals,
+            moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
+            moduleGeneratedMethodTotals: $generation['module_generated_method_totals'] ?? [],
+            passes: $generation['passes'],
+            requiresSignalConnectionSupport: (bool) ($generation['requires_signal_connection_support'] ?? false),
+        );
+    }
+
+    public function build(BuildExecutionRequest $request, OutputInterface $output): BuildExecutionResult
+    {
+        $analysis = $this->analyze($request, $output);
+        $context = new ExtensionBuildContext(
+            $request->extensionName,
+            $request->extensionVersion,
+            $request->buildRootDir,
+            $request->outputDir,
+            $request->installation,
+            $request->modules,
+            linkModules: $request->effectiveLinkModules(),
+            importIncludeRoots: array_values(array_unique([
+                ...$request->importIncludeRoots,
+                ...($request->importedAbi?->includeDirs() ?? []),
+            ])),
         );
 
+        $context = $context->withGeneratedClasses(
+            $analysis->generatedClasses,
+            $analysis->generatedClassParents,
+            $analysis->generatedClassDependencies,
+            $analysis->requiresSignalConnectionSupport || $request->forceSignalConnectionSupport,
+        );
+
+        if ($analysis->errors !== []) {
+            return new BuildExecutionResult(false, $context, [], $analysis->skippedClasses, $analysis->errors, []);
+        }
+
+        $scaffolder = new ExtensionScaffolder();
+        $scaffolder->prepare($context);
+        $metadataDir = $context->metadataDir();
+
+        $emission = $this->emitGeneratedClasses(
+            $request->outputDir . '/classes',
+            $analysis->generatedClasses,
+            $analysis->generatedPhpClasses,
+            $analysis->classNamespaces,
+            $analysis->generatedClassHeaders,
+            $context->includeSignalConnectionSupport,
+            $output,
+        );
         $scaffoldFiles = $scaffolder->finalize($context);
         $coreWriteStats = $scaffolder->lastWriteStats();
         $totalWriteStats = new FileWriteStats();
-        $totalWriteStats->merge($classWriteStats);
+        $totalWriteStats->merge($emission['file_write_stats']);
         $totalWriteStats->merge($coreWriteStats);
 
-        $bootstrapResult = null;
-        $bootstrapError = null;
-        $bootstrapSkipped = false;
-
-        if ($generatedClasses !== [] && $errors === []) {
-            if ($totalWriteStats->written() === 0 && $this->moduleBinaryExists($context)) {
-                $bootstrapSkipped = true;
-                $output->writeln('<comment>No generated file changes detected; skipping bootstrap.</comment>');
-            } else {
-                $output->writeln('<info>Bootstrapping extension build tree...</info>');
-
-                try {
-                    $bootstrapResult = $this->bootstrapper->bootstrap($context, $request->jobs, function (array $event) use ($output): void {
-                        $this->renderBootstrapEvent($output, $event);
-                    });
-                } catch (\RuntimeException $e) {
-                    $bootstrapError = $e->getMessage();
-                    $output->writeln(sprintf('<error>%s</error>', $bootstrapError));
-                }
-            }
-        }
+        $bootstrap = $this->bootstrapExtension(
+            $context,
+            $request->jobs,
+            $request->bootstrapEnabled,
+            $totalWriteStats,
+            $output,
+        );
 
         $summary = [
             'modules' => $request->modules,
-            'candidate_classes' => $candidateCount,
-            'generated_classes' => count($generatedClasses),
-            'skipped_classes' => count($skippedClasses),
-            'failed_classes' => count($errors),
+            'candidate_classes' => $analysis->candidateCount,
+            'generated_classes' => count($analysis->generatedClasses),
+            'skipped_classes' => count($analysis->skippedClasses),
+            'failed_classes' => count($analysis->errors),
             'jobs' => $request->jobs,
-            'generation_passes' => $generation['passes'],
-            'bootstrap' => $bootstrapResult?->toArray(),
-            'bootstrap_error' => $bootstrapError,
-            'bootstrap_skipped' => $bootstrapSkipped,
+            'generation_passes' => $analysis->passes,
+            'bootstrap' => $bootstrap['result']?->toArray(),
+            'bootstrap_error' => $bootstrap['error'],
+            'bootstrap_skipped' => $bootstrap['skipped'],
+            'bootstrap_disabled' => $bootstrap['disabled'],
             'file_writes' => [
                 'comparator' => $scaffolder->writeComparatorName(),
-                'class' => $classWriteStats->toArray(),
+                'class' => $emission['file_write_stats']->toArray(),
                 'core' => $coreWriteStats->toArray(),
                 'total' => $totalWriteStats->toArray(),
             ],
         ];
 
-        file_put_contents($metadataDir . '/classmap.json', json_encode($classmap, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]');
-        file_put_contents($metadataDir . '/skipped_classes.json', json_encode($skippedClasses, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]');
-        file_put_contents($metadataDir . '/skipped_methods.json', json_encode($skippedMethods, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]');
-        file_put_contents($metadataDir . '/build_summary.json', json_encode($summary + ['errors' => $errors], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '{}');
+        file_put_contents($metadataDir . '/classmap.json', json_encode($emission['classmap'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]');
+        file_put_contents($metadataDir . '/skipped_classes.json', json_encode($analysis->skippedClasses, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]');
+        file_put_contents($metadataDir . '/skipped_methods.json', json_encode($analysis->skippedMethods, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]');
+        file_put_contents($metadataDir . '/build_summary.json', json_encode($summary + ['errors' => $analysis->errors], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '{}');
 
         foreach ($scaffoldFiles as $file) {
             $output->writeln(sprintf('  <comment>Wrote:</comment> %s', $file));
         }
 
         $abiManifest = null;
-        if ($request->writeAbiManifest && $generatedClasses !== [] && $errors === [] && $bootstrapError === null) {
+        if ($request->writeAbiManifest && $analysis->errors === [] && $bootstrap['error'] === null) {
             $abiManifest = new ModuleAbiManifest(
                 module: $request->modules[0] ?? 'QtCore',
                 extensionName: $request->extensionName,
@@ -245,13 +310,15 @@ class BuildPipeline
                     $request->outputDir,
                     $request->outputDir . '/classes',
                 ],
-                classes: $generatedClasses,
-                classNamespaces: $this->exportedClassNamespaces($acceptedCandidates, $generatedClasses),
+                sharedIncludeDirs: [],
+                dependencyModules: [],
+                classes: $analysis->generatedClasses,
+                classNamespaces: $this->exportedClassNamespaces($analysis->acceptedCandidates, $analysis->generatedClasses),
                 includesSignalConnectionSupport: $context->includeSignalConnectionSupport,
             );
             $abiManifest->write($metadataDir . '/module_abi.json');
             $summary['abi_manifest'] = $metadataDir . '/module_abi.json';
-            file_put_contents($metadataDir . '/build_summary.json', json_encode($summary + ['errors' => $errors], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '{}');
+            file_put_contents($metadataDir . '/build_summary.json', json_encode($summary + ['errors' => $analysis->errors], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '{}');
             $output->writeln(sprintf('  <comment>Wrote:</comment> %s', $metadataDir . '/module_abi.json'));
         }
 
@@ -265,19 +332,19 @@ class BuildPipeline
         ));
         $output->writeln(sprintf(
             '<info>Generated %d class wrapper(s); %d class(es) skipped; %d error(s).</info>',
-            count($generatedClasses),
-            count($skippedClasses),
-            count($errors),
+            count($analysis->generatedClasses),
+            count($analysis->skippedClasses),
+            count($analysis->errors),
         ));
 
-        $successful = $generatedClasses !== [] && $errors === [] && $bootstrapError === null;
+        $successful = $analysis->errors === [] && $bootstrap['error'] === null;
 
         return new BuildExecutionResult(
             $successful,
             $context,
-            $generatedClasses,
-            $skippedClasses,
-            $errors,
+            $analysis->generatedClasses,
+            $analysis->skippedClasses,
+            $analysis->errors,
             $summary,
             $abiManifest,
         );
@@ -389,31 +456,28 @@ class BuildPipeline
      * @return array{
      *   accepted_candidates: list<HeaderCandidate>,
      *   generated_classes: list<string>,
+     *   generated_php_classes: array<string, \QtBuilder\Definition\PhpClass>,
      *   module_generated_method_totals: array<string, int>,
-     *   file_write_stats: FileWriteStats,
      *   generated_class_parents: array<string, string|null>,
      *   generated_class_dependencies: array<string, list<string>>,
+     *   generated_class_headers: array<string, string>,
+     *   generated_class_modules: array<string, string>,
      *   skipped_classes: list<array<string, string|null>>,
      *   skipped_methods: list<array<string, string>>,
      *   errors: list<array<string, string|null>>,
-     *   classmap: list<array{class: string, header: string, files: list<string>}>,
      *   passes: int,
-     *   requires_signal_connection_support: bool,
-     *   emits_signal_connection_support: bool
+     *   requires_signal_connection_support: bool
      * }
      */
-    private function stabilizeGeneratedCandidates(
+    private function resolveGeneratedCandidates(
         array $acceptedCandidates,
         array $initialSkippedClasses,
         array $initialAllowedClasses,
         array $preparedClassDataByClass,
-        string $outputDir,
         OutputInterface $output,
         ?ImportedModuleAbi $importedAbi = null,
-        bool $forceSignalConnectionSupport = false,
     ): array {
         $generationService = new ClassGenerationService();
-        $generator = new ExtensionGenerator();
         $currentCandidates = array_values($acceptedCandidates);
         $currentAllowedClasses = array_values(array_unique($initialAllowedClasses));
         sort($currentAllowedClasses);
@@ -437,21 +501,21 @@ class BuildPipeline
         $skippedMethodsByClass = [];
         /** @var array<string, array<string, string|null>> $errorsByClass */
         $errorsByClass = [];
-        /** @var list<array{class: string, header: string, files: list<string>}> $classmap */
-        $classmap = [];
         /** @var list<string> $generatedClasses */
         $generatedClasses = [];
         /** @var array<string, string|null> $generatedClassParents */
         $generatedClassParents = [];
         /** @var array<string, list<string>> $generatedClassDependencies */
         $generatedClassDependencies = [];
+        /** @var array<string, string> $generatedClassHeaders */
+        $generatedClassHeaders = [];
+        /** @var array<string, string> $generatedClassModules */
+        $generatedClassModules = [];
         /** @var array<string, \QtBuilder\Definition\PhpClass> $generatedPhpClasses */
         $generatedPhpClasses = [];
         /** @var array<string, int> $moduleGeneratedMethodTotals */
         $moduleGeneratedMethodTotals = [];
-        $fileWriteStats = new FileWriteStats();
         $passes = 0;
-        $classNamespaces = $this->classNamespaces($acceptedCandidates, $importedAbi);
         $candidateModules = [];
         foreach ($acceptedCandidates as $candidate) {
             $candidateModules[$candidate->className] = $candidate->module;
@@ -521,6 +585,8 @@ class BuildPipeline
                         ),
                         static fn(string $value): bool => $value !== '',
                     ));
+                    $generatedClassHeaders[$result->className] = $candidate->parseHeader;
+                    $generatedClassModules[$result->className] = $candidate->module;
                     unset($skippedByClass[$result->className]);
                 } elseif ($result->status === 'skipped') {
                     $skippedByClass[$result->className] = [
@@ -567,64 +633,12 @@ class BuildPipeline
             $currentAllowedClasses = $generatedClasses;
         } while (!$stable && $errorsByClass === [] && $currentCandidates !== []);
 
-        if ($generatedClasses !== [] && $errorsByClass === []) {
-            $output->writeln(sprintf('<info>Emitting %d generated class wrapper(s)...</info>', count($generatedClasses)));
-            $emitProgressBar = $this->createBuildProgressBar(
-                $output,
-                count($generatedClasses),
-                'qt_generate_emit',
-                'Generate emit',
-            );
-            $emitProgressBar?->start();
-
-            foreach ($generatedClasses as $className) {
-                $phpClass = $generatedPhpClasses[$className] ?? null;
-                if ($phpClass === null) {
-                    $errorsByClass[$className] = [
-                        'module' => $candidateModules[$className] ?? null,
-                        'class' => $className,
-                        'header' => '',
-                        'reason_code' => 'missing_php_class',
-                        'reason_message' => 'Stable generation set is missing the PHP class definition.',
-                    ];
-                    $emitProgressBar?->advance();
-                    continue;
-                }
-
-                $files = $generator->generate(
-                    $phpClass,
-                    $classNamespaces[$className] ?? 'Qt\\Core',
-                    $outputDir . '/classes',
-                    $classNamespaces,
-                    $importedAbi === null,
-                );
-                $fileWriteStats->merge($generator->lastWriteStats());
-                $classmap[] = [
-                    'class' => $className,
-                    'header' => $this->headerPathForClass($currentCandidates, $acceptedCandidates, $className),
-                    'files' => $files,
-                ];
-                $emitProgressBar?->advance();
-            }
-
-            if ($emitProgressBar !== null) {
-                $emitProgressBar->finish();
-                $output->write(PHP_EOL);
-            }
-        }
-
         $requiresSignalConnectionSupport = false;
         foreach ($generatedPhpClasses as $phpClass) {
             if ($phpClass->signals !== []) {
                 $requiresSignalConnectionSupport = true;
                 break;
             }
-        }
-
-        $emitsSignalConnectionSupport = $importedAbi === null && ($requiresSignalConnectionSupport || $forceSignalConnectionSupport);
-        if ($emitsSignalConnectionSupport && !$requiresSignalConnectionSupport) {
-            $generator->generateSignalConnectionSupport($outputDir . '/classes');
-            $fileWriteStats->merge($generator->lastWriteStats());
         }
 
         $skippedMethods = [];
@@ -647,17 +661,148 @@ class BuildPipeline
         return [
             'accepted_candidates' => $currentCandidates,
             'generated_classes' => $generatedClasses,
+            'generated_php_classes' => $generatedPhpClasses,
             'module_generated_method_totals' => $moduleGeneratedMethodTotals,
-            'file_write_stats' => $fileWriteStats,
             'generated_class_parents' => $generatedClassParents,
             'generated_class_dependencies' => $generatedClassDependencies,
+            'generated_class_headers' => $generatedClassHeaders,
+            'generated_class_modules' => $generatedClassModules,
             'skipped_classes' => array_values($skippedByClass),
             'skipped_methods' => $skippedMethods,
             'errors' => array_values($errorsByClass),
-            'classmap' => $classmap,
             'passes' => $passes,
             'requires_signal_connection_support' => $requiresSignalConnectionSupport,
-            'emits_signal_connection_support' => $emitsSignalConnectionSupport,
+        ];
+    }
+
+    /**
+     * @param list<string> $generatedClasses
+     * @param array<string, \QtBuilder\Definition\PhpClass> $generatedPhpClasses
+     * @param array<string, string> $classNamespaces
+     * @param array<string, string> $classHeaders
+     * @return array{
+     *   file_write_stats: FileWriteStats,
+     *   classmap: list<array{class: string, header: string, files: list<string>}>
+     * }
+     */
+    public function emitGeneratedClasses(
+        string $outputDir,
+        array $generatedClasses,
+        array $generatedPhpClasses,
+        array $classNamespaces,
+        array $classHeaders,
+        bool $emitSignalConnectionSupport,
+        OutputInterface $output,
+    ): array {
+        $generator = new ExtensionGenerator();
+        $fileWriteStats = new FileWriteStats();
+        $classmap = [];
+
+        if ($generatedClasses !== []) {
+            $output->writeln(sprintf('<info>Emitting %d generated class wrapper(s)...</info>', count($generatedClasses)));
+            $emitProgressBar = $this->createBuildProgressBar(
+                $output,
+                count($generatedClasses),
+                'qt_generate_emit',
+                'Generate emit',
+            );
+            $emitProgressBar?->start();
+
+            foreach ($generatedClasses as $className) {
+                $phpClass = $generatedPhpClasses[$className] ?? null;
+                if ($phpClass === null) {
+                    throw new \RuntimeException(sprintf(
+                        'Stable generation set is missing the PHP class definition for %s.',
+                        $className,
+                    ));
+                }
+
+                $files = $generator->generate(
+                    $phpClass,
+                    $classNamespaces[$className] ?? 'Qt\\Core',
+                    $outputDir,
+                    $classNamespaces,
+                    false,
+                );
+                $fileWriteStats->merge($generator->lastWriteStats());
+                $classmap[] = [
+                    'class' => $className,
+                    'header' => $classHeaders[$className] ?? '',
+                    'files' => $files,
+                ];
+                $emitProgressBar?->advance();
+            }
+
+            if ($emitProgressBar !== null) {
+                $emitProgressBar->finish();
+                $output->write(PHP_EOL);
+            }
+        }
+
+        if ($emitSignalConnectionSupport) {
+            $generator->generateSignalConnectionSupport($outputDir);
+            $fileWriteStats->merge($generator->lastWriteStats());
+        }
+
+        return [
+            'file_write_stats' => $fileWriteStats,
+            'classmap' => $classmap,
+        ];
+    }
+
+    /**
+     * @return array{
+     *   result: BootstrapResult|null,
+     *   error: string|null,
+     *   skipped: bool,
+     *   disabled: bool
+     * }
+     */
+    public function bootstrapExtension(
+        ExtensionBuildContext $context,
+        int $jobs,
+        bool $bootstrapEnabled,
+        FileWriteStats $totalWriteStats,
+        OutputInterface $output,
+    ): array {
+        $bootstrapResult = null;
+        $bootstrapError = null;
+        $bootstrapSkipped = false;
+        $bootstrapDisabled = false;
+
+        if (!$bootstrapEnabled) {
+            $bootstrapDisabled = true;
+            $output->writeln('<comment>Skipping bootstrap (--no-build).</comment>');
+
+            return [
+                'result' => null,
+                'error' => null,
+                'skipped' => false,
+                'disabled' => true,
+            ];
+        }
+
+        if ($totalWriteStats->written() === 0 && $this->moduleBinaryExists($context)) {
+            $bootstrapSkipped = true;
+            $output->writeln('<comment>No generated file changes detected; skipping bootstrap.</comment>');
+        } else {
+            $output->writeln('<info>Bootstrapping extension build tree...</info>');
+
+            try {
+                $bootstrapResult = $this->bootstrapper->bootstrap($context, $jobs, function (array $event) use ($output): void {
+                    $this->renderBootstrapEvent($output, $event);
+                });
+            } catch (\RuntimeException $e) {
+                $bootstrapError = $e->getMessage();
+                $output->writeln(sprintf('<error>%s</error>', $bootstrapError));
+            }
+        }
+
+        return [
+            'result' => $bootstrapResult,
+            'error' => $bootstrapError,
+            'skipped' => $bootstrapSkipped,
+            'disabled' => $bootstrapDisabled,
         ];
     }
 
@@ -697,23 +842,6 @@ class BuildPipeline
         return $namespaces;
     }
 
-    private function headerPathForClass(array $currentCandidates, array $acceptedCandidates, string $className): string
-    {
-        foreach ($currentCandidates as $candidate) {
-            if ($candidate->className === $className) {
-                return $candidate->parseHeader;
-            }
-        }
-
-        foreach ($acceptedCandidates as $candidate) {
-            if ($candidate->className === $className) {
-                return $candidate->parseHeader;
-            }
-        }
-
-        return '';
-    }
-
     private function createBuildProgressBar(OutputInterface $output, int $total, string $formatName, string $label): ?ProgressBar
     {
         if ($total <= 0) {
@@ -738,5 +866,16 @@ class BuildPipeline
     private function namespaceForModule(string $module): string
     {
         return 'Qt\\' . preg_replace('/^Qt/', '', $module);
+    }
+
+    private function ensureDirectory(string $directory): void
+    {
+        if (is_dir($directory)) {
+            return;
+        }
+
+        if (!mkdir($directory, 0755, true) && !is_dir($directory)) {
+            throw new \RuntimeException(sprintf('Could not create directory: %s', $directory));
+        }
     }
 }
