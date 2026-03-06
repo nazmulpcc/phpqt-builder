@@ -20,7 +20,7 @@ it('generates the extension tree from a fixture qt root', function (): void {
         new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtCore',
+            'modules' => 'QtCore',
             '--output' => $buildRoot,
             '--jobs' => '2',
         ],
@@ -132,7 +132,7 @@ it('reuses an existing discovery cache', function (): void {
         new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtCore',
+            'modules' => 'QtCore',
             '--output' => $buildRoot,
             '--jobs' => '2',
         ],
@@ -156,7 +156,7 @@ it('reuses an existing discovery cache', function (): void {
         new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtCore',
+            'modules' => 'QtCore',
             '--output' => $buildRoot,
             '--jobs' => '2',
         ],
@@ -204,7 +204,7 @@ it('generates abstract shells and concrete children', function (): void {
         new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtCore',
+            'modules' => 'QtCore',
             '--output' => $buildRoot,
             '--jobs' => '2',
         ],
@@ -239,7 +239,7 @@ it('generates synthetic QList parents for supported list-derived classes', funct
         new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtCore,QtGui',
+            'modules' => 'QtCore,QtGui',
             '--output' => $buildRoot,
             '--jobs' => '2',
         ],
@@ -277,7 +277,7 @@ it('auto-adds static manifest dependencies for monolithic builds', function (): 
         new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtWidgets',
+            'modules' => 'QtWidgets',
             '--output' => $buildRoot,
             '--jobs' => '2',
             '--no-build' => true,
@@ -318,7 +318,7 @@ it('fails when a bootstrap step fails', function (): void {
         new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtCore',
+            'modules' => 'QtCore',
             '--output' => $buildRoot,
             '--jobs' => '2',
         ],
@@ -342,7 +342,7 @@ it('supports generating a monolithic extension tree without bootstrapping', func
         new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtCore',
+            'modules' => 'QtCore',
             '--output' => $buildRoot,
             '--jobs' => '2',
             '--no-build' => true,
@@ -408,7 +408,7 @@ it('rewrites cached allow lists to actual generated classes', function (): void 
         new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtCore',
+            'modules' => 'QtCore',
             '--output' => $buildRoot,
             '--jobs' => '2',
         ],
@@ -450,7 +450,7 @@ it('skips bootstrap when generated files are unchanged and module binary exists'
         new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtCore',
+            'modules' => 'QtCore',
             '--output' => $buildRoot,
             '--jobs' => '2',
         ],
@@ -461,7 +461,7 @@ it('skips bootstrap when generated files are unchanged and module binary exists'
         new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtCore',
+            'modules' => 'QtCore',
             '--output' => $buildRoot,
             '--jobs' => '2',
         ],
@@ -486,7 +486,7 @@ it('rejects an ext directory as the build root', function (): void {
         new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtCore',
+            'modules' => 'QtCore',
             '--output' => $buildRoot . '/ext',
             '--jobs' => '2',
         ],
@@ -504,7 +504,7 @@ it('fails fast on unsupported Qt modules', function (): void {
         new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtBogus',
+            'modules' => 'QtBogus',
             '--output' => sys_get_temp_dir() . '/qtbuilder-build-unsupported-' . bin2hex(random_bytes(4)),
             '--jobs' => '2',
         ],
@@ -532,7 +532,7 @@ it('clears the build root before building when forced', function (): void {
         new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtCore',
+            'modules' => 'QtCore',
             '--output' => $buildRoot,
             '--jobs' => '2',
             '--force' => true,
@@ -554,7 +554,7 @@ it('refuses to force-clear the current working directory', function (): void {
         new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtCore',
+            'modules' => 'QtCore',
             '--output' => '.',
             '--jobs' => '2',
             '--force' => true,

@@ -18,6 +18,7 @@ use QtBuilder\Contracts\SystemInformation;
 use QtBuilder\Qt\QtInstallationResolver;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
@@ -44,8 +45,8 @@ class BuildCommand extends Command
     protected function configure(): void
     {
         $this
+            ->addArgument('modules', InputArgument::OPTIONAL, 'Comma-separated Qt modules to scan', 'QtCore')
             ->addOption('qt-path', null, InputOption::VALUE_REQUIRED, 'Path to the Qt installation root')
-            ->addOption('modules', null, InputOption::VALUE_REQUIRED, 'Comma-separated Qt modules to scan', 'QtCore')
             ->addOption('name', null, InputOption::VALUE_REQUIRED, 'Extension name', 'qt')
             ->addOption('ext-version', null, InputOption::VALUE_REQUIRED, 'Extension version', '0.1.0')
             ->addOption('output', 'o', InputOption::VALUE_REQUIRED, 'Build root directory; extension sources go under <output>/ext', 'build')
@@ -56,7 +57,7 @@ class BuildCommand extends Command
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        $requestedModules = $this->parseModules((string) $input->getOption('modules'));
+        $requestedModules = $this->parseModules((string) $input->getArgument('modules'));
         try {
             $resolvedGraph = $this->dependencyResolver->resolve($requestedModules);
         } catch (\InvalidArgumentException|\RuntimeException $e) {

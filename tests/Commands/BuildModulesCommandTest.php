@@ -20,7 +20,7 @@ it('builds split module trees with auto-added static manifest dependencies', fun
         new BuildModulesCommand(FakeSystemInformation::passing(), $bootstrapper),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtWidgets',
+            'modules' => 'QtWidgets',
             '--output' => $buildRoot,
             '--jobs' => '2',
         ],
@@ -156,7 +156,7 @@ it('supports sibling inheritance and method wrappers during split builds', funct
         new BuildModulesCommand(FakeSystemInformation::passing(), $bootstrapper),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtGui,QtWidgets',
+            'modules' => 'QtGui,QtWidgets',
             '--output' => $buildRoot,
             '--jobs' => '2',
         ],
@@ -244,7 +244,7 @@ it('normalizes relative split build roots to absolute shared include paths', fun
             new BuildModulesCommand(FakeSystemInformation::passing(), $bootstrapper),
             [
                 '--qt-path' => $fixtureRoot,
-                '--modules' => 'QtWidgets',
+                'modules' => 'QtWidgets',
                 '--output' => 'build',
                 '--jobs' => '2',
             ],
@@ -296,7 +296,7 @@ it('supports generating split module trees without bootstrapping', function (): 
         new BuildModulesCommand(FakeSystemInformation::passing(), $bootstrapper),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtWidgets',
+            'modules' => 'QtWidgets',
             '--output' => $buildRoot,
             '--jobs' => '2',
             '--no-build' => true,
@@ -340,7 +340,7 @@ it('fails fast on unsupported split modules', function (): void {
         new BuildModulesCommand(FakeSystemInformation::passing(), $bootstrapper),
         [
             '--qt-path' => $fixtureRoot,
-            '--modules' => 'QtBogus',
+            'modules' => 'QtBogus',
             '--output' => $buildRoot,
             '--jobs' => '2',
         ],

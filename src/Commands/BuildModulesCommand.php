@@ -26,6 +26,7 @@ use QtBuilder\IO\SmartFileWriter;
 use QtBuilder\Qt\QtInstallationResolver;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
@@ -52,8 +53,8 @@ class BuildModulesCommand extends Command
     protected function configure(): void
     {
         $this
+            ->addArgument('modules', InputArgument::OPTIONAL, 'Comma-separated Qt modules to build', 'QtCore')
             ->addOption('qt-path', null, InputOption::VALUE_REQUIRED, 'Path to the Qt installation root')
-            ->addOption('modules', null, InputOption::VALUE_REQUIRED, 'Comma-separated Qt modules to build', 'QtCore')
             ->addOption('ext-version', null, InputOption::VALUE_REQUIRED, 'Extension version', '0.1.0')
             ->addOption('output', 'o', InputOption::VALUE_REQUIRED, 'Base output directory; each module is written under <output>/<Module>', 'build')
             ->addOption('force', 'F', InputOption::VALUE_NONE, 'Clear each selected module build root before starting')
@@ -70,7 +71,7 @@ class BuildModulesCommand extends Command
             return self::FAILURE;
         }
 
-        $requestedModules = $this->normalizeModules((string) $input->getOption('modules'));
+        $requestedModules = $this->normalizeModules((string) $input->getArgument('modules'));
         try {
             $resolvedGraph = $this->dependencyResolver->resolve($requestedModules);
         } catch (\InvalidArgumentException|\RuntimeException $e) {

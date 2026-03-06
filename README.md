@@ -4,6 +4,9 @@ The goal of this project is to achieve a PHP extension that wraps around QT so w
 - Use templates to build C++ source code that wraps QT classes.
 - Build PHP extension using the generated C++ classes.
 
+## Supported Module Manifest
+The repository root [manifest.json](/Users/nazmul/lab/phpqt-builder-codex/manifest.json) lists the currently supported wrapper modules and their declared inter-module dependencies.
+
 ## Preflight System Checks
 Preflight checks are run by the `doctor` command and report whether the system is ready for project tasks.
 

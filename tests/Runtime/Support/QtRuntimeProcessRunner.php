@@ -98,7 +98,7 @@ final class QtRuntimeProcessRunner
             $path = self::moduleExtensionPath($module);
             if ($path === null) {
                 return new QtRuntimeProcessResult(77, '', '', [
-                    'reason' => sprintf('Built %s extension not found. Run `php qtb build:modules --modules=%s` first.', strtolower($module), implode(',', $loadOrder)),
+                    'reason' => sprintf('Built %s extension not found. Run `php qtb build:modules %s` first.', strtolower($module), implode(',', $loadOrder)),
                 ]);
             }
 
@@ -119,7 +119,7 @@ final class QtRuntimeProcessRunner
             $path = self::moduleExtensionPath($module);
             if ($path === null) {
                 return new QtRuntimeProcessResult(77, '', '', [
-                    'reason' => sprintf('Built %s extension not found. Run `php qtb build:modules --modules=%s` first.', strtolower($module), implode(',', $loadOrder)),
+                    'reason' => sprintf('Built %s extension not found. Run `php qtb build:modules %s` first.', strtolower($module), implode(',', $loadOrder)),
                 ]);
             }
 
