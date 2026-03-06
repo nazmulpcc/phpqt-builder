@@ -737,11 +737,11 @@ class TypeBridge
             $valueExpr = $sourceIsZval ? $this->zvalDerefExpr($sourceVarName) : $sourceVarName;
             $baseType = $this->normalizeCppType($cppType);
             $initExpr = $sourceIsZval
-                ? $this->zvalToNativeExpr($phpType, $cppType, $valueExpr, false)
-                : $this->directPhpToNativeExpr($phpType, $cppType, $sourceVarName, false);
+                ? $this->zvalToNativeExpr($phpType, $cppType, $valueExpr, $nullable)
+                : $this->directPhpToNativeExpr($phpType, $cppType, $sourceVarName, $nullable);
             $guardExpr = $nullable
                 ? ($sourceIsZval
-                    ? sprintf('(%s != NULL && Z_TYPE_P(%s) != IS_NULL)', $sourceVarName, $valueExpr)
+                    ? sprintf('(%s != NULL)', $sourceVarName)
                     : sprintf('(%s != NULL)', $sourceVarName))
                 : 'true';
 

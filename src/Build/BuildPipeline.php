@@ -6,6 +6,8 @@ namespace QtBuilder\Build;
 
 use QtBuilder\CodeGen\ExtensionGenerator;
 use QtBuilder\Containers\QListSpecializationResolver;
+use QtBuilder\Definition\PhpClass;
+use QtBuilder\Definition\PhpMethod;
 use QtBuilder\IO\FileWriteStats;
 use QtBuilder\Scanning\HeaderCandidate;
 use Symfony\Component\Console\Helper\ProgressBar;
@@ -697,6 +699,7 @@ class BuildPipeline
         }
         $generatedClasses = array_values(array_unique($generatedClasses));
         sort($generatedClasses);
+        $generatedPhpClasses = $this->normalizeGeneratedPhpClassesAgainstParentContracts($generatedPhpClasses);
 
         $requiresSignalConnectionSupport = false;
         foreach ($generatedPhpClasses as $phpClass) {
@@ -739,6 +742,109 @@ class BuildPipeline
             'passes' => $passes,
             'requires_signal_connection_support' => $requiresSignalConnectionSupport,
         ];
+    }
+
+    /**
+     * @param array<string, PhpClass> $generatedPhpClasses
+     * @return array<string, PhpClass>
+     */
+    private function normalizeGeneratedPhpClassesAgainstParentContracts(array $generatedPhpClasses): array
+    {
+        $cache = [];
+
+        foreach ($generatedPhpClasses as $className => $phpClass) {
+            $parentMethods = $this->collectAbstractPublicParentMethods($className, $generatedPhpClasses, $cache);
+            if ($parentMethods === []) {
+                continue;
+            }
+
+            $methods = [];
+            $changed = false;
+            foreach ($phpClass->methods as $method) {
+                $parentMethod = $parentMethods[$method->name] ?? null;
+                if (
+                    $method->name !== '__construct'
+                    && $parentMethod instanceof PhpMethod
+                    && $parentMethod->isAbstractMethod
+                    && $parentMethod->access === 'public'
+                    && $method->access !== 'public'
+                ) {
+                    $methods[] = new PhpMethod(
+                        name: $method->name,
+                        access: 'public',
+                        isStatic: $method->isStatic,
+                        isSignal: $method->isSignal,
+                        isSlot: $method->isSlot,
+                        isAbstractMethod: $method->isAbstractMethod,
+                        returnType: $method->returnType,
+                        parameters: $method->parameters,
+                        overloads: $method->overloads,
+                        cppName: $method->cppName,
+                    );
+                    $changed = true;
+                    continue;
+                }
+
+                $methods[] = $method;
+            }
+
+            if (!$changed) {
+                continue;
+            }
+
+            $generatedPhpClasses[$className] = new PhpClass(
+                name: $phpClass->name,
+                parent: $phpClass->parent,
+                isAbstract: $phpClass->isAbstract,
+                isCopyConstructible: $phpClass->isCopyConstructible,
+                hasPublicConstructor: $phpClass->hasPublicConstructor,
+                hasPublicDestructor: $phpClass->hasPublicDestructor,
+                isQObjectDerived: $phpClass->isQObjectDerived,
+                properties: $phpClass->properties,
+                methods: $methods,
+                signals: $phpClass->signals,
+                classConstants: $phpClass->classConstants,
+                nativeIncludes: $phpClass->nativeIncludes,
+                nativeAliasOf: $phpClass->nativeAliasOf,
+            );
+        }
+
+        return $generatedPhpClasses;
+    }
+
+    /**
+     * @param array<string, PhpClass> $generatedPhpClasses
+     * @param array<string, array<string, PhpMethod>> $cache
+     * @return array<string, PhpMethod>
+     */
+    private function collectAbstractPublicParentMethods(string $className, array $generatedPhpClasses, array &$cache): array
+    {
+        if (isset($cache[$className])) {
+            return $cache[$className];
+        }
+
+        $phpClass = $generatedPhpClasses[$className] ?? null;
+        if (!$phpClass instanceof PhpClass || $phpClass->parent === null || $phpClass->parent === '') {
+            return $cache[$className] = [];
+        }
+
+        $parentClassName = ltrim($phpClass->parent, '\\');
+        $parentShortName = str_contains($parentClassName, '\\')
+            ? (string) substr($parentClassName, (int) strrpos($parentClassName, '\\') + 1)
+            : $parentClassName;
+        $parentPhpClass = $generatedPhpClasses[$parentShortName] ?? null;
+        if (!$parentPhpClass instanceof PhpClass) {
+            return $cache[$className] = [];
+        }
+
+        $methods = $this->collectAbstractPublicParentMethods($parentShortName, $generatedPhpClasses, $cache);
+        foreach ($parentPhpClass->methods as $method) {
+            if ($method->isAbstractMethod && $method->access === 'public') {
+                $methods[$method->name] = $method;
+            }
+        }
+
+        return $cache[$className] = $methods;
     }
 
     /**
@@ -1054,11 +1160,13 @@ class BuildPipeline
             true,
         );
 
+        $removedAny = false;
+
         foreach (glob($outputDir . '/qt_enum_*') ?: [] as $path) {
             $basename = basename($path);
             $prefix = null;
 
-            if (preg_match('/^(qt_enum_[^.]+)\.(?:h|cpp|stub\.php)$/', $basename, $matches) === 1) {
+            if (preg_match('/^(qt_enum_[^.]+)\.(?:h|cpp|stub\.php|dep|lo)$/', $basename, $matches) === 1) {
                 $prefix = $matches[1];
             } elseif (preg_match('/^(qt_enum_[^_]+(?:_[^_]+)*)_arginfo\.h$/', $basename, $matches) === 1) {
                 $prefix = $matches[1];
@@ -1070,6 +1178,36 @@ class BuildPipeline
 
             if (!@unlink($path) && file_exists($path)) {
                 throw new \RuntimeException(sprintf('Could not remove stale enum holder file: %s', $path));
+            }
+
+            $removedAny = true;
+        }
+
+        $libsDir = $outputDir . '/.libs';
+        if (is_dir($libsDir)) {
+            foreach (glob($libsDir . '/qt_enum_*') ?: [] as $path) {
+                $basename = basename($path);
+                if (preg_match('/^(qt_enum_[^.]+)\.(?:o|obj)$/', $basename, $matches) !== 1) {
+                    continue;
+                }
+
+                $prefix = $matches[1];
+                if (isset($activePrefixes[$prefix])) {
+                    continue;
+                }
+
+                if (!@unlink($path) && file_exists($path)) {
+                    throw new \RuntimeException(sprintf('Could not remove stale enum holder object file: %s', $path));
+                }
+
+                $removedAny = true;
+            }
+        }
+
+        if ($removedAny) {
+            $qtDepPath = dirname($outputDir) . '/qt.dep';
+            if (is_file($qtDepPath) && !@unlink($qtDepPath) && file_exists($qtDepPath)) {
+                throw new \RuntimeException(sprintf('Could not remove stale extension dependency file: %s', $qtDepPath));
             }
         }
     }

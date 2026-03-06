@@ -231,7 +231,17 @@ it('treats qbitarray factories as value returns and supports bool out parameters
         Assert::assertStringContainsString('_ret_intern->native_ptr = new QBitArray(std::move(_result));', $cpp);
         Assert::assertStringNotContainsString('QBitArray *_result = QBitArray::fromBits', $cpp);
         Assert::assertStringContainsString('ZEND_METHOD(Qt_Core_QBitArray, toUInt32)', $cpp);
+        Assert::assertStringContainsString('bool _qt_arg_1_value;', $cpp);
+        Assert::assertStringContainsString('if ((ok != NULL)) {', $cpp);
+        Assert::assertStringContainsString('_qt_arg_1_value = (((Z_TYPE_P(ok) == IS_REFERENCE) ? Z_REFVAL_P(ok) : (ok)) != NULL && Z_TYPE_P(((Z_TYPE_P(ok) == IS_REFERENCE) ? Z_REFVAL_P(ok) : (ok))) == IS_TRUE);', $cpp);
+        Assert::assertStringContainsString('_qt_arg_1 = &_qt_arg_1_value;', $cpp);
         Assert::assertStringContainsString('ZEND_TRY_ASSIGN_REF_BOOL(ok, (bool)((*_qt_arg_1)));', $cpp);
+        Assert::assertStringNotContainsString('Z_TYPE_P(((Z_TYPE_P(ok) == IS_REFERENCE) ? Z_REFVAL_P(ok) : (ok))) != IS_NULL', $cpp);
+        $callPos = strpos($cpp, 'auto _result = intern->native_ptr->toUInt32(');
+        $writebackPos = strpos($cpp, 'ZEND_TRY_ASSIGN_REF_BOOL(ok, (bool)((*_qt_arg_1)));');
+        Assert::assertNotFalse($callPos);
+        Assert::assertNotFalse($writebackPos);
+        Assert::assertGreaterThan($callPos, $writebackPos);
 });
 
 it('skips object double pointer out parameters', function (): void {

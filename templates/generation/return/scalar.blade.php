@@ -40,10 +40,11 @@ if ($overload?->isPureVirtual) {
     $cppReturnType = $overload?->cppReturnType ?? $method->returnType;
     $returnExpr = $ctx->typeBridge->nativeScalarToPhpExpr($method->returnType, $cppReturnType, $callExpr);
 @endphp
+    auto _result = {!! $callExpr !!};
 @foreach($writebackLines as $line)
     {!! $line !!}
 @endforeach
-    {!! $method->returnMacro !!}({!! $returnExpr !!});
+    {!! $method->returnMacro !!}({!! $ctx->typeBridge->nativeScalarToPhpExpr($method->returnType, $cppReturnType, '_result') !!});
 @else
 @foreach($callPlan['setup_lines'] as $line)
     {!! $line !!}
@@ -52,9 +53,10 @@ if ($overload?->isPureVirtual) {
     $cppReturnType = $overload?->cppReturnType ?? $method->returnType;
     $returnExpr = $ctx->typeBridge->nativeScalarToPhpExpr($method->returnType, $cppReturnType, $callExpr);
 @endphp
+    auto _result = {!! $callExpr !!};
 @foreach($writebackLines as $line)
     {!! $line !!}
 @endforeach
-    {!! $method->returnMacro !!}({!! $returnExpr !!});
+    {!! $method->returnMacro !!}({!! $ctx->typeBridge->nativeScalarToPhpExpr($method->returnType, $cppReturnType, '_result') !!});
 @endif
 @endif

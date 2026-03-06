@@ -479,6 +479,8 @@ class ClassGenerationService
             ];
         }
 
+        $methods = $this->normalizeMethodsAgainstInheritedContracts($methods, $parentMethods);
+
         return [
             'class' => new PhpClass(
                 name: $phpClass->name,
@@ -1436,6 +1438,8 @@ class ClassGenerationService
             ];
         }
 
+        $methods = $this->normalizeMethodsAgainstInheritedContracts($methods, $parentMethods);
+
         return [
             'class' => new PhpClass(
                 name: $phpClass->name,
@@ -1653,6 +1657,28 @@ class ClassGenerationService
             overloads: $method->overloads,
             cppName: $method->cppName,
         );
+    }
+
+    /**
+     * @param list<PhpMethod> $methods
+     * @param array<string, PhpMethod> $parentMethods
+     * @return list<PhpMethod>
+     */
+    private function normalizeMethodsAgainstInheritedContracts(array $methods, array $parentMethods): array
+    {
+        $normalized = [];
+
+        foreach ($methods as $method) {
+            if ($method->name === '__construct') {
+                $normalized[] = $method;
+                continue;
+            }
+
+            $parentMethod = $parentMethods[$method->name] ?? $this->findCanonicalContractParentMethod($method, $parentMethods);
+            $normalized[] = $this->normalizeAbstractMethodAgainstParent($method, $parentMethod);
+        }
+
+        return $normalized;
     }
 
     /**

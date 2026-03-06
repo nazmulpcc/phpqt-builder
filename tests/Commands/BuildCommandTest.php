@@ -384,6 +384,11 @@ it('removes stale enum holder files during incremental builds', function (): voi
     file_put_contents($outputDir . '/classes/qt_enum_stale.cpp', "// stale\n");
     file_put_contents($outputDir . '/classes/qt_enum_stale.h', "// stale\n");
     file_put_contents($outputDir . '/classes/qt_enum_stale_arginfo.h', "// stale\n");
+    file_put_contents($outputDir . '/classes/qt_enum_stale.dep', "classes/qt_enum_stale.lo: classes/qt_enum_stale.cpp classes/qt_enum_stale.h\n");
+    file_put_contents($outputDir . '/classes/qt_enum_stale.lo', "# libtool object\n");
+    @mkdir($outputDir . '/classes/.libs', 0777, true);
+    file_put_contents($outputDir . '/classes/.libs/qt_enum_stale.o', "stale object\n");
+    file_put_contents($outputDir . '/qt.dep', "qt.lo: classes/qt_enum_stale.h\n");
 
     $second = qt_command_result(
         new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
@@ -400,7 +405,11 @@ it('removes stale enum holder files during incremental builds', function (): voi
         ->and(is_file($outputDir . '/classes/qt_enum_stale.stub.php'))->toBeFalse()
         ->and(is_file($outputDir . '/classes/qt_enum_stale.cpp'))->toBeFalse()
         ->and(is_file($outputDir . '/classes/qt_enum_stale.h'))->toBeFalse()
-        ->and(is_file($outputDir . '/classes/qt_enum_stale_arginfo.h'))->toBeFalse();
+        ->and(is_file($outputDir . '/classes/qt_enum_stale_arginfo.h'))->toBeFalse()
+        ->and(is_file($outputDir . '/classes/qt_enum_stale.dep'))->toBeFalse()
+        ->and(is_file($outputDir . '/classes/qt_enum_stale.lo'))->toBeFalse()
+        ->and(is_file($outputDir . '/classes/.libs/qt_enum_stale.o'))->toBeFalse()
+        ->and(is_file($outputDir . '/qt.dep'))->toBeFalse();
 });
 
 it('auto-adds static manifest dependencies for monolithic builds', function (): void {
