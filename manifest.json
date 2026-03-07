@@ -47,6 +47,22 @@
                 "QtNetwork"
             ]
         },
+        "QtOpenGL": {
+            "extension_name": "qtopengl",
+            "dependencies": [
+                "QtCore",
+                "QtGui"
+            ]
+        },
+        "QtOpenGLWidgets": {
+            "extension_name": "qtopenglwidgets",
+            "dependencies": [
+                "QtCore",
+                "QtGui",
+                "QtOpenGL",
+                "QtWidgets"
+            ]
+        },
         "QtQml": {
             "extension_name": "qtqml",
             "dependencies": [

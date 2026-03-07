@@ -16,6 +16,8 @@ it('loads supported modules from the static manifest', function (): void {
         'QtSql',
         'QtPrintSupport',
         'QtMultimedia',
+        'QtOpenGL',
+        'QtOpenGLWidgets',
         'QtQml',
         'QtQuick',
         'QtQuick3D',
