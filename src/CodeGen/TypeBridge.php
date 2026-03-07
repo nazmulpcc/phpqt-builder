@@ -1201,6 +1201,14 @@ class TypeBridge
             return sprintf('RETURN_STRINGL(&%s, 1)', $varName);
         }
 
+        if ($base === 'GLubyte') {
+            if ($this->isPointerType($cppType)) {
+                return sprintf('RETURN_STRING((const char *)%s)', $varName);
+            }
+
+            return sprintf('RETURN_STRINGL((const char *)&%s, 1)', $varName);
+        }
+
         if ($isPointer) {
             return sprintf(
                 "if (%s == nullptr) {\n    RETURN_EMPTY_STRING();\n}\n    QByteArray _utf8 = %s->toUtf8();\n    RETURN_STRINGL(_utf8.constData(), _utf8.size())",
@@ -1675,7 +1683,7 @@ class TypeBridge
         }
 
         return match ($normalized) {
-            'GLenum', 'GLuint', 'GLint', 'GLsizei', 'GLbitfield' => $normalized,
+            'GLenum', 'GLuint', 'GLuint64', 'GLint', 'GLintptr', 'GLsizei', 'GLsizeiptr', 'GLbitfield', 'GLshort', 'GLushort', 'GLbyte', 'GLubyte', 'uint' => $normalized,
             'GLfloat' => 'GLfloat',
             'GLdouble' => 'GLdouble',
             'short', 'unsigned short', 'qint8', 'qint16', 'quint8', 'quint16' => $normalized,
@@ -1795,7 +1803,7 @@ class TypeBridge
             return sprintf('std::filesystem::path(std::string(ZSTR_VAL(%s), ZSTR_LEN(%s)))', $varName, $varName);
         }
 
-        if ($base === 'void' || $base === 'GLvoid') {
+        if ($base === 'void' || $base === 'GLvoid' || $base === 'GLubyte') {
             return sprintf('(%s)ZSTR_VAL(%s)', trim($cppType), $varName);
         }
 

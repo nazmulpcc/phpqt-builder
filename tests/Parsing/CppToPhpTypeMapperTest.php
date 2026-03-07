@@ -23,9 +23,17 @@ it('maps common opengl scalar typedefs to php scalars', function (): void {
 
     expect($mapper->map('GLenum'))->toBe('int')
         ->and($mapper->map('GLuint'))->toBe('int')
+        ->and($mapper->map('GLuint64'))->toBe('int')
         ->and($mapper->map('GLint'))->toBe('int')
+        ->and($mapper->map('GLintptr'))->toBe('int')
         ->and($mapper->map('GLsizei'))->toBe('int')
+        ->and($mapper->map('GLsizeiptr'))->toBe('int')
         ->and($mapper->map('GLbitfield'))->toBe('int')
+        ->and($mapper->map('GLshort'))->toBe('int')
+        ->and($mapper->map('GLushort'))->toBe('int')
+        ->and($mapper->map('GLbyte'))->toBe('int')
+        ->and($mapper->map('GLubyte'))->toBe('int')
+        ->and($mapper->map('uint'))->toBe('int')
         ->and($mapper->map('GLfloat'))->toBe('float')
         ->and($mapper->map('GLdouble'))->toBe('float')
         ->and($mapper->map('GLboolean'))->toBe('bool');
@@ -43,6 +51,8 @@ it('maps opengl raw input buffers to strings only for opengl owners', function (
 
     expect($mapper->map('const void *', 'QOpenGLBuffer'))->toBe('string')
         ->and($mapper->map('const GLvoid *', 'QOpenGLFunctions_1_0'))->toBe('string')
+        ->and($mapper->map('const GLubyte *', 'QOpenGLFunctions_1_0'))->toBe('string')
         ->and($mapper->map('const void *', 'QByteArray'))->toBe('mixed')
-        ->and($mapper->map('const GLvoid *', 'QByteArray'))->toBe('mixed');
+        ->and($mapper->map('const GLvoid *', 'QByteArray'))->toBe('mixed')
+        ->and($mapper->map('const GLubyte *', 'QByteArray'))->toBe('int');
 });

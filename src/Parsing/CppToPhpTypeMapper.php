@@ -24,9 +24,17 @@ class CppToPhpTypeMapper
         'int' => 'int',
         'GLenum' => 'int',
         'GLuint' => 'int',
+        'GLuint64' => 'int',
         'GLint' => 'int',
+        'GLintptr' => 'int',
         'GLsizei' => 'int',
+        'GLsizeiptr' => 'int',
         'GLbitfield' => 'int',
+        'GLshort' => 'int',
+        'GLushort' => 'int',
+        'GLbyte' => 'int',
+        'GLubyte' => 'int',
+        'uint' => 'int',
         'unsigned int' => 'int',
         'short' => 'int',
         'unsigned short' => 'int',
@@ -111,7 +119,7 @@ class CppToPhpTypeMapper
             return 'array';
         }
 
-        if ($this->isOpenGLRawInputBufferType($trimmed, $ownerClass)) {
+        if ($this->isOpenGLRawInputBufferType($trimmed, $ownerClass) || $this->isOpenGLStringReturnType($trimmed, $ownerClass)) {
             return 'string';
         }
 
@@ -223,7 +231,18 @@ class CppToPhpTypeMapper
 
         $normalized = trim(preg_replace('/\s+/', ' ', $cppType) ?? $cppType);
 
-        return preg_match('/^const (?:GL)?void\s*\*$/', $normalized) === 1;
+        return preg_match('/^const (?:(?:GL)?void|GLubyte)\s*\*$/', $normalized) === 1;
+    }
+
+    private function isOpenGLStringReturnType(string $cppType, ?string $ownerClass): bool
+    {
+        if (!$this->isOpenGLScopedOwner($ownerClass)) {
+            return false;
+        }
+
+        $normalized = trim(preg_replace('/\s+/', ' ', $cppType) ?? $cppType);
+
+        return preg_match('/^const GLubyte\s*\*$/', $normalized) === 1;
     }
 
     private function isOpenGLScopedOwner(?string $ownerClass): bool

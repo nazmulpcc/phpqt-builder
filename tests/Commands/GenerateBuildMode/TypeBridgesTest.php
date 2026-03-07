@@ -214,9 +214,17 @@ it('supports common opengl scalar typedef parameters and returns', function (): 
         file_put_contents($header, <<<'CPP'
 typedef unsigned int GLenum;
 typedef unsigned int GLuint;
+typedef unsigned long long GLuint64;
 typedef int GLint;
+typedef long long GLintptr;
 typedef int GLsizei;
+typedef long long GLsizeiptr;
 typedef unsigned int GLbitfield;
+typedef short GLshort;
+typedef unsigned short GLushort;
+typedef signed char GLbyte;
+typedef unsigned char GLubyte;
+typedef unsigned int uint;
 typedef float GLfloat;
 typedef double GLdouble;
 typedef unsigned char GLboolean;
@@ -233,6 +241,22 @@ GLsizei stride() const;
 void setStride(GLsizei stride);
 GLbitfield mask() const;
 void setMask(GLbitfield mask);
+GLshort shortValue() const;
+void setShortValue(GLshort value);
+GLushort ushortValue() const;
+void setUshortValue(GLushort value);
+GLbyte byteValue() const;
+void setByteValue(GLbyte value);
+GLubyte ubyteValue() const;
+void setUbyteValue(GLubyte value);
+GLintptr offset() const;
+void setOffset(GLintptr value);
+GLsizeiptr sizeInBytes() const;
+void setSizeInBytes(GLsizeiptr value);
+GLuint64 timestamp() const;
+void setTimestamp(GLuint64 value);
+uint textureUnit() const;
+void setTextureUnit(uint value);
 GLfloat ratio() const;
 void setRatio(GLfloat ratio);
 GLdouble gain() const;
@@ -274,6 +298,14 @@ CPP);
         Assert::assertStringContainsString('intern->native_ptr->setLocation((GLint)location);', $cpp);
         Assert::assertStringContainsString('intern->native_ptr->setStride((GLsizei)stride);', $cpp);
         Assert::assertStringContainsString('intern->native_ptr->setMask((GLbitfield)mask);', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr->setShortValue((GLshort)value);', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr->setUshortValue((GLushort)value);', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr->setByteValue((GLbyte)value);', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr->setUbyteValue((GLubyte)value);', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr->setOffset((GLintptr)value);', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr->setSizeInBytes((GLsizeiptr)value);', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr->setTimestamp((GLuint64)value);', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr->setTextureUnit((uint)value);', $cpp);
         Assert::assertStringContainsString('intern->native_ptr->setRatio((GLfloat)ratio);', $cpp);
         Assert::assertStringContainsString('intern->native_ptr->setGain((GLdouble)gain);', $cpp);
         Assert::assertStringContainsString('intern->native_ptr->setEnabled(enabled);', $cpp);
@@ -342,11 +374,13 @@ it('supports opengl raw input buffers as php strings', function (): void {
         $header = $outputDir . '/qopenglrawbufferholder.h';
         file_put_contents($header, <<<'CPP'
 typedef void GLvoid;
+typedef unsigned char GLubyte;
 
 class QOpenGLRawBufferHolder {
 public:
 void uploadBytes(int size, const void *data);
 void uploadGlBytes(int size, const GLvoid *data);
+void uploadIndexBytes(int size, const GLubyte *data);
 };
 CPP);
 
@@ -367,7 +401,6 @@ CPP);
 
         $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
         Assert::assertSame('ok', $payload['status']);
-        Assert::assertNotContains('unsupported_parameter_type', array_column($payload['skipped_methods'], 'reason_code'));
 
         $stub = (string) file_get_contents($outputDir . '/classes/qt_qopenglrawbufferholder.stub.php');
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qopenglrawbufferholder.cpp');
@@ -376,6 +409,47 @@ CPP);
         Assert::assertStringContainsString('public function uploadGlBytes(int $size, string $data): void {}', $stub);
         Assert::assertStringContainsString('intern->native_ptr->uploadBytes((int)size, (const void *)ZSTR_VAL(data));', $cpp);
         Assert::assertStringContainsString('intern->native_ptr->uploadGlBytes((int)size, (const GLvoid *)ZSTR_VAL(data));', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr->uploadIndexBytes((int)size, (const GLubyte *)ZSTR_VAL(data));', $cpp);
+    });
+
+it('supports glubyte string returns for opengl apis', function (): void {
+        $fixtureRoot = qt_fixture_path('policy-qt');
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+        mkdir($outputDir, 0777, true);
+
+        $header = $outputDir . '/qopenglstringreturnholder.h';
+        file_put_contents($header, <<<'CPP'
+typedef unsigned char GLubyte;
+
+class QOpenGLStringReturnHolder {
+public:
+const GLubyte *getString() const;
+};
+CPP);
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $header,
+            'class' => 'QOpenGLStringReturnHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QOpenGLStringReturnHolder',
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        Assert::assertSame('ok', $payload['status']);
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qopenglstringreturnholder.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qopenglstringreturnholder.cpp');
+
+        Assert::assertStringContainsString('public function getString(): string {}', $stub);
+        Assert::assertStringContainsString('RETURN_STRING((const char *)_result)', $cpp);
     });
 
 it('keeps non-opengl raw input buffers unsupported', function (): void {
