@@ -45,6 +45,7 @@ it('generates the extension tree from a fixture qt root', function (): void {
         ->and(is_file($metadataDir . '/allowed_classes.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/discovery_cache.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/enum_holders_cache.json'))->toBeTrue()
+        ->and(is_file($metadataDir . '/enum_candidate_headers.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/accepted_candidates.json'))->toBeTrue()
         ->and(is_file($classCacheDir . '/QPoint.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/phpize.stdout.log'))->toBeTrue()
@@ -181,6 +182,7 @@ it('reuses an existing discovery cache', function (): void {
         'accepted_candidates.json',
         'allowed_classes.json',
         'enum_holders_cache.json',
+        'enum_candidate_headers.json',
         'phpize: started',
         'phpize: succeeded',
         'gen_stub: started',
@@ -307,6 +309,17 @@ it('generates enum holder classes and unblocks enum-based methods', function ():
         ->and(is_file($outputDir . '/classes/qt_enum_qt_sql_q_sql_table_type.stub.php'))->toBeTrue()
         ->and(is_file($outputDir . '/classes/qt_qconnectioncarrier.stub.php'))->toBeTrue()
         ->and(is_file($outputDir . '/classes/qt_qsqlquerylike.stub.php'))->toBeTrue();
+
+    $enumCandidateHeaders = qt_decode_json((string) file_get_contents($metadataDir . '/enum_candidate_headers.json'));
+    expect($enumCandidateHeaders)->toContainEqual([
+        'header' => $fixtureRoot . '/include/QtCore/qnamespace.h',
+        'module' => 'QtCore',
+        'types' => ['Qt::ConnectionType', 'Qt::ConnectionTypes'],
+    ])->toContainEqual([
+        'header' => $fixtureRoot . '/include/QtSql/qsqlquerylike.h',
+        'module' => 'QtSql',
+        'types' => ['QSql::ParamType', 'QSql::TableType'],
+    ]);
 
     $globalEnumStub = (string) file_get_contents($outputDir . '/classes/qt_enum_qt_connection_type.stub.php');
     expect($globalEnumStub)->toContain(

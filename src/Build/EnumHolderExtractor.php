@@ -21,10 +21,11 @@ class EnumHolderExtractor
     /**
      * @param list<HeaderCandidate> $acceptedCandidates
      * @param list<array<string, string|null>> $skippedClasses
+     * @param list<EnumCandidateHeader> $queuedHeaders
      */
-    public function namespaceHeaderCount(array $acceptedCandidates, array $skippedClasses): int
+    public function namespaceHeaderCount(array $acceptedCandidates, array $skippedClasses, array $queuedHeaders = []): int
     {
-        return count($this->headerModules($acceptedCandidates, $skippedClasses));
+        return count($this->headerModules($acceptedCandidates, $skippedClasses, $queuedHeaders));
     }
 
     /**
@@ -33,6 +34,7 @@ class EnumHolderExtractor
      * @param list<array<string, string|null>> $skippedClasses
      * @param array<string, array<string, mixed>> $preparedClassDataByClass
      * @param array<string, string> $classNamespaces
+     * @param list<EnumCandidateHeader> $queuedHeaders
      * @param null|callable(int, int): void $onNamespaceHeaderProcessed
      */
     public function extract(
@@ -41,6 +43,7 @@ class EnumHolderExtractor
         array $skippedClasses,
         array $preparedClassDataByClass,
         array $classNamespaces,
+        array $queuedHeaders = [],
         ?callable $onNamespaceHeaderProcessed = null,
         int $jobs = 1,
         string $metadataDir = '',
@@ -64,7 +67,7 @@ class EnumHolderExtractor
             }
         }
 
-        $headerModules = $this->headerModules($acceptedCandidates, $skippedClasses);
+        $headerModules = $this->headerModules($acceptedCandidates, $skippedClasses, $queuedHeaders);
 
         $processedHeaders = 0;
         $totalHeaders = count($headerModules);
@@ -139,9 +142,10 @@ class EnumHolderExtractor
     /**
      * @param list<HeaderCandidate> $acceptedCandidates
      * @param list<array<string, string|null>> $skippedClasses
+     * @param list<EnumCandidateHeader> $queuedHeaders
      * @return array<string, string>
      */
-    private function headerModules(array $acceptedCandidates, array $skippedClasses): array
+    private function headerModules(array $acceptedCandidates, array $skippedClasses, array $queuedHeaders = []): array
     {
         /** @var array<string, string> $headerModules */
         $headerModules = [];
@@ -156,6 +160,18 @@ class EnumHolderExtractor
             }
 
             $headerModules[$header] ??= $module;
+        }
+
+        foreach ($queuedHeaders as $entry) {
+            if (!$entry instanceof EnumCandidateHeader) {
+                continue;
+            }
+
+            if ($entry->header === '' || $entry->module === '') {
+                continue;
+            }
+
+            $headerModules[$entry->header] ??= $entry->module;
         }
 
         return $headerModules;

@@ -157,6 +157,18 @@ class BuildPipeline
         $skippedClasses = [...$skippedClasses, ...$classStructures['skipped_classes']];
 
         $classNamespaces = $this->classNamespaces($acceptedCandidates, $request->importedAbi);
+        $enumCandidateHeaders = (new EnumCandidateHeaderCollector())->collect(
+            $request->installation->includeRoots,
+            $acceptedCandidates,
+            $classStructures['prepared_class_data'],
+        );
+        file_put_contents(
+            $metadataDir . '/enum_candidate_headers.json',
+            json_encode(array_map(
+                static fn(EnumCandidateHeader $entry): array => $entry->toArray(),
+                $enumCandidateHeaders,
+            ), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]',
+        );
         $enumHolderCache = new EnumHolderCache();
         $enumExtractor = new EnumHolderExtractor();
         $enumRegistry = $enumHolderCache->load(
@@ -165,6 +177,7 @@ class BuildPipeline
             $acceptedCandidates,
             $skippedClasses,
             $classNamespaces,
+            $enumCandidateHeaders,
         );
 
         if ($enumRegistry instanceof EnumHolderRegistry) {
@@ -174,7 +187,15 @@ class BuildPipeline
             ));
         } else {
             $output->writeln('<comment>Enum holder cache:</comment> miss.');
-            $enumHeaderCount = $enumExtractor->namespaceHeaderCount($acceptedCandidates, $skippedClasses);
+            $queuedEnumHeaderCount = count($enumCandidateHeaders);
+            $enumHeaderCount = $enumExtractor->namespaceHeaderCount($acceptedCandidates, $skippedClasses, $enumCandidateHeaders);
+            if ($queuedEnumHeaderCount > 0) {
+                $output->writeln(sprintf(
+                    '<comment>Queued enum candidate headers:</comment> %d (scanning %d total header(s)).',
+                    $queuedEnumHeaderCount,
+                    $enumHeaderCount,
+                ));
+            }
             if ($enumHeaderCount > 0 && $request->jobs > 1) {
                 $output->writeln(sprintf(
                     '<info>Extracting enum holders with %d parallel worker(s)...</info>',
@@ -194,6 +215,7 @@ class BuildPipeline
                 $skippedClasses,
                 $classStructures['prepared_class_data'],
                 $classNamespaces,
+                $enumCandidateHeaders,
                 static function (int $completed, int $total) use ($enumProgressBar): void {
                     if ($enumProgressBar === null) {
                         return;
@@ -216,6 +238,7 @@ class BuildPipeline
                 $skippedClasses,
                 $classNamespaces,
                 $enumRegistry,
+                $enumCandidateHeaders,
             );
         }
 
@@ -459,6 +482,7 @@ class BuildPipeline
             'accepted_candidates.json',
             'allowed_classes.json',
             'enum_holders_cache.json',
+            'enum_candidate_headers.json',
         ] as $filename) {
             $path = $metadataDir . '/' . $filename;
             if (is_file($path)) {

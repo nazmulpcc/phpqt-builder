@@ -8,13 +8,14 @@ use QtBuilder\Scanning\HeaderCandidate;
 
 class EnumHolderCache
 {
-    private const SCHEMA_VERSION = 1;
+    private const SCHEMA_VERSION = 2;
 
     /**
      * @param list<string> $includePaths
      * @param list<HeaderCandidate> $acceptedCandidates
      * @param list<array<string, string|null>> $skippedClasses
      * @param array<string, string> $classNamespaces
+     * @param list<EnumCandidateHeader> $queuedHeaders
      */
     public function load(
         string $metadataDir,
@@ -22,6 +23,7 @@ class EnumHolderCache
         array $acceptedCandidates,
         array $skippedClasses,
         array $classNamespaces,
+        array $queuedHeaders = [],
     ): ?EnumHolderRegistry {
         $path = $this->path($metadataDir);
         if (!is_file($path)) {
@@ -38,7 +40,7 @@ class EnumHolderCache
         }
 
         $cacheKey = (string) ($decoded['cache_key'] ?? '');
-        if ($cacheKey === '' || $cacheKey !== $this->cacheKey($includePaths, $acceptedCandidates, $skippedClasses, $classNamespaces)) {
+        if ($cacheKey === '' || $cacheKey !== $this->cacheKey($includePaths, $acceptedCandidates, $skippedClasses, $classNamespaces, $queuedHeaders)) {
             return null;
         }
 
@@ -103,6 +105,7 @@ class EnumHolderCache
      * @param list<HeaderCandidate> $acceptedCandidates
      * @param list<array<string, string|null>> $skippedClasses
      * @param array<string, string> $classNamespaces
+     * @param list<EnumCandidateHeader> $queuedHeaders
      */
     public function write(
         string $metadataDir,
@@ -111,13 +114,14 @@ class EnumHolderCache
         array $skippedClasses,
         array $classNamespaces,
         EnumHolderRegistry $registry,
+        array $queuedHeaders = [],
     ): string {
         $path = $this->path($metadataDir);
         @mkdir($metadataDir, 0755, true);
 
         $payload = [
             'schema_version' => self::SCHEMA_VERSION,
-            'cache_key' => $this->cacheKey($includePaths, $acceptedCandidates, $skippedClasses, $classNamespaces),
+            'cache_key' => $this->cacheKey($includePaths, $acceptedCandidates, $skippedClasses, $classNamespaces, $queuedHeaders),
             'holders' => array_map(
                 static fn(EnumHolderDefinition $holder): array => $holder->toArray(),
                 $registry->holders(),
@@ -139,12 +143,14 @@ class EnumHolderCache
      * @param list<HeaderCandidate> $acceptedCandidates
      * @param list<array<string, string|null>> $skippedClasses
      * @param array<string, string> $classNamespaces
+     * @param list<EnumCandidateHeader> $queuedHeaders
      */
     private function cacheKey(
         array $includePaths,
         array $acceptedCandidates,
         array $skippedClasses,
         array $classNamespaces,
+        array $queuedHeaders = [],
     ): string {
         $normalizedIncludePaths = array_values(array_unique(array_map(
             static fn(string $path): string => self::normalizePath($path),
@@ -184,13 +190,38 @@ class EnumHolderCache
             ];
         }
 
+        /** @var array<string, array{module: string, types: list<string>}> $queued */
+        $queued = [];
+        foreach ($queuedHeaders as $entry) {
+            if (!$entry instanceof EnumCandidateHeader || $entry->header === '' || $entry->module === '') {
+                continue;
+            }
+
+            $types = array_values(array_filter(array_map(
+                static fn(mixed $value): string => is_string($value) ? trim($value) : '',
+                $entry->types,
+            ), static fn(string $value): bool => $value !== ''));
+            sort($types);
+
+            $queued[$entry->header] = [
+                'module' => $entry->module,
+                'types' => $types,
+            ];
+            $headers[$entry->header] ??= [
+                'module' => $entry->module,
+                'stat' => $this->fileSignature($entry->header),
+            ];
+        }
+
         ksort($headers);
+        ksort($queued);
 
         return hash('sha256', json_encode([
             'schema' => self::SCHEMA_VERSION,
             'include_paths' => $normalizedIncludePaths,
             'class_namespaces' => $classNamespacePayload,
             'headers' => $headers,
+            'queued_headers' => $queued,
         ], JSON_UNESCAPED_SLASHES) ?: '');
     }
 

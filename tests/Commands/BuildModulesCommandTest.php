@@ -355,6 +355,7 @@ it('generates enum holder classes into their owning split modules', function ():
         ->and(is_file($qtCoreRoot . '/ext/classes/qt_enum_qt_core_q_connection_carrier_mode.stub.php'))->toBeTrue()
         ->and(is_file($qtSqlRoot . '/ext/classes/qt_enum_qt_sql_q_sql_param_type.stub.php'))->toBeTrue()
         ->and(is_file($qtSqlRoot . '/ext/classes/qt_enum_qt_sql_q_sql_table_type.stub.php'))->toBeTrue()
+        ->and(is_file($buildRoot . '/generated/enum_candidate_headers.json'))->toBeTrue()
         ->and(is_file($sharedClassesDir . '/qt_enum_qt_connection_type.h'))->toBeFalse()
         ->and(is_file($sharedClassesDir . '/qt_enum_qt_sql_q_sql_param_type.h'))->toBeFalse();
 
@@ -368,6 +369,13 @@ it('generates enum holder classes into their owning split modules', function ():
     expect($qtSqlManifest['module'])->toBe('QtSql')
         ->and($qtSqlManifest['dependency_modules'])->toBe(['QtCore'])
         ->and($qtSqlManifest['classes'])->toBe(['QSqlQueryLike']);
+
+    $enumCandidateHeaders = qt_decode_json((string) file_get_contents($buildRoot . '/generated/enum_candidate_headers.json'));
+    expect($enumCandidateHeaders)->toContainEqual([
+        'header' => $fixtureRoot . '/include/QtCore/qnamespace.h',
+        'module' => 'QtCore',
+        'types' => ['Qt::ConnectionType', 'Qt::ConnectionTypes'],
+    ]);
 });
 
 it('builds unmapped split modules with a manifest warning', function (): void {
