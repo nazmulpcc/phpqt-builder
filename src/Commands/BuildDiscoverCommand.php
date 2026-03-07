@@ -109,6 +109,7 @@ class BuildDiscoverCommand extends Command
             'discovery_cache.json',
             'accepted_candidates.json',
             'allowed_classes.json',
+            'supplemental_candidates.json',
         ] as $filename) {
             $output->writeln(sprintf('  <comment>Wrote:</comment> %s', $metadataDir . '/' . $filename));
         }

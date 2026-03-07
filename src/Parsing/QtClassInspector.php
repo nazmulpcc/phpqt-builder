@@ -97,6 +97,26 @@ class QtClassInspector
         return $this->extractClassDataFromTranslationUnit($className, $classCursor);
     }
 
+    public function locateClassHeader(string $headerPath, string $className): ?string
+    {
+        $this->parse($headerPath);
+        $classCursor = $this->findClass($className);
+        if ($classCursor === null) {
+            return null;
+        }
+
+        $locationFile = $classCursor->getLocation()['file'] ?? null;
+        if (is_string($locationFile) && $locationFile !== '') {
+            $real = realpath($locationFile);
+
+            return $real !== false ? $real : $locationFile;
+        }
+
+        $real = realpath($headerPath);
+
+        return $real !== false ? $real : $headerPath;
+    }
+
     private function hasDirectMembers(ClassCursor $class): bool
     {
         foreach ($class->getFields() as $_) {

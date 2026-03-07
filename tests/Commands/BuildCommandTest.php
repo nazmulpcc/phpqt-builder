@@ -430,6 +430,35 @@ it('removes stale enum holder files during incremental builds', function (): voi
         ->and(is_file($outputDir . '/qt.dep'))->toBeFalse();
 });
 
+it('generates wrappers for supplemental class candidates discovered through includes', function (): void {
+    $fixtureRoot = qt_fixture_path('supplemental-qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-supplemental-' . bin2hex(random_bytes(4));
+    $outputDir = $buildRoot . '/ext';
+    $metadataDir = $buildRoot . '/generated';
+    $bootstrapper = new FakeExtensionBootstrapper();
+
+    $result = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            'modules' => 'QtGui,QtOpenGL',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+            '--no-build' => true,
+        ],
+    );
+
+    expect($result)->toBeSuccessfulCommandResult()
+        ->and($result['display'])->toContain('Supplemental class discovery: queued 1 new candidate(s).')
+        ->and(is_file($outputDir . '/classes/qt_qabstractopenglfunctions.cpp'))->toBeTrue()
+        ->and((string) file_get_contents($outputDir . '/classes/qt_qabstractopenglfunctions.h'))->toContain('#include <qopenglversionfunctions.h>')
+        ->and(is_file($outputDir . '/classes/qt_qopenglfunctions_1_0.cpp'))->toBeTrue()
+        ->and(is_file($metadataDir . '/supplemental_candidates.json'))->toBeTrue();
+
+    $classmap = qt_decode_json((string) file_get_contents($metadataDir . '/classmap.json'));
+    expect(array_column($classmap, 'class'))->toContain('QAbstractOpenGLFunctions', 'QOpenGLFunctions_1_0');
+});
+
 it('auto-adds static manifest dependencies for monolithic builds', function (): void {
     $fixtureRoot = qt_fixture_path('module-split-qt');
     $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-expanded-' . bin2hex(random_bytes(4));
@@ -582,13 +611,13 @@ it('rewrites cached allow lists to actual generated classes', function (): void 
     expect(substr_count($result['display'], 'Module acceptance:'))->toBe(1);
 
     $allowedClasses = qt_decode_json((string) file_get_contents($metadataDir . '/allowed_classes.json'));
-    expect($allowedClasses)->toBe(['QCStringHolder']);
+    expect($allowedClasses)->toBe(['QCStringHolder', 'QParentThing']);
 
     $acceptedCandidates = qt_decode_json((string) file_get_contents($metadataDir . '/accepted_candidates.json'));
-    expect(array_column($acceptedCandidates, 'class'))->toBe(['QCStringHolder']);
+    expect(array_column($acceptedCandidates, 'class'))->toBe(['QCStringHolder', 'QParentThing']);
 
     $classmap = qt_decode_json((string) file_get_contents($metadataDir . '/classmap.json'));
-    expect(array_column($classmap, 'class'))->toBe(['QCStringHolder']);
+    expect(array_column($classmap, 'class'))->toBe(['QCStringHolder', 'QParentThing']);
 
     $skippedClasses = qt_decode_json((string) file_get_contents($metadataDir . '/skipped_classes.json'));
     $skippedByClass = [];
@@ -597,9 +626,15 @@ it('rewrites cached allow lists to actual generated classes', function (): void 
     }
     expect($skippedByClass['QChildThing'] ?? null)->toBe('unsupported_parent_class');
 
+    $supplementalCandidates = qt_decode_json((string) file_get_contents($metadataDir . '/supplemental_candidates.json'));
+    expect($supplementalCandidates)->toHaveCount(1)
+        ->and($supplementalCandidates[0]['class'])->toBe('QParentThing')
+        ->and($supplementalCandidates[0]['discovered_from_class'])->toBe('QChildThing')
+        ->and($supplementalCandidates[0]['trigger_reason'])->toBe('unsupported_parent_class');
+
     $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
     expect($summary['generation_passes'])->toBe(2)
-        ->and($summary['generated_classes'])->toBe(1)
+        ->and($summary['generated_classes'])->toBe(2)
         ->and($summary['skipped_classes'])->toBe(1);
 });
 

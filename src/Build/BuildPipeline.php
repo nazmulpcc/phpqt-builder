@@ -155,6 +155,55 @@ class BuildPipeline
 
         $acceptedCandidates = $classStructures['accepted_candidates'];
         $skippedClasses = [...$skippedClasses, ...$classStructures['skipped_classes']];
+        $supplemental = $this->discoveryService->augmentWithSupplementalCandidates(
+            $acceptedCandidates,
+            $classStructures['prepared_class_data'],
+            $request->modules,
+            $request->installation->includeRoots,
+            $request->outputDir,
+            $metadataDir,
+            $request->jobs,
+            $output,
+            $request->extensionName,
+            $request->importedAbi?->availableClasses ?? [],
+        );
+
+        if ($supplemental['errors'] !== []) {
+            foreach ($supplemental['errors'] as $error) {
+                $message = is_string($error['reason_message'] ?? null) ? $error['reason_message'] : 'Supplemental class discovery failed.';
+                $output->writeln(sprintf('<error>%s</error>', $message));
+            }
+
+            return new BuildAnalysisResult(
+                metadataDir: $metadataDir,
+                candidateCount: $candidateCount,
+                acceptedCandidates: [],
+                skippedClasses: [...$skippedClasses, ...$supplemental['skipped_classes']],
+                skippedMethods: [],
+                errors: $supplemental['errors'],
+                generatedClasses: [],
+                generatedPhpClasses: [],
+                generatedClassParents: [],
+                generatedClassDependencies: [],
+                generatedClassHeaders: [],
+                generatedClassModules: [],
+                classNamespaces: [],
+                enumHolders: [],
+                moduleMethodTotals: $moduleMethodTotals,
+                moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
+                moduleGeneratedMethodTotals: [],
+                passes: 0,
+                requiresSignalConnectionSupport: false,
+            );
+        }
+
+        $acceptedCandidates = $supplemental['accepted_candidates'];
+        $skippedClasses = [...$skippedClasses, ...$supplemental['skipped_classes']];
+        $classStructures['prepared_class_data'] = $supplemental['prepared_class_data'];
+        file_put_contents(
+            $metadataDir . '/supplemental_candidates.json',
+            json_encode($supplemental['supplemental_candidates'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]',
+        );
 
         $classNamespaces = $this->classNamespaces($acceptedCandidates, $request->importedAbi);
         $enumCandidateHeaders = (new EnumCandidateHeaderCollector())->collect(
@@ -279,6 +328,7 @@ class BuildPipeline
                 candidateCount: $candidateCount,
                 moduleMethodTotals: $moduleMethodTotals,
                 moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
+                supplementalCandidates: $supplemental['supplemental_candidates'],
             ),
         );
 
@@ -483,6 +533,7 @@ class BuildPipeline
             'allowed_classes.json',
             'enum_holders_cache.json',
             'enum_candidate_headers.json',
+            'supplemental_candidates.json',
         ] as $filename) {
             $path = $metadataDir . '/' . $filename;
             if (is_file($path)) {
@@ -696,7 +747,10 @@ class BuildPipeline
 
                 if ($result->status === 'ok' && $result->phpClass !== null) {
                     $generatedClasses[] = $result->className;
-                    $generatedPhpClasses[$result->className] = $result->phpClass;
+                    $generatedPhpClasses[$result->className] = $this->withResolvedNativeIncludes(
+                        $result->phpClass,
+                        $candidate,
+                    );
                     $payload = $result->toArray();
                     $generatedClassParents[$result->className] = is_string($payload['parent_class'] ?? null)
                         ? $payload['parent_class']
@@ -924,6 +978,59 @@ class BuildPipeline
         }
 
         return $cache[$className] = $methods;
+    }
+
+    private function withResolvedNativeIncludes(PhpClass $phpClass, HeaderCandidate $candidate): PhpClass
+    {
+        $resolvedInclude = $this->qtIncludeForHeaderCandidate($candidate);
+        if ($resolvedInclude === null || $phpClass->nativeIncludes === [$resolvedInclude]) {
+            return $phpClass;
+        }
+
+        return new PhpClass(
+            name: $phpClass->name,
+            parent: $phpClass->parent,
+            isAbstract: $phpClass->isAbstract,
+            isCopyConstructible: $phpClass->isCopyConstructible,
+            hasPublicConstructor: $phpClass->hasPublicConstructor,
+            hasPublicDestructor: $phpClass->hasPublicDestructor,
+            isQObjectDerived: $phpClass->isQObjectDerived,
+            properties: $phpClass->properties,
+            methods: $phpClass->methods,
+            signals: $phpClass->signals,
+            classConstants: $phpClass->classConstants,
+            nativeIncludes: [$resolvedInclude],
+            nativeAliasOf: $phpClass->nativeAliasOf,
+        );
+    }
+
+    private function qtIncludeForHeaderCandidate(HeaderCandidate $candidate): ?string
+    {
+        foreach ([$candidate->publicHeader, $candidate->parseHeader] as $headerPath) {
+            $relativeHeader = $this->relativeQtHeaderPath($headerPath);
+            if ($relativeHeader !== null) {
+                return sprintf('<%s>', $relativeHeader);
+            }
+        }
+
+        return null;
+    }
+
+    private function relativeQtHeaderPath(string $headerPath): ?string
+    {
+        $normalized = str_replace('\\', '/', $headerPath);
+
+        if (preg_match('~/Qt[^/]+\.framework(?:/Versions/[^/]+)?/Headers/(.+)$~', $normalized, $matches) === 1) {
+            return is_string($matches[1]) && $matches[1] !== '' ? $matches[1] : null;
+        }
+
+        if (preg_match('~/include/Qt[^/]+/(.+)$~', $normalized, $matches) === 1) {
+            return is_string($matches[1]) && $matches[1] !== '' ? $matches[1] : null;
+        }
+
+        $basename = basename($normalized);
+
+        return $basename !== '' ? $basename : null;
     }
 
     /**

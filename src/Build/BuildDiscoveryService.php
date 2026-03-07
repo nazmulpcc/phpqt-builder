@@ -20,6 +20,7 @@ class BuildDiscoveryService
         private readonly ModuleHeaderScanner $scanner = new ModuleHeaderScanner(),
         private readonly ClassExposurePolicy $classPolicy = new ClassExposurePolicy(),
         private readonly ClassGenerationService $generationService = new ClassGenerationService(),
+        private readonly SupplementalClassCandidateResolver $supplementalResolver = new SupplementalClassCandidateResolver(),
     ) {}
 
     /**
@@ -62,11 +63,37 @@ class BuildDiscoveryService
             );
         }
 
-        $viability = $this->resolveViableCandidates(
+        $supplemental = $this->augmentWithSupplementalCandidates(
             $classStructures['accepted_candidates'],
+            $classStructures['prepared_class_data'],
+            $modules,
+            $installation->includeRoots,
+            $outputDir,
+            $metadataDir,
+            $jobs,
+            $output,
+            $extensionName,
+            $importedAbi?->availableClasses ?? [],
+        );
+
+        if ($supplemental['errors'] !== []) {
+            return new BuildDiscoveryResult(
+                acceptedCandidates: [],
+                skippedClasses: [...$initialSkippedClasses, ...$classStructures['skipped_classes'], ...$supplemental['skipped_classes']],
+                allowedClasses: [],
+                candidateCount: $candidateCount,
+                moduleMethodTotals: [],
+                moduleAcceptedMethodTotals: [],
+                errors: $supplemental['errors'],
+                supplementalCandidates: $supplemental['supplemental_candidates'],
+            );
+        }
+
+        $viability = $this->resolveViableCandidates(
+            $supplemental['accepted_candidates'],
             $importedAbi !== null
-                ? $importedAbi->mergePreparedClassData($classStructures['prepared_class_data'])
-                : $classStructures['prepared_class_data'],
+                ? $importedAbi->mergePreparedClassData($supplemental['prepared_class_data'])
+                : $supplemental['prepared_class_data'],
             $output,
             $importedAbi?->availableClasses ?? [],
             $importedAbi !== null,
@@ -74,21 +101,22 @@ class BuildDiscoveryService
 
         return new BuildDiscoveryResult(
             acceptedCandidates: $viability['accepted_candidates'],
-            skippedClasses: [...$initialSkippedClasses, ...$classStructures['skipped_classes'], ...$viability['skipped_classes']],
+            skippedClasses: [...$initialSkippedClasses, ...$classStructures['skipped_classes'], ...$supplemental['skipped_classes'], ...$viability['skipped_classes']],
             allowedClasses: $viability['allowed_classes'],
             candidateCount: $candidateCount,
             moduleMethodTotals: $this->moduleMethodTotals(
                 $modules,
-                $classStructures['accepted_candidates'],
-                $classStructures['prepared_class_data'],
+                $supplemental['accepted_candidates'],
+                $supplemental['prepared_class_data'],
             ),
             moduleAcceptedMethodTotals: $this->moduleMethodTotals(
                 $modules,
                 $viability['accepted_candidates'],
-                $classStructures['prepared_class_data'],
+                $supplemental['prepared_class_data'],
             ),
             passes: $viability['passes'],
             errors: $viability['errors'],
+            supplementalCandidates: $supplemental['supplemental_candidates'],
         );
     }
 
@@ -114,11 +142,13 @@ class BuildDiscoveryService
             'allowed_classes' => array_values($result->allowedClasses),
             'module_method_totals' => $result->moduleMethodTotals,
             'module_accepted_method_totals' => $result->moduleAcceptedMethodTotals,
+            'supplemental_candidates' => array_values($result->supplementalCandidates),
         ];
 
         $this->writeJsonFile($metadataDir . '/discovery_cache.json', $payload, '{}');
         $this->writeJsonFile($metadataDir . '/accepted_candidates.json', $payload['accepted_candidates'], '[]');
         $this->writeAllowedClassesManifest($metadataDir, $result->allowedClasses);
+        $this->writeJsonFile($metadataDir . '/supplemental_candidates.json', $payload['supplemental_candidates'], '[]');
     }
 
     /**
@@ -266,6 +296,20 @@ class BuildDiscoveryService
             }
         }
 
+        $supplementalCandidatePayload = $decoded['supplemental_candidates'] ?? [];
+        $supplementalCandidatesFile = $metadataDir . '/supplemental_candidates.json';
+        if (is_file($supplementalCandidatesFile)) {
+            $fromFile = json_decode((string) file_get_contents($supplementalCandidatesFile), true);
+            if (is_array($fromFile)) {
+                $supplementalCandidatePayload = $fromFile;
+            }
+        }
+
+        $supplementalCandidates = array_values(array_filter(
+            $supplementalCandidatePayload,
+            static fn(mixed $value): bool => is_array($value),
+        ));
+
         return new BuildDiscoveryResult(
             acceptedCandidates: $acceptedCandidates,
             skippedClasses: $skippedClasses,
@@ -273,7 +317,163 @@ class BuildDiscoveryService
             candidateCount: (int) ($decoded['candidate_count'] ?? count($acceptedCandidates) + count($skippedClasses)),
             moduleMethodTotals: $moduleMethodTotals,
             moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
+            supplementalCandidates: $supplementalCandidates,
         );
+    }
+
+    /**
+     * @param list<HeaderCandidate> $acceptedCandidates
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @param list<string> $modules
+     * @param list<string> $includePaths
+     * @param list<string> $importedAvailableClasses
+     * @return array{
+     *   accepted_candidates: list<HeaderCandidate>,
+     *   prepared_class_data: array<string, array<string, mixed>>,
+     *   skipped_classes: list<array<string, string|null>>,
+     *   errors: list<array<string, string|null>>,
+     *   supplemental_candidates: list<array<string, string>>
+     * }
+     */
+    public function augmentWithSupplementalCandidates(
+        array $acceptedCandidates,
+        array $preparedClassDataByClass,
+        array $modules,
+        array $includePaths,
+        string $outputDir,
+        string $metadataDir,
+        int $jobs,
+        OutputInterface $output,
+        string $extensionName,
+        array $importedAvailableClasses = [],
+    ): array {
+        /** @var array<string, HeaderCandidate> $candidateMap */
+        $candidateMap = [];
+        foreach ($acceptedCandidates as $candidate) {
+            $candidateMap[$candidate->className] = $candidate;
+        }
+
+        /** @var array<string, array{module: string|null, class: string, header: string, reason_code: string|null, reason_message: string|null}> $skippedByClass */
+        $skippedByClass = [];
+        /** @var array<string, array{module: string|null, class: string, header: string, reason_code: string|null, reason_message: string|null}> $errorsByClass */
+        $errorsByClass = [];
+        /** @var array<string, SupplementalClassCandidate> $supplementalCandidates */
+        $supplementalCandidates = [];
+
+        do {
+            $knownClasses = array_fill_keys(array_merge(
+                array_keys($candidateMap),
+                array_keys($preparedClassDataByClass),
+                array_values($importedAvailableClasses),
+                array_keys($supplementalCandidates),
+            ), true);
+
+            /** @var array<string, SupplementalClassCandidate> $queuedThisPass */
+            $queuedThisPass = [];
+            foreach ($candidateMap as $className => $candidate) {
+                $classData = $preparedClassDataByClass[$className] ?? null;
+                if (!is_array($classData)) {
+                    continue;
+                }
+
+                $allowedClasses = array_values(array_unique(array_merge(
+                    array_keys($candidateMap),
+                    array_values($importedAvailableClasses),
+                )));
+                sort($allowedClasses);
+
+                $result = $this->generationService->generateFromPreparedData(
+                    $classData,
+                    $candidate->parseHeader,
+                    $allowedClasses,
+                    $preparedClassDataByClass,
+                    $importedAvailableClasses !== [],
+                );
+
+                $missingClass = $this->supplementalMissingClass($result->reasonCode, $result->reasonMessage);
+                if ($missingClass === null || isset($knownClasses[$missingClass])) {
+                    continue;
+                }
+
+                $supplemental = $this->supplementalResolver->resolve(
+                    $missingClass,
+                    $candidate,
+                    $modules,
+                    $includePaths,
+                    $knownClasses,
+                    (string) ($result->reasonCode ?? 'missing_dependency'),
+                );
+                if ($supplemental === null) {
+                    continue;
+                }
+
+                $queuedThisPass[$supplemental->candidate->className] = $supplemental;
+                $knownClasses[$supplemental->candidate->className] = true;
+            }
+
+            if ($queuedThisPass === []) {
+                break;
+            }
+
+            $output->writeln(sprintf(
+                '<comment>Supplemental class discovery:</comment> queued %d new candidate(s).',
+                count($queuedThisPass),
+            ));
+
+            $prepared = $this->prepareClassStructures(
+                array_values(array_map(
+                    static fn(SupplementalClassCandidate $candidate): HeaderCandidate => $candidate->candidate,
+                    $queuedThisPass,
+                )),
+                $outputDir,
+                $includePaths,
+                $metadataDir,
+                $jobs,
+                $output,
+                $extensionName,
+            );
+
+            foreach ($prepared['accepted_candidates'] as $candidate) {
+                $candidateMap[$candidate->className] = $candidate;
+            }
+
+            foreach ($prepared['prepared_class_data'] as $className => $classData) {
+                $preparedClassDataByClass[$className] = $classData;
+            }
+
+            foreach ($prepared['skipped_classes'] as $entry) {
+                $className = (string) ($entry['class'] ?? '');
+                if ($className !== '') {
+                    $skippedByClass[$className] = $entry;
+                }
+            }
+
+            foreach ($prepared['errors'] as $entry) {
+                $className = (string) ($entry['class'] ?? '');
+                if ($className !== '') {
+                    $errorsByClass[$className] = $entry;
+                }
+            }
+
+            foreach ($queuedThisPass as $className => $candidate) {
+                $supplementalCandidates[$className] = $candidate;
+            }
+        } while ($errorsByClass === []);
+
+        ksort($candidateMap);
+        ksort($preparedClassDataByClass);
+        ksort($supplementalCandidates);
+
+        return [
+            'accepted_candidates' => array_values($candidateMap),
+            'prepared_class_data' => $preparedClassDataByClass,
+            'skipped_classes' => array_values($skippedByClass),
+            'errors' => array_values($errorsByClass),
+            'supplemental_candidates' => array_values(array_map(
+                static fn(SupplementalClassCandidate $candidate): array => $candidate->toArray(),
+                $supplementalCandidates,
+            )),
+        ];
     }
 
     /**
@@ -593,6 +793,19 @@ class BuildDiscoveryService
             'passes' => $passes,
             'errors' => array_values($errorsByClass),
         ];
+    }
+
+    private function supplementalMissingClass(?string $reasonCode, ?string $reasonMessage): ?string
+    {
+        if (!in_array($reasonCode, ['unsupported_parent_class', 'unsupported_external_module_dependency'], true)) {
+            return null;
+        }
+
+        if (!is_string($reasonMessage) || preg_match('/^Parent class\s+(Q[A-Z][A-Za-z0-9_]*)\b/', $reasonMessage, $matches) !== 1) {
+            return null;
+        }
+
+        return $matches[1];
     }
 
     private function createProgressBar(OutputInterface $output, int $total, string $formatName, string $label): ?ProgressBar

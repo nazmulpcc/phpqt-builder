@@ -68,6 +68,7 @@ it('writes reusable build metadata during discovery', function (): void {
     expect(is_file($metadataDir . '/discovery_cache.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/accepted_candidates.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/allowed_classes.json'))->toBeTrue()
+        ->and(is_file($metadataDir . '/supplemental_candidates.json'))->toBeTrue()
         ->and(is_file($classCacheDir . '/QAbstractItemModel.json'))->toBeTrue()
         ->and(is_file($classCacheDir . '/QPoint.json'))->toBeTrue()
         ->and(is_file($extDir . '/config.m4'))->toBeFalse();
@@ -122,7 +123,64 @@ it('reuses class structure cache after generated metadata is cleared', function 
     expect(substr_count($secondRun['display'], 'Module acceptance:'))->toBe(1);
     expect(is_file($metadataDir . '/discovery_cache.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/accepted_candidates.json'))->toBeTrue()
-        ->and(is_file($metadataDir . '/allowed_classes.json'))->toBeTrue();
+        ->and(is_file($metadataDir . '/allowed_classes.json'))->toBeTrue()
+        ->and(is_file($metadataDir . '/supplemental_candidates.json'))->toBeTrue();
+});
+
+it('queues supplemental class candidates discovered through included headers', function (): void {
+    $fixtureRoot = qt_fixture_path('supplemental-qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-discover-supplemental-' . bin2hex(random_bytes(4));
+    $metadataDir = $buildRoot . '/generated';
+
+    $result = qt_command_result(
+        new BuildDiscoverCommand(FakeSystemInformation::passing()),
+        [
+            '--qt-path' => $fixtureRoot,
+            'modules' => 'QtGui,QtOpenGL',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+        ],
+    );
+
+    expect($result)->toBeSuccessfulCommandResult()
+        ->and($result['display'])->toContain(
+            'Supplemental class discovery: queued 1 new candidate(s).',
+            'Discovery pass 1',
+            'supplemental_candidates.json',
+        );
+
+    $accepted = qt_decode_json((string) file_get_contents($metadataDir . '/accepted_candidates.json'));
+    expect(array_column($accepted, 'class'))->toContain('QAbstractOpenGLFunctions', 'QOpenGLFunctions_1_0');
+
+    $supplemental = qt_decode_json((string) file_get_contents($metadataDir . '/supplemental_candidates.json'));
+    expect($supplemental)->toContainEqual([
+        'module' => 'QtOpenGL',
+        'class' => 'QAbstractOpenGLFunctions',
+        'public_header' => $fixtureRoot . '/include/QtOpenGL/qopenglversionfunctions.h',
+        'parse_header' => $fixtureRoot . '/include/QtOpenGL/qopenglversionfunctions.h',
+        'discovered_from_class' => 'QOpenGLFunctions_1_0',
+        'discovered_from_header' => $fixtureRoot . '/include/QtOpenGL/qopenglfunctions_1_0.h',
+        'trigger_reason' => 'unsupported_parent_class',
+    ]);
+
+    $cache = qt_decode_json((string) file_get_contents($metadataDir . '/discovery_cache.json'));
+    expect(array_column($cache['accepted_candidates'], 'class'))->toContain('QAbstractOpenGLFunctions');
+
+    $secondRun = qt_command_result(
+        new BuildDiscoverCommand(FakeSystemInformation::passing()),
+        [
+            '--qt-path' => $fixtureRoot,
+            'modules' => 'QtGui,QtOpenGL',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+        ],
+    );
+
+    expect($secondRun)->toBeSuccessfulCommandResult();
+
+    $secondSupplemental = qt_decode_json((string) file_get_contents($metadataDir . '/supplemental_candidates.json'));
+    expect($secondSupplemental)->toHaveCount(1)
+        ->and($secondSupplemental)->toContainEqual($supplemental[0]);
 });
 
 it('feeds discovery cache into the build command', function (): void {
