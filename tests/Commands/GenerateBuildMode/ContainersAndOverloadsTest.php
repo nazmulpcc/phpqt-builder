@@ -53,6 +53,57 @@ it('supports common qt container parameters and returns', function (): void {
         Assert::assertStringContainsString('#include "qt_qmodelindex.h"', $cpp);
 });
 
+it('supports QList<GLuint> as php arrays', function (): void {
+        $fixtureRoot = qt_fixture_path('policy-qt');
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+        mkdir($outputDir, 0777, true);
+
+        $header = $outputDir . '/qglcontainerholder.h';
+        file_put_contents($header, <<<'CPP'
+template <typename T>
+class QList {};
+
+typedef unsigned int GLuint;
+
+class QGlContainerHolder
+{
+public:
+    QList<GLuint> ids() const;
+    void setIds(const QList<GLuint> &ids);
+};
+CPP);
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $header,
+            'class' => 'QGlContainerHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QGlContainerHolder',
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        Assert::assertSame('ok', $payload['status']);
+        Assert::assertNotContains('unsupported_parameter_type', array_column($payload['skipped_methods'], 'reason_code'));
+        Assert::assertNotContains('unsupported_return_type', array_column($payload['skipped_methods'], 'reason_code'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qglcontainerholder.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qglcontainerholder.cpp');
+
+        Assert::assertStringContainsString('public function ids(): array {}', $stub);
+        Assert::assertStringContainsString('public function setIds(array $ids): void {}', $stub);
+        Assert::assertStringContainsString('QList<GLuint> _qt_arg_0;', $cpp);
+        Assert::assertStringContainsString('Expected array of ints.', $cpp);
+        Assert::assertStringContainsString('_qt_arg_0.append(_qt_arg_0_value);', $cpp);
+        Assert::assertStringContainsString('ZVAL_LONG(&_qt_value, (zend_long)(_qt_item));', $cpp);
+});
+
 it('supports common qt container signatures for virtual overrides', function (): void {
         $fixtureRoot = qt_fixture_path('policy-qt');
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));

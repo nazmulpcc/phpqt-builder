@@ -205,6 +205,135 @@ it('uses direct construction for explicit value-return fallbacks in virtual disp
         Assert::assertSame('QVariant()', $bridge->defaultNativeReturnExpr('QVariant', 'QVariant'));
 });
 
+it('supports common opengl scalar typedef parameters and returns', function (): void {
+        $fixtureRoot = qt_fixture_path('policy-qt');
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+        mkdir($outputDir, 0777, true);
+
+        $header = $outputDir . '/qglscalarholder.h';
+        file_put_contents($header, <<<'CPP'
+typedef unsigned int GLenum;
+typedef unsigned int GLuint;
+typedef int GLint;
+typedef int GLsizei;
+typedef unsigned int GLbitfield;
+typedef float GLfloat;
+typedef double GLdouble;
+typedef unsigned char GLboolean;
+
+class QGlScalarHolder {
+public:
+GLenum mode() const;
+void setMode(GLenum mode);
+GLuint programId() const;
+void setProgramId(GLuint id);
+GLint location() const;
+void setLocation(GLint location);
+GLsizei stride() const;
+void setStride(GLsizei stride);
+GLbitfield mask() const;
+void setMask(GLbitfield mask);
+GLfloat ratio() const;
+void setRatio(GLfloat ratio);
+GLdouble gain() const;
+void setGain(GLdouble gain);
+GLboolean enabled() const;
+void setEnabled(GLboolean enabled);
+};
+CPP);
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $header,
+            'class' => 'QGlScalarHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QGlScalarHolder',
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        Assert::assertSame('ok', $payload['status']);
+        Assert::assertNotContains('unsupported_parameter_type', array_column($payload['skipped_methods'], 'reason_code'));
+        Assert::assertNotContains('unsupported_return_type', array_column($payload['skipped_methods'], 'reason_code'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qglscalarholder.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qglscalarholder.cpp');
+
+        Assert::assertStringContainsString('public function setMode(int $mode): void {}', $stub);
+        Assert::assertStringContainsString('public function programId(): int {}', $stub);
+        Assert::assertStringContainsString('public function ratio(): float {}', $stub);
+        Assert::assertStringContainsString('public function enabled(): bool {}', $stub);
+        Assert::assertStringContainsString('intern->native_ptr->setMode((GLenum)mode);', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr->setProgramId((GLuint)id);', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr->setLocation((GLint)location);', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr->setStride((GLsizei)stride);', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr->setMask((GLbitfield)mask);', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr->setRatio((GLfloat)ratio);', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr->setGain((GLdouble)gain);', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr->setEnabled(enabled);', $cpp);
+        Assert::assertStringContainsString('RETURN_LONG((zend_long)(_result));', $cpp);
+        Assert::assertStringContainsString('RETURN_DOUBLE((double)(_result));', $cpp);
+        Assert::assertStringContainsString('RETURN_BOOL((bool)(_result));', $cpp);
+});
+
+it('supports input-only opengl numeric pointer arrays', function (): void {
+        $fixtureRoot = qt_fixture_path('policy-qt');
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+        mkdir($outputDir, 0777, true);
+
+        $header = $outputDir . '/qglnumericarrayholder.h';
+        file_put_contents($header, <<<'CPP'
+typedef float GLfloat;
+typedef int GLint;
+
+class QGlNumericArrayHolder {
+public:
+void uploadFloats(const GLfloat *values, int count);
+void uploadInts(const GLint *values, int count);
+};
+CPP);
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $header,
+            'class' => 'QGlNumericArrayHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QGlNumericArrayHolder',
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        Assert::assertSame('ok', $payload['status']);
+        Assert::assertNotContains('unsupported_parameter_type', array_column($payload['skipped_methods'], 'reason_code'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qglnumericarrayholder.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qglnumericarrayholder.cpp');
+
+        Assert::assertStringContainsString('public function uploadFloats(array $values, int $count): void {}', $stub);
+        Assert::assertStringContainsString('public function uploadInts(array $values, int $count): void {}', $stub);
+        Assert::assertStringContainsString('std::vector<GLfloat> _qt_arg_0_storage;', $cpp);
+        Assert::assertStringContainsString('const GLfloat * _qt_arg_0 = NULL;', $cpp);
+        Assert::assertStringContainsString('Expected PHP array for OpenGL numeric buffer conversion.', $cpp);
+        Assert::assertStringContainsString('Expected array of numeric values.', $cpp);
+        Assert::assertStringContainsString('_qt_arg_0_storage.push_back((GLfloat)zval_get_double(_qt_arg_0_entry));', $cpp);
+        Assert::assertStringContainsString('std::vector<GLint> _qt_arg_0_storage;', $cpp);
+        Assert::assertStringContainsString('const GLint * _qt_arg_0 = NULL;', $cpp);
+        Assert::assertStringContainsString('Expected array of ints.', $cpp);
+        Assert::assertStringContainsString('_qt_arg_0_storage.push_back((GLint)Z_LVAL_P(_qt_arg_0_entry));', $cpp);
+});
+
 it('treats qbitarray factories as value returns and supports bool out parameters by-ref', function (): void {
         $fixtureRoot = qt_fixture_path('policy-qt');
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
@@ -436,6 +565,47 @@ it('builds an argv constructor bridge', function (): void {
         Assert::assertStringContainsString('char ** _qt_arg_1 = NULL;', $cpp);
         Assert::assertStringContainsString('_qt_argv_storage->argv_storage.emplace_back("php", 3);', $cpp);
         Assert::assertStringContainsString('_qt_arg_0 = (int)_qt_argv_storage->argv_storage.size();', $cpp);
+});
+
+it('builds a const char pointer array bridge for string lists', function (): void {
+        $fixtureRoot = qt_fixture_path('policy-qt');
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+        mkdir($outputDir, 0777, true);
+
+        $header = $outputDir . '/qshaderstringarrayholder.h';
+        file_put_contents($header, <<<'CPP'
+class QShaderStringArrayHolder {
+public:
+void setSources(int count, const char **sources);
+};
+CPP);
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $header,
+            'class' => 'QShaderStringArrayHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QShaderStringArrayHolder',
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        Assert::assertSame('ok', $payload['status']);
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qshaderstringarrayholder.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qshaderstringarrayholder.cpp');
+
+        Assert::assertStringContainsString('public function setSources(int $count, array $sources): void {}', $stub);
+        Assert::assertStringContainsString('std::vector<QByteArray> _qt_arg_1_storage;', $cpp);
+        Assert::assertStringContainsString('std::vector<const char *> _qt_arg_1_pointers;', $cpp);
+        Assert::assertStringContainsString('const char ** _qt_arg_1 = NULL;', $cpp);
+        Assert::assertStringContainsString('_qt_arg_1_pointers.push_back(_qt_arg_1_item.data());', $cpp);
 });
 
 it('skips nested return types while keeping enum-facing apis', function (

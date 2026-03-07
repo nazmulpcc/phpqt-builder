@@ -550,7 +550,7 @@ class MethodExposurePolicy
         }
 
         if ($phpType === 'array') {
-            if ($this->isSupportedArrayType($trimmed)) {
+            if ($this->isSupportedArrayType($trimmed, $isReturn)) {
                 return true;
             }
 
@@ -869,12 +869,20 @@ class MethodExposurePolicy
         return true;
     }
 
-    private function isSupportedArrayType(string $cppType): bool
+    private function isSupportedArrayType(string $cppType, bool $isReturn = false): bool
     {
         $normalized = preg_replace('/\bconst\b/', '', $cppType) ?? $cppType;
         $normalized = trim(preg_replace('/\s+/', ' ', $normalized) ?? $normalized);
 
-        return preg_match('/^char\s*\*\s*\*$/', $normalized) === 1;
+        if (preg_match('/^char\s*\*\s*\*$/', $normalized) === 1) {
+            return true;
+        }
+
+        if ($isReturn) {
+            return false;
+        }
+
+        return preg_match('/^const (GLfloat|GLint)\s*\*$/', trim($cppType)) === 1;
     }
 
     private function isKnownQualifiedScalarType(string $cppType): bool

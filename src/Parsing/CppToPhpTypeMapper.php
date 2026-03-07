@@ -20,7 +20,13 @@ class CppToPhpTypeMapper
      */
     private const array SCALAR_MAP = [
         'bool' => 'bool',
+        'GLboolean' => 'bool',
         'int' => 'int',
+        'GLenum' => 'int',
+        'GLuint' => 'int',
+        'GLint' => 'int',
+        'GLsizei' => 'int',
+        'GLbitfield' => 'int',
         'unsigned int' => 'int',
         'short' => 'int',
         'unsigned short' => 'int',
@@ -44,6 +50,8 @@ class CppToPhpTypeMapper
         'qulonglong' => 'int',
         'WId' => 'int',
         'float' => 'float',
+        'GLfloat' => 'float',
+        'GLdouble' => 'float',
         'double' => 'float',
         'qreal' => 'float',
         'void' => 'void',
@@ -96,6 +104,10 @@ class CppToPhpTypeMapper
         $trimmed = trim($cppType);
 
         if ($this->isCharPointerArrayType($trimmed)) {
+            return 'array';
+        }
+
+        if ($this->isSupportedNumericArrayPointerType($trimmed)) {
             return 'array';
         }
 
@@ -190,6 +202,13 @@ class CppToPhpTypeMapper
         $normalized = trim(preg_replace('/\s+/', ' ', $normalized) ?? $normalized);
 
         return preg_match('/^void(\s*\*)+$/', $normalized) === 1;
+    }
+
+    private function isSupportedNumericArrayPointerType(string $cppType): bool
+    {
+        $normalized = trim(preg_replace('/\s+/', ' ', $cppType) ?? $cppType);
+
+        return preg_match('/^const (GLfloat|GLint)\s*\*$/', $normalized) === 1;
     }
 
     /**

@@ -646,10 +646,23 @@ class TypeBridge
         if ($phpType === 'array' && $this->isCharPointerArrayType($cppType)) {
             return [
                 'lines' => [$this->charPointerArraySetupBlock(
+                    cppType: $cppType,
                     sourceVarName: $sourceVarName,
                     nativeVarName: $nativeVarName,
                     persistentStorageVar: $persistentStorageVar,
                     pairedCountVarName: $pairedCountVarName,
+                )],
+                'expr' => $nativeVarName,
+                'local_var' => $nativeVarName,
+            ];
+        }
+
+        if ($phpType === 'array' && $this->isSupportedNumericPointerArrayType($cppType)) {
+            return [
+                'lines' => [$this->numericPointerArraySetupBlock(
+                    cppType: $cppType,
+                    sourceVarName: $sourceVarName,
+                    nativeVarName: $nativeVarName,
                 )],
                 'expr' => $nativeVarName,
                 'local_var' => $nativeVarName,
@@ -1652,6 +1665,9 @@ class TypeBridge
         }
 
         return match ($normalized) {
+            'GLenum', 'GLuint', 'GLint', 'GLsizei', 'GLbitfield' => $normalized,
+            'GLfloat' => 'GLfloat',
+            'GLdouble' => 'GLdouble',
             'short', 'unsigned short', 'qint8', 'qint16', 'quint8', 'quint16' => $normalized,
             'float' => 'float',
             'double', 'qreal' => 'double',
@@ -1833,6 +1849,22 @@ class TypeBridge
         $normalized = trim(preg_replace('/\s+/', ' ', $normalized) ?? $normalized);
 
         return preg_match('/^char\s*\*\s*\*$/', $normalized) === 1;
+    }
+
+    private function isSupportedNumericPointerArrayType(string $cppType): bool
+    {
+        return $this->numericPointerArrayPhpType($cppType) !== null;
+    }
+
+    private function numericPointerArrayPhpType(string $cppType): ?string
+    {
+        $normalized = trim(preg_replace('/\s+/', ' ', $cppType) ?? $cppType);
+
+        return match (true) {
+            preg_match('/^const GLfloat\s*\*$/', $normalized) === 1 => 'float',
+            preg_match('/^const GLint\s*\*$/', $normalized) === 1 => 'int',
+            default => null,
+        };
     }
 
     /**
@@ -2234,7 +2266,7 @@ class TypeBridge
     {
         return match ($phpType) {
             'int', 'float' => $this->cppCastType($cppType),
-            'bool' => 'bool',
+            'bool' => $this->normalizeCppType($cppType) === 'GLboolean' ? 'GLboolean' : 'bool',
             default => $this->normalizeCppType($cppType),
         };
     }
@@ -2249,11 +2281,14 @@ class TypeBridge
     }
 
     private function charPointerArraySetupBlock(
+        string $cppType,
         string $sourceVarName,
         string $nativeVarName,
         ?string $persistentStorageVar = null,
         ?string $pairedCountVarName = null,
     ): string {
+        $pointerValueType = $this->isConstCharPointerArrayType($cppType) ? 'const char *' : 'char *';
+        $pointerArrayType = $this->isConstCharPointerArrayType($cppType) ? 'const char **' : 'char **';
         $storageExpr = $persistentStorageVar !== null
             ? $persistentStorageVar . '->argv_storage'
             : $nativeVarName . '_storage';
@@ -2264,10 +2299,10 @@ class TypeBridge
 
         if ($persistentStorageVar === null) {
             $lines[] = sprintf('std::vector<QByteArray> %s;', $storageExpr);
-            $lines[] = sprintf('std::vector<char *> %s;', $pointersExpr);
+            $lines[] = sprintf('std::vector<%s> %s;', $pointerValueType, $pointersExpr);
         }
 
-        $lines[] = sprintf('char ** %s = NULL;', $nativeVarName);
+        $lines[] = sprintf('%s %s = NULL;', $pointerArrayType, $nativeVarName);
         $lines[] = sprintf('%s.clear();', $storageExpr);
         $lines[] = sprintf('%s.clear();', $pointersExpr);
         $lines[] = sprintf('if (%s != NULL) {', $sourceVarName);
@@ -2292,6 +2327,57 @@ class TypeBridge
         if ($pairedCountVarName !== null) {
             $lines[] = sprintf('%s = (int)%s.size();', $pairedCountVarName, $storageExpr);
         }
+
+        return implode("\n    ", $lines);
+    }
+
+    private function isConstCharPointerArrayType(string $cppType): bool
+    {
+        $normalized = trim(preg_replace('/\s+/', ' ', $cppType) ?? $cppType);
+
+        return preg_match('/^\s*const\s+char\s*\*\s*\*$/', $normalized) === 1;
+    }
+
+    private function numericPointerArraySetupBlock(
+        string $cppType,
+        string $sourceVarName,
+        string $nativeVarName,
+    ): string {
+        $baseType = $this->normalizeCppType($cppType);
+        $phpType = $this->numericPointerArrayPhpType($cppType);
+        $storageVar = $nativeVarName . '_storage';
+        $entryVar = $nativeVarName . '_entry';
+        $lines = [
+            sprintf('std::vector<%s> %s;', $baseType, $storageVar),
+            sprintf('%s %s = NULL;', trim($cppType), $nativeVarName),
+            sprintf('if (%s != NULL) {', $sourceVarName),
+            sprintf('    if (Z_TYPE_P(%s) != IS_ARRAY) {', $sourceVarName),
+            '        zend_type_error("Expected PHP array for OpenGL numeric buffer conversion.");',
+            '        RETURN_THROWS();',
+            '    }',
+            sprintf('    HashTable *%s_ht = Z_ARRVAL_P(%s);', $nativeVarName, $sourceVarName),
+            sprintf('    zval *%s;', $entryVar),
+            sprintf('    %s.reserve(zend_hash_num_elements(%s_ht));', $storageVar, $nativeVarName),
+            sprintf('    ZEND_HASH_FOREACH_VAL(%s_ht, %s) {', $nativeVarName, $entryVar),
+        ];
+
+        if ($phpType === 'float') {
+            $lines[] = sprintf('        if (!(Z_TYPE_P(%1$s) == IS_LONG || Z_TYPE_P(%1$s) == IS_DOUBLE)) {', $entryVar);
+            $lines[] = '            zend_type_error("Expected array of numeric values.");';
+            $lines[] = '            RETURN_THROWS();';
+            $lines[] = '        }';
+            $lines[] = sprintf('        %s.push_back((%s)zval_get_double(%s));', $storageVar, $baseType, $entryVar);
+        } else {
+            $lines[] = sprintf('        if (Z_TYPE_P(%s) != IS_LONG) {', $entryVar);
+            $lines[] = '            zend_type_error("Expected array of ints.");';
+            $lines[] = '            RETURN_THROWS();';
+            $lines[] = '        }';
+            $lines[] = sprintf('        %s.push_back(%s);', $storageVar, $this->phpIntToNativeExpr($baseType, sprintf('Z_LVAL_P(%s)', $entryVar)));
+        }
+
+        $lines[] = '    } ZEND_HASH_FOREACH_END();';
+        $lines[] = sprintf('    %s = %s.empty() ? NULL : %s.data();', $nativeVarName, $storageVar, $storageVar);
+        $lines[] = '}';
 
         return implode("\n    ", $lines);
     }
