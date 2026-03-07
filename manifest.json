@@ -25,6 +25,28 @@
                 "QtCore"
             ]
         },
+        "QtSql": {
+            "extension_name": "qtsql",
+            "dependencies": [
+                "QtCore"
+            ]
+        },
+        "QtPrintSupport": {
+            "extension_name": "qtprintsupport",
+            "dependencies": [
+                "QtCore",
+                "QtGui",
+                "QtWidgets"
+            ]
+        },
+        "QtMultimedia": {
+            "extension_name": "qtmultimedia",
+            "dependencies": [
+                "QtCore",
+                "QtGui",
+                "QtNetwork"
+            ]
+        },
         "QtQml": {
             "extension_name": "qtqml",
             "dependencies": [
