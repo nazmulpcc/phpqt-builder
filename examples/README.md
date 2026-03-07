@@ -32,6 +32,8 @@ php -dextension=$PWD/build/ext/.libs/qt.so examples/<example>/run.php
   A macOS Calculator-inspired basic mode clone with dedicated styling and standard arithmetic behavior.
 - `depth-playground`
   A 2.5D visual demo with layered cards, animated parallax drift, and depth-reactive shadows.
+- `opengl-shader-playground`
+  A widget-based OpenGL shader playground with live controls, animated uniforms, and native GL rendering from PHP.
 - `true-3d`
   A native QtQuick3D scene rendered from PHP via inline QML, with animated meshes, camera, and lighting.
 - `gpu-stress`
