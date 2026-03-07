@@ -162,6 +162,10 @@ class BuildModulesCommand extends Command
                 generatedClasses: $localClasses,
                 generatedClassParents: $this->filterClassParents($analysis->generatedClassParents, $localClasses),
                 generatedClassDependencies: $this->filterClassDependencies($analysis->generatedClassDependencies, $localClasses),
+                enumHolders: array_values(array_filter(
+                    $analysis->enumHolders,
+                    static fn(\QtBuilder\Build\EnumHolderDefinition $holder): bool => $holder->module === $module,
+                )),
                 includeSignalConnectionSupport: $module === 'QtCore' && $analysis->requiresSignalConnectionSupport,
                 linkModules: $nativeModules,
                 importIncludeRoots: [$sharedRoot, $sharedClassesDir],

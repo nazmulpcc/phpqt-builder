@@ -24,6 +24,7 @@ readonly class BuildAnalysisResult
      * @param array<string, int> $moduleMethodTotals
      * @param array<string, int> $moduleAcceptedMethodTotals
      * @param array<string, int> $moduleGeneratedMethodTotals
+     * @param list<EnumHolderDefinition> $enumHolders
      */
     public function __construct(
         public string $metadataDir,
@@ -39,6 +40,7 @@ readonly class BuildAnalysisResult
         public array $generatedClassHeaders,
         public array $generatedClassModules,
         public array $classNamespaces,
+        public array $enumHolders,
         public array $moduleMethodTotals,
         public array $moduleAcceptedMethodTotals,
         public array $moduleGeneratedMethodTotals,

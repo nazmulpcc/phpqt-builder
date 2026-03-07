@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace QtBuilder\CodeGen;
 
 use eftec\bladeone\BladeOne;
+use QtBuilder\Build\EnumHolderDefinition;
 use QtBuilder\Build\ExtensionBuildContext;
 use QtBuilder\Definition\PhpClass;
 use QtBuilder\IO\FileWriteStats;
@@ -151,6 +152,16 @@ class ExtensionGenerator
     }
 
     /**
+     * @return list<string>
+     */
+    public function generateEnumHolderSupport(string $outputDir, EnumHolderDefinition $definition): array
+    {
+        $this->lastWriteStats = new FileWriteStats();
+
+        return $this->writeEnumHolderSupport($outputDir, $definition);
+    }
+
+    /**
      * Clean up Blade output: remove excessive blank lines, trim trailing whitespace.
      */
     private function cleanOutput(string $content): string
@@ -230,6 +241,42 @@ class ExtensionGenerator
         $stubResult = $this->fileWriter->write(
             $stubFile,
             $this->cleanOutput($this->blade->run('generation.support.buildinfo_stub', ['ctx' => $context])),
+        );
+        $this->lastWriteStats->record($stubResult);
+        $files[] = $stubFile;
+
+        return $files;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function writeEnumHolderSupport(string $outputDir, EnumHolderDefinition $definition): array
+    {
+        $files = [];
+        $ctx = EnumHolderContext::fromDefinition($definition);
+
+        $headerFile = $outputDir . '/' . $ctx->filePrefix . '.h';
+        $sourceFile = $outputDir . '/' . $ctx->filePrefix . '.cpp';
+        $stubFile = $outputDir . '/' . $ctx->filePrefix . '.stub.php';
+
+        $headerResult = $this->fileWriter->write(
+            $headerFile,
+            $this->cleanOutput($this->blade->run('generation.support.enumholder_header', ['ctx' => $ctx])),
+        );
+        $this->lastWriteStats->record($headerResult);
+        $files[] = $headerFile;
+
+        $sourceResult = $this->fileWriter->write(
+            $sourceFile,
+            $this->cleanOutput($this->blade->run('generation.support.enumholder_source', ['ctx' => $ctx])),
+        );
+        $this->lastWriteStats->record($sourceResult);
+        $files[] = $sourceFile;
+
+        $stubResult = $this->fileWriter->write(
+            $stubFile,
+            $this->cleanOutput($this->blade->run('generation.support.enumholder_stub', ['ctx' => $ctx])),
         );
         $this->lastWriteStats->record($stubResult);
         $files[] = $stubFile;

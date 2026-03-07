@@ -6,6 +6,8 @@ namespace QtBuilder\Build;
 
 use QtBuilder\CodeGen\ExtensionGenerator;
 use QtBuilder\Containers\QListSpecializationResolver;
+use QtBuilder\Definition\PhpClass;
+use QtBuilder\Definition\PhpMethod;
 use QtBuilder\IO\FileWriteStats;
 use QtBuilder\Scanning\HeaderCandidate;
 use Symfony\Component\Console\Helper\ProgressBar;
@@ -82,6 +84,7 @@ class BuildPipeline
                     generatedClassHeaders: [],
                     generatedClassModules: [],
                     classNamespaces: [],
+                    enumHolders: [],
                     moduleMethodTotals: [],
                     moduleAcceptedMethodTotals: [],
                     moduleGeneratedMethodTotals: [],
@@ -141,6 +144,7 @@ class BuildPipeline
                 generatedClassHeaders: [],
                 generatedClassModules: [],
                 classNamespaces: [],
+                enumHolders: [],
                 moduleMethodTotals: $moduleMethodTotals,
                 moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
                 moduleGeneratedMethodTotals: [],
@@ -152,6 +156,92 @@ class BuildPipeline
         $acceptedCandidates = $classStructures['accepted_candidates'];
         $skippedClasses = [...$skippedClasses, ...$classStructures['skipped_classes']];
 
+        $classNamespaces = $this->classNamespaces($acceptedCandidates, $request->importedAbi);
+        $enumCandidateHeaders = (new EnumCandidateHeaderCollector())->collect(
+            $request->installation->includeRoots,
+            $acceptedCandidates,
+            $classStructures['prepared_class_data'],
+        );
+        file_put_contents(
+            $metadataDir . '/enum_candidate_headers.json',
+            json_encode(array_map(
+                static fn(EnumCandidateHeader $entry): array => $entry->toArray(),
+                $enumCandidateHeaders,
+            ), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]',
+        );
+        $enumHolderCache = new EnumHolderCache();
+        $enumExtractor = new EnumHolderExtractor();
+        $enumRegistry = $enumHolderCache->load(
+            $metadataDir,
+            $request->installation->includeRoots,
+            $acceptedCandidates,
+            $skippedClasses,
+            $classNamespaces,
+            $enumCandidateHeaders,
+        );
+
+        if ($enumRegistry instanceof EnumHolderRegistry) {
+            $output->writeln(sprintf(
+                '<comment>Enum holder cache:</comment> hit (%s).',
+                $enumHolderCache->path($metadataDir),
+            ));
+        } else {
+            $output->writeln('<comment>Enum holder cache:</comment> miss.');
+            $queuedEnumHeaderCount = count($enumCandidateHeaders);
+            $enumHeaderCount = $enumExtractor->namespaceHeaderCount($acceptedCandidates, $skippedClasses, $enumCandidateHeaders);
+            if ($queuedEnumHeaderCount > 0) {
+                $output->writeln(sprintf(
+                    '<comment>Queued enum candidate headers:</comment> %d (scanning %d total header(s)).',
+                    $queuedEnumHeaderCount,
+                    $enumHeaderCount,
+                ));
+            }
+            if ($enumHeaderCount > 0 && $request->jobs > 1) {
+                $output->writeln(sprintf(
+                    '<info>Extracting enum holders with %d parallel worker(s)...</info>',
+                    $request->jobs,
+                ));
+            }
+            $enumProgressBar = $this->createBuildProgressBar(
+                $output,
+                $enumHeaderCount,
+                'qt_enum_discovery',
+                'Enum discovery',
+            );
+            $enumProgressBar?->start();
+            $enumRegistry = $enumExtractor->extract(
+                $request->installation->includeRoots,
+                $acceptedCandidates,
+                $skippedClasses,
+                $classStructures['prepared_class_data'],
+                $classNamespaces,
+                $enumCandidateHeaders,
+                static function (int $completed, int $total) use ($enumProgressBar): void {
+                    if ($enumProgressBar === null) {
+                        return;
+                    }
+
+                    $enumProgressBar->setMaxSteps(max(1, $total));
+                    $enumProgressBar->setProgress($completed);
+                },
+                $request->jobs,
+                $metadataDir,
+            );
+            if ($enumProgressBar !== null) {
+                $enumProgressBar->finish();
+                $output->write(PHP_EOL);
+            }
+            $enumHolderCache->write(
+                $metadataDir,
+                $request->installation->includeRoots,
+                $acceptedCandidates,
+                $skippedClasses,
+                $classNamespaces,
+                $enumRegistry,
+                $enumCandidateHeaders,
+            );
+        }
+
         $output->writeln('<info>Evaluating generated class set from cached class structures...</info>');
         $generation = $this->resolveGeneratedCandidates(
             $acceptedCandidates,
@@ -160,6 +250,7 @@ class BuildPipeline
             $classStructures['prepared_class_data'],
             $output,
             $request->importedAbi,
+            $enumRegistry,
         );
 
         $acceptedCandidates = $generation['accepted_candidates'];
@@ -205,9 +296,10 @@ class BuildPipeline
             generatedClassHeaders: $generation['generated_class_headers'],
             generatedClassModules: $generation['generated_class_modules'],
             classNamespaces: array_replace(
-                $this->classNamespaces($acceptedCandidates, $request->importedAbi),
+                $classNamespaces,
                 $generation['synthetic_class_namespaces'] ?? [],
             ),
+            enumHolders: $enumRegistry->holdersForModules($request->modules),
             moduleMethodTotals: $moduleMethodTotals,
             moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
             moduleGeneratedMethodTotals: $generation['module_generated_method_totals'] ?? [],
@@ -245,6 +337,7 @@ class BuildPipeline
             $analysis->generatedClasses,
             $analysis->generatedClassParents,
             $analysis->generatedClassDependencies,
+            $analysis->enumHolders,
             $analysis->requiresSignalConnectionSupport || $request->forceSignalConnectionSupport,
         );
 
@@ -388,6 +481,8 @@ class BuildPipeline
             'discovery_cache.json',
             'accepted_candidates.json',
             'allowed_classes.json',
+            'enum_holders_cache.json',
+            'enum_candidate_headers.json',
         ] as $filename) {
             $path = $metadataDir . '/' . $filename;
             if (is_file($path)) {
@@ -502,6 +597,7 @@ class BuildPipeline
         array $preparedClassDataByClass,
         OutputInterface $output,
         ?ImportedModuleAbi $importedAbi = null,
+        ?EnumHolderRegistry $enumRegistry = null,
     ): array {
         $generationService = new ClassGenerationService();
         $currentCandidates = array_values($acceptedCandidates);
@@ -594,6 +690,7 @@ class BuildPipeline
                     $availableClasses,
                     $allPreparedClassData,
                     $importedAbi !== null,
+                    $enumRegistry,
                 );
                 unset($errorsByClass[$result->className]);
 
@@ -681,6 +778,7 @@ class BuildPipeline
         }
         $generatedClasses = array_values(array_unique($generatedClasses));
         sort($generatedClasses);
+        $generatedPhpClasses = $this->normalizeGeneratedPhpClassesAgainstParentContracts($generatedPhpClasses);
 
         $requiresSignalConnectionSupport = false;
         foreach ($generatedPhpClasses as $phpClass) {
@@ -723,6 +821,109 @@ class BuildPipeline
             'passes' => $passes,
             'requires_signal_connection_support' => $requiresSignalConnectionSupport,
         ];
+    }
+
+    /**
+     * @param array<string, PhpClass> $generatedPhpClasses
+     * @return array<string, PhpClass>
+     */
+    private function normalizeGeneratedPhpClassesAgainstParentContracts(array $generatedPhpClasses): array
+    {
+        $cache = [];
+
+        foreach ($generatedPhpClasses as $className => $phpClass) {
+            $parentMethods = $this->collectAbstractPublicParentMethods($className, $generatedPhpClasses, $cache);
+            if ($parentMethods === []) {
+                continue;
+            }
+
+            $methods = [];
+            $changed = false;
+            foreach ($phpClass->methods as $method) {
+                $parentMethod = $parentMethods[$method->name] ?? null;
+                if (
+                    $method->name !== '__construct'
+                    && $parentMethod instanceof PhpMethod
+                    && $parentMethod->isAbstractMethod
+                    && $parentMethod->access === 'public'
+                    && $method->access !== 'public'
+                ) {
+                    $methods[] = new PhpMethod(
+                        name: $method->name,
+                        access: 'public',
+                        isStatic: $method->isStatic,
+                        isSignal: $method->isSignal,
+                        isSlot: $method->isSlot,
+                        isAbstractMethod: $method->isAbstractMethod,
+                        returnType: $method->returnType,
+                        parameters: $method->parameters,
+                        overloads: $method->overloads,
+                        cppName: $method->cppName,
+                    );
+                    $changed = true;
+                    continue;
+                }
+
+                $methods[] = $method;
+            }
+
+            if (!$changed) {
+                continue;
+            }
+
+            $generatedPhpClasses[$className] = new PhpClass(
+                name: $phpClass->name,
+                parent: $phpClass->parent,
+                isAbstract: $phpClass->isAbstract,
+                isCopyConstructible: $phpClass->isCopyConstructible,
+                hasPublicConstructor: $phpClass->hasPublicConstructor,
+                hasPublicDestructor: $phpClass->hasPublicDestructor,
+                isQObjectDerived: $phpClass->isQObjectDerived,
+                properties: $phpClass->properties,
+                methods: $methods,
+                signals: $phpClass->signals,
+                classConstants: $phpClass->classConstants,
+                nativeIncludes: $phpClass->nativeIncludes,
+                nativeAliasOf: $phpClass->nativeAliasOf,
+            );
+        }
+
+        return $generatedPhpClasses;
+    }
+
+    /**
+     * @param array<string, PhpClass> $generatedPhpClasses
+     * @param array<string, array<string, PhpMethod>> $cache
+     * @return array<string, PhpMethod>
+     */
+    private function collectAbstractPublicParentMethods(string $className, array $generatedPhpClasses, array &$cache): array
+    {
+        if (isset($cache[$className])) {
+            return $cache[$className];
+        }
+
+        $phpClass = $generatedPhpClasses[$className] ?? null;
+        if (!$phpClass instanceof PhpClass || $phpClass->parent === null || $phpClass->parent === '') {
+            return $cache[$className] = [];
+        }
+
+        $parentClassName = ltrim($phpClass->parent, '\\');
+        $parentShortName = str_contains($parentClassName, '\\')
+            ? (string) substr($parentClassName, (int) strrpos($parentClassName, '\\') + 1)
+            : $parentClassName;
+        $parentPhpClass = $generatedPhpClasses[$parentShortName] ?? null;
+        if (!$parentPhpClass instanceof PhpClass) {
+            return $cache[$className] = [];
+        }
+
+        $methods = $this->collectAbstractPublicParentMethods($parentShortName, $generatedPhpClasses, $cache);
+        foreach ($parentPhpClass->methods as $method) {
+            if ($method->isAbstractMethod && $method->access === 'public') {
+                $methods[$method->name] = $method;
+            }
+        }
+
+        return $cache[$className] = $methods;
     }
 
     /**
@@ -957,6 +1158,7 @@ class BuildPipeline
         $fileWriteStats = new FileWriteStats();
         $classmap = [];
         $outputDir = $context->outputDir . '/classes';
+        $this->removeStaleEnumHolderFiles($outputDir, $context->enumHolders);
 
         if ($generatedClasses !== []) {
             $output->writeln(sprintf('<info>Emitting %d generated class wrapper(s)...</info>', count($generatedClasses)));
@@ -1004,6 +1206,11 @@ class BuildPipeline
             $fileWriteStats->merge($generator->lastWriteStats());
         }
 
+        foreach ($context->enumHolders as $holder) {
+            $generator->generateEnumHolderSupport($outputDir, $holder);
+            $fileWriteStats->merge($generator->lastWriteStats());
+        }
+
         if ($context->includeSignalConnectionSupport) {
             $generator->generateSignalConnectionSupport($outputDir);
             $fileWriteStats->merge($generator->lastWriteStats());
@@ -1013,6 +1220,75 @@ class BuildPipeline
             'file_write_stats' => $fileWriteStats,
             'classmap' => $classmap,
         ];
+    }
+
+    /**
+     * @param list<EnumHolderDefinition> $enumHolders
+     */
+    private function removeStaleEnumHolderFiles(string $outputDir, array $enumHolders): void
+    {
+        if (!is_dir($outputDir)) {
+            return;
+        }
+
+        $activePrefixes = array_fill_keys(
+            array_map(
+                static fn(EnumHolderDefinition $holder): string => $holder->filePrefix(),
+                $enumHolders,
+            ),
+            true,
+        );
+
+        $removedAny = false;
+
+        foreach (glob($outputDir . '/qt_enum_*') ?: [] as $path) {
+            $basename = basename($path);
+            $prefix = null;
+
+            if (preg_match('/^(qt_enum_[^.]+)\.(?:h|cpp|stub\.php|dep|lo)$/', $basename, $matches) === 1) {
+                $prefix = $matches[1];
+            } elseif (preg_match('/^(qt_enum_[^_]+(?:_[^_]+)*)_arginfo\.h$/', $basename, $matches) === 1) {
+                $prefix = $matches[1];
+            }
+
+            if ($prefix === null || isset($activePrefixes[$prefix])) {
+                continue;
+            }
+
+            if (!@unlink($path) && file_exists($path)) {
+                throw new \RuntimeException(sprintf('Could not remove stale enum holder file: %s', $path));
+            }
+
+            $removedAny = true;
+        }
+
+        $libsDir = $outputDir . '/.libs';
+        if (is_dir($libsDir)) {
+            foreach (glob($libsDir . '/qt_enum_*') ?: [] as $path) {
+                $basename = basename($path);
+                if (preg_match('/^(qt_enum_[^.]+)\.(?:o|obj)$/', $basename, $matches) !== 1) {
+                    continue;
+                }
+
+                $prefix = $matches[1];
+                if (isset($activePrefixes[$prefix])) {
+                    continue;
+                }
+
+                if (!@unlink($path) && file_exists($path)) {
+                    throw new \RuntimeException(sprintf('Could not remove stale enum holder object file: %s', $path));
+                }
+
+                $removedAny = true;
+            }
+        }
+
+        if ($removedAny) {
+            $qtDepPath = dirname($outputDir) . '/qt.dep';
+            if (is_file($qtDepPath) && !@unlink($qtDepPath) && file_exists($qtDepPath)) {
+                throw new \RuntimeException(sprintf('Could not remove stale extension dependency file: %s', $qtDepPath));
+            }
+        }
     }
 
     /**

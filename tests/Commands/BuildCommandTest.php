@@ -44,6 +44,8 @@ it('generates the extension tree from a fixture qt root', function (): void {
         ->and(is_file($metadataDir . '/runtime_manifest.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/allowed_classes.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/discovery_cache.json'))->toBeTrue()
+        ->and(is_file($metadataDir . '/enum_holders_cache.json'))->toBeTrue()
+        ->and(is_file($metadataDir . '/enum_candidate_headers.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/accepted_candidates.json'))->toBeTrue()
         ->and(is_file($classCacheDir . '/QPoint.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/phpize.stdout.log'))->toBeTrue()
@@ -55,6 +57,9 @@ it('generates the extension tree from a fixture qt root', function (): void {
             'Expanded modules: QtCore',
             'Running 2 parallel discovery worker(s)...',
             'Class structure cache:',
+            'Enum holder cache: miss.',
+            'Extracting enum holders with 2 parallel worker(s)...',
+            'Enum discovery',
             'Discovery pass 1',
             'phpize: started',
             'phpize: succeeded',
@@ -176,6 +181,8 @@ it('reuses an existing discovery cache', function (): void {
         'discovery_cache.json',
         'accepted_candidates.json',
         'allowed_classes.json',
+        'enum_holders_cache.json',
+        'enum_candidate_headers.json',
         'phpize: started',
         'phpize: succeeded',
         'gen_stub: started',
@@ -272,6 +279,155 @@ it('generates synthetic QList parents for supported list-derived classes', funct
     $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
     expect($summary['generated_classes'])->toBe(3)
         ->and($summary['skipped_classes'])->toBe(1);
+});
+
+it('generates enum holder classes and unblocks enum-based methods', function (): void {
+    $fixtureRoot = qt_fixture_path('enum-qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-enums-' . bin2hex(random_bytes(4));
+    $outputDir = $buildRoot . '/ext';
+    $metadataDir = $buildRoot . '/generated';
+    $bootstrapper = new FakeExtensionBootstrapper();
+
+    $result = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            'modules' => 'QtCore,QtSql',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+            '--no-build' => true,
+        ],
+    );
+
+    expect($result)->toBeSuccessfulCommandResult()
+        ->and(is_file($outputDir . '/classes/qt_enum_qt_connection_type.stub.php'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_enum_qt_connection_types.stub.php'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_enum_qt_core_q_connection_carrier_mode.stub.php'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_enum_qt_core_q_connection_carrier_modes.stub.php'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_enum_qt_sql_q_sql_param_type_flag.stub.php'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_enum_qt_sql_q_sql_param_type.stub.php'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_enum_qt_sql_q_sql_table_type.stub.php'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_qconnectioncarrier.stub.php'))->toBeTrue()
+        ->and(is_file($outputDir . '/classes/qt_qsqlquerylike.stub.php'))->toBeTrue();
+
+    $enumCandidateHeaders = qt_decode_json((string) file_get_contents($metadataDir . '/enum_candidate_headers.json'));
+    expect($enumCandidateHeaders)->toContainEqual([
+        'header' => $fixtureRoot . '/include/QtCore/qnamespace.h',
+        'module' => 'QtCore',
+        'types' => ['Qt::ConnectionType', 'Qt::ConnectionTypes'],
+    ])->toContainEqual([
+        'header' => $fixtureRoot . '/include/QtSql/qsqlquerylike.h',
+        'module' => 'QtSql',
+        'types' => ['QSql::ParamType', 'QSql::TableType'],
+    ]);
+
+    $globalEnumStub = (string) file_get_contents($outputDir . '/classes/qt_enum_qt_connection_type.stub.php');
+    expect($globalEnumStub)->toContain(
+        'namespace Qt;',
+        'final class ConnectionType',
+        'public const int AutoConnection = 0;',
+        'public const int DirectConnection = 1;',
+    );
+
+    $classEnumStub = (string) file_get_contents($outputDir . '/classes/qt_enum_qt_core_q_connection_carrier_modes.stub.php');
+    expect($classEnumStub)->toContain(
+        'namespace Qt\\Core\\QConnectionCarrier;',
+        'final class Modes',
+        'public const int Idle = 0;',
+        'public const int Busy = 1;',
+    );
+
+    $namespaceEnumStub = (string) file_get_contents($outputDir . '/classes/qt_enum_qt_sql_q_sql_param_type.stub.php');
+    expect($namespaceEnumStub)->toContain(
+        'namespace Qt\\Sql\\QSql;',
+        'final class ParamType',
+        'public const int In = 1;',
+        'public const int Out = 2;',
+        'public const int InOut = 3;',
+        'public const int Binary = 4;',
+    );
+
+    $carrierStub = (string) file_get_contents($outputDir . '/classes/qt_qconnectioncarrier.stub.php');
+    expect($carrierStub)->toContain(
+        'public function setConnectionType(int $type): void',
+        'public function connectionType(): int',
+        'public function setConnectionFlags(int $flags): void',
+        'public function connectionFlags(): int',
+        'public function setMode(int $mode): void',
+        'public function mode(): int',
+        'public function setModes(int $modes): void',
+        'public function modes(): int',
+    );
+
+    $sqlStub = (string) file_get_contents($outputDir . '/classes/qt_qsqlquerylike.stub.php');
+    expect($sqlStub)->toContain(
+        'public function bindValue(int $position, int $value, int $type): void',
+        'public function bindingType(): int',
+        'public function tableType(): int',
+    );
+
+    $classmap = qt_decode_json((string) file_get_contents($metadataDir . '/classmap.json'));
+    expect(array_column($classmap, 'class'))->toBe(['QConnectionCarrier', 'QSqlQueryLike']);
+
+    $skippedMethods = qt_decode_json((string) file_get_contents($metadataDir . '/skipped_methods.json'));
+    $enumBlockedMethods = array_values(array_filter(
+        $skippedMethods,
+        static fn(array $entry): bool => in_array($entry['class'] ?? '', ['QConnectionCarrier', 'QSqlQueryLike'], true),
+    ));
+    expect($enumBlockedMethods)->toBe([]);
+});
+
+it('removes stale enum holder files during incremental builds', function (): void {
+    $fixtureRoot = qt_fixture_path('enum-qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-enum-stale-' . bin2hex(random_bytes(4));
+    $outputDir = $buildRoot . '/ext';
+    $bootstrapper = new FakeExtensionBootstrapper();
+
+    $first = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            'modules' => 'QtCore,QtSql',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+            '--no-build' => true,
+        ],
+    );
+    expect($first)->toBeSuccessfulCommandResult();
+
+    file_put_contents(
+        $outputDir . '/classes/qt_enum_stale.stub.php',
+        "<?php\n\nnamespace Qt;\n\nfinal class Broken(\n{\n}\n",
+    );
+    file_put_contents($outputDir . '/classes/qt_enum_stale.cpp', "// stale\n");
+    file_put_contents($outputDir . '/classes/qt_enum_stale.h', "// stale\n");
+    file_put_contents($outputDir . '/classes/qt_enum_stale_arginfo.h', "// stale\n");
+    file_put_contents($outputDir . '/classes/qt_enum_stale.dep', "classes/qt_enum_stale.lo: classes/qt_enum_stale.cpp classes/qt_enum_stale.h\n");
+    file_put_contents($outputDir . '/classes/qt_enum_stale.lo', "# libtool object\n");
+    @mkdir($outputDir . '/classes/.libs', 0777, true);
+    file_put_contents($outputDir . '/classes/.libs/qt_enum_stale.o', "stale object\n");
+    file_put_contents($outputDir . '/qt.dep', "qt.lo: classes/qt_enum_stale.h\n");
+
+    $second = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            'modules' => 'QtCore,QtSql',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+            '--no-build' => true,
+        ],
+    );
+
+    expect($second)->toBeSuccessfulCommandResult()
+        ->and(is_file($outputDir . '/classes/qt_enum_stale.stub.php'))->toBeFalse()
+        ->and(is_file($outputDir . '/classes/qt_enum_stale.cpp'))->toBeFalse()
+        ->and(is_file($outputDir . '/classes/qt_enum_stale.h'))->toBeFalse()
+        ->and(is_file($outputDir . '/classes/qt_enum_stale_arginfo.h'))->toBeFalse()
+        ->and(is_file($outputDir . '/classes/qt_enum_stale.dep'))->toBeFalse()
+        ->and(is_file($outputDir . '/classes/qt_enum_stale.lo'))->toBeFalse()
+        ->and(is_file($outputDir . '/classes/.libs/qt_enum_stale.o'))->toBeFalse()
+        ->and(is_file($outputDir . '/qt.dep'))->toBeFalse();
 });
 
 it('auto-adds static manifest dependencies for monolithic builds', function (): void {

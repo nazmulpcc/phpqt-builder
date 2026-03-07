@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace QtBuilder\Build;
 
+use QtBuilder\Build\EnumHolderRegistry;
 use QtBuilder\CodeGen\TypeBridge;
 use QtBuilder\Containers\QListSpecializationResolver;
 use QtBuilder\Definition\PhpClass;
@@ -39,6 +40,7 @@ class ClassGenerationService
         array $allowedClasses = [],
         array $classHeaders = [],
         bool $preferExternalDependencyReasons = false,
+        ?EnumHolderRegistry $enumRegistry = null,
     ): ClassGenerationResult
     {
         $facts = $this->prepareDiscoveryFacts($headerPath, $className, $includePaths);
@@ -99,7 +101,7 @@ class ClassGenerationService
             }
         }
 
-        $filtered = $this->methodPolicy->filter($classData, $allowedClasses, $preferExternalDependencyReasons);
+        $filtered = $this->methodPolicy->filter($classData, $allowedClasses, $preferExternalDependencyReasons, $enumRegistry);
         $signalFilter = $this->filterSignalCallbackMethods(
             $filtered['selected_methods'],
             $includePaths,
@@ -251,6 +253,7 @@ class ClassGenerationService
         array $allowedClasses = [],
         array $preparedClassDataByClass = [],
         bool $preferExternalDependencyReasons = false,
+        ?EnumHolderRegistry $enumRegistry = null,
     ): ClassGenerationResult {
         $className = (string) ($classData['name'] ?? '');
         if ($className === '') {
@@ -297,7 +300,7 @@ class ClassGenerationService
             }
         }
 
-        $filtered = $this->methodPolicy->filter($classData, $allowedClasses, $preferExternalDependencyReasons);
+        $filtered = $this->methodPolicy->filter($classData, $allowedClasses, $preferExternalDependencyReasons, $enumRegistry);
         $signalFilter = $this->filterSignalCallbackMethods(
             $filtered['selected_methods'],
             [],
@@ -475,6 +478,8 @@ class ClassGenerationService
                 ),
             ];
         }
+
+        $methods = $this->normalizeMethodsAgainstInheritedContracts($methods, $parentMethods);
 
         return [
             'class' => new PhpClass(
@@ -1433,6 +1438,8 @@ class ClassGenerationService
             ];
         }
 
+        $methods = $this->normalizeMethodsAgainstInheritedContracts($methods, $parentMethods);
+
         return [
             'class' => new PhpClass(
                 name: $phpClass->name,
@@ -1650,6 +1657,28 @@ class ClassGenerationService
             overloads: $method->overloads,
             cppName: $method->cppName,
         );
+    }
+
+    /**
+     * @param list<PhpMethod> $methods
+     * @param array<string, PhpMethod> $parentMethods
+     * @return list<PhpMethod>
+     */
+    private function normalizeMethodsAgainstInheritedContracts(array $methods, array $parentMethods): array
+    {
+        $normalized = [];
+
+        foreach ($methods as $method) {
+            if ($method->name === '__construct') {
+                $normalized[] = $method;
+                continue;
+            }
+
+            $parentMethod = $parentMethods[$method->name] ?? $this->findCanonicalContractParentMethod($method, $parentMethods);
+            $normalized[] = $this->normalizeAbstractMethodAgainstParent($method, $parentMethod);
+        }
+
+        return $normalized;
     }
 
     /**

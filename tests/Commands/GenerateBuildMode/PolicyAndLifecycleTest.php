@@ -11,17 +11,20 @@ dataset('private lifecycle classes', [
     'explicit private lifecycle' => [
         'qprivatelifecyclething.h',
         'QPrivateLifecycleThing',
-        'RETURN_LONG((zend_long)(QPrivateLifecycleThing::version()));',
+        'auto _result = QPrivateLifecycleThing::version();',
+        'RETURN_LONG((zend_long)(_result));',
     ],
     'implicit private lifecycle' => [
         'qdefaultprivatelifecyclething.h',
         'QDefaultPrivateLifecycleThing',
-        'RETURN_LONG((zend_long)(QDefaultPrivateLifecycleThing::version()));',
+        'auto _result = QDefaultPrivateLifecycleThing::version();',
+        'RETURN_LONG((zend_long)(_result));',
     ],
     'protected ro5 lifecycle macro' => [
         'qprotectedro5thing.h',
         'QProtectedRo5Thing',
-        'RETURN_LONG((zend_long)(QProtectedRo5Thing::version()));',
+        'auto _result = QProtectedRo5Thing::version();',
+        'RETURN_LONG((zend_long)(_result));',
     ],
 ]);
 
@@ -94,7 +97,7 @@ it('skips protected default constructors and keeps public constructors', functio
         ->and($result->cpp('QProtectedDefaultThing'))->not->toContain('new QProtectedDefaultThing()');
 });
 
-it('keeps private lifecycle classes non-constructible and non-deletable', function (string $header, string $class, string $versionFragment): void {
+it('keeps private lifecycle classes non-constructible and non-deletable', function (string $header, string $class, string $versionSetup, string $versionReturn): void {
     $result = GenerateBuildModeRunner::run('policy-qt', [
         'header' => qt_fixture_path('policy-qt/include/QtCore/' . $header),
         'class' => $class,
@@ -108,7 +111,8 @@ it('keeps private lifecycle classes non-constructible and non-deletable', functi
         ->and(array_column($result->payload['skipped_methods'], 'name'))->toContain($class)
         ->and($result->cpp($class))->not->toContain('ZEND_METHOD(Qt_Core_' . $class . ', __construct)')
         ->and($result->cpp($class))->not->toContain('delete intern->native_ptr;')
-        ->and($result->cpp($class))->toContain($versionFragment);
+        ->and($result->cpp($class))->toContain($versionSetup)
+        ->and($result->cpp($class))->toContain($versionReturn);
 })->with('private lifecycle classes');
 
 it('skips qt disambiguation tag parameters', function (): void {

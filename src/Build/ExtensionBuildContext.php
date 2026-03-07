@@ -16,6 +16,7 @@ readonly class ExtensionBuildContext
      * @param list<string> $generatedClasses
      * @param array<string, string|null> $generatedClassParents
      * @param array<string, list<string>> $generatedClassDependencies
+     * @param list<EnumHolderDefinition> $enumHolders
      */
     public function __construct(
         public string $extensionName,
@@ -27,6 +28,7 @@ readonly class ExtensionBuildContext
         public array $generatedClasses = [],
         public array $generatedClassParents = [],
         public array $generatedClassDependencies = [],
+        public array $enumHolders = [],
         public bool $includeSignalConnectionSupport = false,
         public array $linkModules = [],
         public array $importIncludeRoots = [],
@@ -41,6 +43,7 @@ readonly class ExtensionBuildContext
         array $generatedClasses,
         array $generatedClassParents = [],
         array $generatedClassDependencies = [],
+        array $enumHolders = [],
         bool $includeSignalConnectionSupport = false,
     ): self
     {
@@ -54,6 +57,7 @@ readonly class ExtensionBuildContext
             $generatedClasses,
             $generatedClassParents,
             $generatedClassDependencies,
+            $enumHolders,
             $includeSignalConnectionSupport,
             $this->linkModules,
             $this->importIncludeRoots,
@@ -98,10 +102,16 @@ readonly class ExtensionBuildContext
     {
         $bridge = new TypeBridge();
 
-        return array_map(
-            static fn(string $className): string => 'classes/' . $bridge->minitName($className) . '.h',
-            $this->orderedGeneratedClasses(),
-        );
+        return array_values(array_merge(
+            array_map(
+                static fn(string $className): string => 'classes/' . $bridge->minitName($className) . '.h',
+                $this->orderedGeneratedClasses(),
+            ),
+            array_map(
+                static fn(EnumHolderDefinition $holder): string => 'classes/' . $holder->filePrefix() . '.h',
+                $this->enumHolders,
+            ),
+        ));
     }
 
     /**
@@ -111,10 +121,16 @@ readonly class ExtensionBuildContext
     {
         $bridge = new TypeBridge();
 
-        return array_map(
-            static fn(string $className): string => 'classes/' . $bridge->minitName($className) . '.cpp',
-            $this->orderedGeneratedClasses(),
-        );
+        return array_values(array_merge(
+            array_map(
+                static fn(string $className): string => 'classes/' . $bridge->minitName($className) . '.cpp',
+                $this->orderedGeneratedClasses(),
+            ),
+            array_map(
+                static fn(EnumHolderDefinition $holder): string => 'classes/' . $holder->filePrefix() . '.cpp',
+                $this->enumHolders,
+            ),
+        ));
     }
 
     /**
@@ -124,10 +140,16 @@ readonly class ExtensionBuildContext
     {
         $bridge = new TypeBridge();
 
-        return array_map(
-            static fn(string $className): string => $bridge->minitName($className),
-            $this->orderedGeneratedClasses(),
-        );
+        return array_values(array_merge(
+            array_map(
+                static fn(string $className): string => $bridge->minitName($className),
+                $this->orderedGeneratedClasses(),
+            ),
+            array_map(
+                static fn(EnumHolderDefinition $holder): string => $holder->minitName(),
+                $this->enumHolders,
+            ),
+        ));
     }
 
     /**
