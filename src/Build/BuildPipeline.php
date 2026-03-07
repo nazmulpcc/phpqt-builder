@@ -23,11 +23,14 @@ class BuildPipeline
 
     public function analyze(BuildExecutionRequest $request, OutputInterface $output): BuildAnalysisResult
     {
+        $analysisStartedAt = microtime(true);
+        $timings = [];
         $metadataDir = $request->buildRootDir . '/generated';
         $this->ensureDirectory($request->outputDir);
         $this->ensureDirectory($request->outputDir . '/classes');
         $this->ensureDirectory($metadataDir);
 
+        $discoveryStartedAt = microtime(true);
         $cachedDiscovery = null;
         if ($request->reuseDiscoveryCache) {
             $cachedDiscovery = $this->discoveryService->loadCache(
@@ -70,6 +73,9 @@ class BuildPipeline
                     $output->writeln(sprintf('<error>%s</error>', $message));
                 }
 
+                $timings['discovery'] = microtime(true) - $discoveryStartedAt;
+                $timings['analysis_total'] = microtime(true) - $analysisStartedAt;
+
                 return new BuildAnalysisResult(
                     metadataDir: $metadataDir,
                     candidateCount: $discovery->candidateCount,
@@ -90,6 +96,7 @@ class BuildPipeline
                     moduleGeneratedMethodTotals: [],
                     passes: 0,
                     requiresSignalConnectionSupport: false,
+                    timings: $timings,
                 );
             }
 
@@ -107,6 +114,8 @@ class BuildPipeline
                 $discovery,
             );
         }
+        $timings['discovery'] = microtime(true) - $discoveryStartedAt;
+        $this->renderPhaseTiming($output, 'Discovery', $timings['discovery']);
 
         $output->writeln(sprintf(
             '<info>Scanning complete.</info> %d candidates queued, %d filtered before generation.',
@@ -114,6 +123,7 @@ class BuildPipeline
             count($skippedClasses),
         ));
 
+        $classStructureStartedAt = microtime(true);
         $classStructures = $this->discoveryService->prepareClassStructures(
             $acceptedCandidates,
             $request->outputDir,
@@ -150,9 +160,13 @@ class BuildPipeline
                 moduleGeneratedMethodTotals: [],
                 passes: 0,
                 requiresSignalConnectionSupport: false,
+                timings: $timings + ['class_structure_cache' => microtime(true) - $classStructureStartedAt, 'analysis_total' => microtime(true) - $analysisStartedAt],
             );
         }
+        $timings['class_structure_cache'] = microtime(true) - $classStructureStartedAt;
+        $this->renderPhaseTiming($output, 'Class structure cache', $timings['class_structure_cache']);
 
+        $supplementalStartedAt = microtime(true);
         $acceptedCandidates = $classStructures['accepted_candidates'];
         $skippedClasses = [...$skippedClasses, ...$classStructures['skipped_classes']];
         $supplemental = $this->discoveryService->augmentWithSupplementalCandidates(
@@ -194,6 +208,7 @@ class BuildPipeline
                 moduleGeneratedMethodTotals: [],
                 passes: 0,
                 requiresSignalConnectionSupport: false,
+                timings: $timings + ['supplemental_discovery' => microtime(true) - $supplementalStartedAt, 'analysis_total' => microtime(true) - $analysisStartedAt],
             );
         }
 
@@ -204,7 +219,10 @@ class BuildPipeline
             $metadataDir . '/supplemental_candidates.json',
             json_encode($supplemental['supplemental_candidates'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]',
         );
+        $timings['supplemental_discovery'] = microtime(true) - $supplementalStartedAt;
+        $this->renderPhaseTiming($output, 'Supplemental discovery', $timings['supplemental_discovery']);
 
+        $enumStartedAt = microtime(true);
         $classNamespaces = $this->classNamespaces($acceptedCandidates, $request->importedAbi);
         $enumCandidateHeaders = (new EnumCandidateHeaderCollector())->collect(
             $request->installation->includeRoots,
@@ -290,8 +308,11 @@ class BuildPipeline
                 $enumCandidateHeaders,
             );
         }
+        $timings['enum_discovery'] = microtime(true) - $enumStartedAt;
+        $this->renderPhaseTiming($output, 'Enum discovery', $timings['enum_discovery']);
 
         $output->writeln('<info>Evaluating generated class set from cached class structures...</info>');
+        $generationAnalysisStartedAt = microtime(true);
         $generation = $this->resolveGeneratedCandidates(
             $acceptedCandidates,
             $skippedClasses,
@@ -316,6 +337,8 @@ class BuildPipeline
             $moduleMethodTotals,
             $generation['module_generated_method_totals'] ?? [],
         );
+        $timings['generation_analysis'] = microtime(true) - $generationAnalysisStartedAt;
+        $this->renderPhaseTiming($output, 'Generation analysis', $timings['generation_analysis']);
 
         $this->discoveryService->writeCache(
             $metadataDir,
@@ -331,6 +354,9 @@ class BuildPipeline
                 supplementalCandidates: $supplemental['supplemental_candidates'],
             ),
         );
+
+        $timings['analysis_total'] = microtime(true) - $analysisStartedAt;
+        $this->renderPhaseTiming($output, 'Analysis total', $timings['analysis_total']);
 
         return new BuildAnalysisResult(
             metadataDir: $metadataDir,
@@ -355,12 +381,15 @@ class BuildPipeline
             moduleGeneratedMethodTotals: $generation['module_generated_method_totals'] ?? [],
             passes: $generation['passes'],
             requiresSignalConnectionSupport: (bool) ($generation['requires_signal_connection_support'] ?? false),
+            timings: $timings,
         );
     }
 
     public function build(BuildExecutionRequest $request, OutputInterface $output): BuildExecutionResult
     {
+        $buildStartedAt = microtime(true);
         $analysis = $this->analyze($request, $output);
+        $timings = $analysis->timings;
         $runtimeManifest = (new RuntimeManifestBuilder())->buildForMonolithic(
             $request,
             $analysis,
@@ -402,6 +431,7 @@ class BuildPipeline
         $runtimeManifest->write($runtimeManifestPath);
         $output->writeln(sprintf('  <comment>Wrote:</comment> %s', $runtimeManifestPath));
 
+        $emissionStartedAt = microtime(true);
         $emission = $this->emitGeneratedClasses(
             $context,
             $analysis->generatedClasses,
@@ -410,12 +440,15 @@ class BuildPipeline
             $analysis->generatedClassHeaders,
             $output,
         );
+        $timings['emission'] = microtime(true) - $emissionStartedAt;
+        $this->renderPhaseTiming($output, 'Emission', $timings['emission']);
         $scaffoldFiles = $scaffolder->finalize($context);
         $coreWriteStats = $scaffolder->lastWriteStats();
         $totalWriteStats = new FileWriteStats();
         $totalWriteStats->merge($emission['file_write_stats']);
         $totalWriteStats->merge($coreWriteStats);
 
+        $bootstrapStartedAt = microtime(true);
         $bootstrap = $this->bootstrapExtension(
             $context,
             $request->jobs,
@@ -423,6 +456,10 @@ class BuildPipeline
             $totalWriteStats,
             $output,
         );
+        $timings['bootstrap'] = microtime(true) - $bootstrapStartedAt;
+        $this->renderPhaseTiming($output, 'Bootstrap', $timings['bootstrap']);
+        $timings['build_total'] = microtime(true) - $buildStartedAt;
+        $this->renderPhaseTiming($output, 'Build total', $timings['build_total']);
 
         $summary = [
             'modules' => $request->modules,
@@ -439,6 +476,7 @@ class BuildPipeline
             'bootstrap_error' => $bootstrap['error'],
             'bootstrap_skipped' => $bootstrap['skipped'],
             'bootstrap_disabled' => $bootstrap['disabled'],
+            'timings' => $timings,
             'file_writes' => [
                 'comparator' => $scaffolder->writeComparatorName(),
                 'class' => $emission['file_write_stats']->toArray(),
@@ -542,6 +580,24 @@ class BuildPipeline
         }
     }
 
+    private function renderPhaseTiming(OutputInterface $output, string $label, float $seconds): void
+    {
+        $output->writeln(sprintf(
+            '  <comment>timing:</comment> %s %s',
+            $label,
+            $this->formatDurationSeconds($seconds),
+        ));
+    }
+
+    private function formatDurationSeconds(float $seconds): string
+    {
+        if ($seconds < 1.0) {
+            return sprintf('%.0f ms', $seconds * 1000);
+        }
+
+        return sprintf('%.2f s', $seconds);
+    }
+
     /**
      * @param array{
      *   type: string,
@@ -563,9 +619,17 @@ class BuildPipeline
         }
 
         if ($type === 'step_succeeded') {
-            $output->writeln(sprintf('  <info>%s:</info> succeeded', $step));
+            $output->writeln(sprintf(
+                '  <info>%s:</info> succeeded (%s)',
+                $step,
+                $this->formatDurationSeconds((float) ($event['duration_seconds'] ?? 0.0)),
+            ));
         } elseif ($type === 'step_failed') {
-            $output->writeln(sprintf('  <error>%s:</error> failed', $step));
+            $output->writeln(sprintf(
+                '  <error>%s:</error> failed (%s)',
+                $step,
+                $this->formatDurationSeconds((float) ($event['duration_seconds'] ?? 0.0)),
+            ));
         } else {
             return;
         }

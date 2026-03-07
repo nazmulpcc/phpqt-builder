@@ -68,6 +68,7 @@ final class FakeExtensionBootstrapper implements ExtensionBootstrapper
                     'stdout_log' => null,
                     'stderr_log' => null,
                     'message' => null,
+                    'duration_seconds' => null,
                 ]);
             }
 
@@ -80,6 +81,7 @@ final class FakeExtensionBootstrapper implements ExtensionBootstrapper
                         'stdout_log' => $stdoutLogPath,
                         'stderr_log' => $stderrLogPath,
                         'message' => $this->failureMessage,
+                        'duration_seconds' => 0.01,
                     ]);
                 }
                 throw new \RuntimeException($this->failureMessage);
@@ -93,6 +95,7 @@ final class FakeExtensionBootstrapper implements ExtensionBootstrapper
                     'stdout_log' => $stdoutLogPath,
                     'stderr_log' => $stderrLogPath,
                     'message' => null,
+                    'duration_seconds' => 0.01,
                 ]);
             }
 
@@ -102,6 +105,7 @@ final class FakeExtensionBootstrapper implements ExtensionBootstrapper
                 $context->outputDir,
                 $stdoutLogPath,
                 $stderrLogPath,
+                0.01,
             );
         }
 

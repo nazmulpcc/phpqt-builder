@@ -61,14 +61,15 @@ it('generates the extension tree from a fixture qt root', function (): void {
             'Extracting enum holders with 2 parallel worker(s)...',
             'Enum discovery',
             'Discovery pass 1',
+            'timing:',
             'phpize: started',
-            'phpize: succeeded',
+            'phpize: succeeded (',
             'gen_stub: started',
-            'gen_stub: succeeded',
+            'gen_stub: succeeded (',
             'configure: started',
-            'configure: succeeded',
+            'configure: succeeded (',
             'make: started',
-            'make: succeeded',
+            'make: succeeded (',
             'Module acceptance:',
             'File writes:',
             'Module Name',
@@ -88,6 +89,8 @@ it('generates the extension tree from a fixture qt root', function (): void {
         ->and($summary['dependency_source'] ?? null)->toBe('static_manifest')
         ->and($summary['runtime_manifest'] ?? null)->toBe($metadataDir . '/runtime_manifest.json')
         ->and(array_column($summary['bootstrap'], 'name'))->toBe(['phpize', 'gen_stub', 'configure', 'make'])
+        ->and($summary['bootstrap'][0]['duration_seconds'] ?? null)->toBeFloat()
+        ->and(array_keys($summary['timings'] ?? []))->toContain('discovery', 'class_structure_cache', 'supplemental_discovery', 'enum_discovery', 'generation_analysis', 'emission', 'bootstrap', 'build_total')
         ->and($summary['file_writes']['total']['total'] ?? null)->toBeGreaterThan(0);
 
     $runtimeManifest = qt_decode_json((string) file_get_contents($metadataDir . '/runtime_manifest.json'));
@@ -184,13 +187,14 @@ it('reuses an existing discovery cache', function (): void {
         'enum_holders_cache.json',
         'enum_candidate_headers.json',
         'phpize: started',
-        'phpize: succeeded',
+        'phpize: succeeded (',
         'gen_stub: started',
-        'gen_stub: succeeded',
+        'gen_stub: succeeded (',
         'configure: started',
-        'configure: succeeded',
+        'configure: succeeded (',
         'make: started',
-        'make: succeeded',
+        'make: succeeded (',
+        'timing:',
         'Module acceptance:',
         'Module Name',
         'Class Acceptance',
