@@ -19,6 +19,15 @@ use QtBuilder\Parsing\QtClassInspector;
 
 class ClassGenerationService
 {
+    private const WIDGET_INHERITED_EVENT_METHODS = [
+        'event',
+        'mousePressEvent',
+        'mouseReleaseEvent',
+        'mouseDoubleClickEvent',
+        'mouseMoveEvent',
+        'wheelEvent',
+    ];
+
     public function __construct(
         private readonly ClassExposurePolicy $classPolicy = new ClassExposurePolicy(),
         private readonly MethodExposurePolicy $methodPolicy = new MethodExposurePolicy(),
@@ -102,6 +111,21 @@ class ClassGenerationService
         }
 
         $filtered = $this->methodPolicy->filter($classData, $allowedClasses, $preferExternalDependencyReasons, $enumRegistry);
+        $filtered['selected_methods'] = $this->mergeInheritedWidgetEventMethods(
+            $classData,
+            $filtered['selected_methods'],
+            function (string $baseClass) use ($headerPath, $includePaths, $allowedClasses, $classHeaders): ?array {
+                $baseHeaderPath = $classHeaders[$baseClass] ?? $headerPath;
+
+                return $this->loadMethodFilteredClassData(
+                    $baseHeaderPath,
+                    $baseClass,
+                    $includePaths,
+                    $allowedClasses,
+                    $classHeaders,
+                );
+            },
+        );
         $signalFilter = $this->filterSignalCallbackMethods(
             $filtered['selected_methods'],
             $includePaths,
@@ -301,6 +325,26 @@ class ClassGenerationService
         }
 
         $filtered = $this->methodPolicy->filter($classData, $allowedClasses, $preferExternalDependencyReasons, $enumRegistry);
+        $filtered['selected_methods'] = $this->mergeInheritedWidgetEventMethods(
+            $classData,
+            $filtered['selected_methods'],
+            function (string $baseClass) use ($preparedClassDataByClass, $allowedClasses, $preferExternalDependencyReasons, $enumRegistry): ?array {
+                $baseClassData = $preparedClassDataByClass[$baseClass] ?? null;
+                if (!is_array($baseClassData)) {
+                    return null;
+                }
+
+                $filtered = $this->methodPolicy->filter(
+                    $baseClassData,
+                    $allowedClasses,
+                    $preferExternalDependencyReasons,
+                    $enumRegistry,
+                );
+                $baseClassData['selected_methods'] = $filtered['selected_methods'];
+
+                return $baseClassData;
+            },
+        );
         $signalFilter = $this->filterSignalCallbackMethods(
             $filtered['selected_methods'],
             [],
@@ -1284,9 +1328,108 @@ class ClassGenerationService
         return $classData;
     }
 
+    /**
+     * @param list<string> $includePaths
+     * @param list<string> $allowedClasses
+     * @param array<string, string> $classHeaders
+     * @return array{name: string, is_abstract: bool, is_copy_constructible?: bool, has_public_destructor?: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, selected_methods: list<array<string, mixed>>}|null
+     */
+    private function loadMethodFilteredClassData(
+        string $headerPath,
+        string $className,
+        array $includePaths,
+        array $allowedClasses,
+        array $classHeaders,
+    ): ?array {
+        $decision = $this->classPolicy->decideClassName($className);
+        if (!$decision->accepted) {
+            return null;
+        }
+
+        if ($this->isTemplateClassDeclaration($headerPath, $className)) {
+            return null;
+        }
+
+        $facts = $this->prepareDiscoveryFacts($headerPath, $className, $includePaths);
+        if (($facts['status'] ?? 'error') !== 'ok' || !is_array($facts['class_data'] ?? null)) {
+            return null;
+        }
+
+        /** @var array<string, mixed> $classData */
+        $classData = $facts['class_data'];
+        $classData = $this->mergeInheritedTypeMetadata(
+            $classData,
+            function (string $baseClass) use ($headerPath, $includePaths, $classHeaders): ?array {
+                $baseHeaderPath = $classHeaders[$baseClass] ?? $headerPath;
+                $facts = $this->prepareDiscoveryFacts($baseHeaderPath, $baseClass, $includePaths);
+
+                return (($facts['status'] ?? 'error') === 'ok' && is_array($facts['class_data'] ?? null))
+                    ? $facts['class_data']
+                    : null;
+            },
+        );
+        $classData['selected_methods'] = $this->methodPolicy->filter($classData, $allowedClasses)['selected_methods'];
+
+        return $classData;
+    }
+
     private function canIgnoreUnavailableParent(string $parentClass): bool
     {
         return $parentClass === 'QIODeviceBase';
+    }
+
+    /**
+     * @param array<string, mixed> $classData
+     * @param list<array<string, mixed>> $selectedMethods
+     * @param callable(string): ?array<string, mixed> $baseClassLoader
+     * @return list<array<string, mixed>>
+     */
+    private function mergeInheritedWidgetEventMethods(
+        array $classData,
+        array $selectedMethods,
+        callable $baseClassLoader,
+    ): array {
+        // Some QWidget subclasses, notably QOpenGLWidget, rely on inherited input
+        // virtuals being present on the generated native trampoline even when the
+        // subclass header does not redeclare them. Keep this narrowly scoped to
+        // the widget event allowlist instead of widening protected inheritance
+        // exposure in general.
+        if (!$this->isWidgetDescendantClassData($classData, $baseClassLoader)) {
+            return $selectedMethods;
+        }
+
+        $declaredMethodNames = [];
+        foreach ((array) ($classData['methods'] ?? []) as $method) {
+            $methodName = is_string($method['name'] ?? null) ? $method['name'] : '';
+            if ($methodName !== '') {
+                $declaredMethodNames[$methodName] = true;
+            }
+        }
+
+        $selectedMethodNames = [];
+        foreach ($selectedMethods as $method) {
+            $methodName = is_string($method['name'] ?? null) ? $method['name'] : '';
+            if ($methodName !== '') {
+                $selectedMethodNames[$methodName] = true;
+            }
+        }
+
+        $visited = [];
+        foreach ($this->collectInheritedWidgetEventMethodVariants($classData, $baseClassLoader, $visited) as $method) {
+            $methodName = is_string($method['name'] ?? null) ? $method['name'] : '';
+            if ($methodName === '') {
+                continue;
+            }
+
+            if (isset($declaredMethodNames[$methodName]) || isset($selectedMethodNames[$methodName])) {
+                continue;
+            }
+
+            $selectedMethods[] = $method;
+            $selectedMethodNames[$methodName] = true;
+        }
+
+        return $selectedMethods;
     }
 
     /**
@@ -1358,6 +1501,95 @@ class ClassGenerationService
         $classData['flag_aliases'] = $flagAliases;
 
         return $classData;
+    }
+
+    /**
+     * @param array<string, mixed> $classData
+     * @param callable(string): ?array<string, mixed> $baseClassLoader
+     * @param array<string, bool> $visited
+     * @return list<array<string, mixed>>
+     */
+    private function collectInheritedWidgetEventMethodVariants(
+        array $classData,
+        callable $baseClassLoader,
+        array &$visited = [],
+    ): array {
+        $className = is_string($classData['name'] ?? null) ? $classData['name'] : '';
+        if ($className !== '') {
+            if (isset($visited[$className])) {
+                return [];
+            }
+
+            $visited[$className] = true;
+        }
+
+        $methods = [];
+
+        foreach ((array) ($classData['bases'] ?? []) as $baseClass) {
+            if (!is_string($baseClass) || $baseClass === '' || $baseClass === $className) {
+                continue;
+            }
+
+            $baseClassData = $baseClassLoader($baseClass);
+            if (!is_array($baseClassData)) {
+                continue;
+            }
+
+            $methods = [
+                ...$methods,
+                ...$this->collectInheritedWidgetEventMethodVariants($baseClassData, $baseClassLoader, $visited),
+            ];
+
+            foreach ((array) ($baseClassData['selected_methods'] ?? []) as $method) {
+                $methodName = is_string($method['name'] ?? null) ? $method['name'] : '';
+                if (in_array($methodName, self::WIDGET_INHERITED_EVENT_METHODS, true)) {
+                    $methods[] = $method;
+                }
+            }
+        }
+
+        return $methods;
+    }
+
+    /**
+     * @param array<string, mixed> $classData
+     * @param callable(string): ?array<string, mixed> $baseClassLoader
+     * @param array<string, bool> $visited
+     */
+    private function isWidgetDescendantClassData(
+        array $classData,
+        callable $baseClassLoader,
+        array &$visited = [],
+    ): bool {
+        $className = is_string($classData['name'] ?? null) ? $classData['name'] : '';
+        if ($className === 'QWidget') {
+            return true;
+        }
+
+        if ($className !== '') {
+            if (isset($visited[$className])) {
+                return false;
+            }
+
+            $visited[$className] = true;
+        }
+
+        foreach ((array) ($classData['bases'] ?? []) as $baseClass) {
+            if (!is_string($baseClass) || $baseClass === '' || $baseClass === $className) {
+                continue;
+            }
+
+            if ($baseClass === 'QWidget') {
+                return true;
+            }
+
+            $baseClassData = $baseClassLoader($baseClass);
+            if (is_array($baseClassData) && $this->isWidgetDescendantClassData($baseClassData, $baseClassLoader, $visited)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

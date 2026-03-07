@@ -329,6 +329,7 @@ class MethodContext
                 isWritableByRef: $mergedParam?->isByRef ?? false,
                 isWritableByRefPointer: ($mergedParam?->isByRef ?? false) && $param->isWritableByRefPointer,
                 isWritableQtString: ($mergedParam?->isByRef ?? false) && $param->isWritableQtString,
+                nullableObjectFallbackExpr: $this->constructorNullableObjectFallbackExpr($overload, $i),
             );
 
             foreach ($setup['lines'] as $line) {
@@ -343,6 +344,26 @@ class MethodContext
             'setup_lines' => $setupLines,
             'args' => $args,
         ];
+    }
+
+    private function constructorNullableObjectFallbackExpr(OverloadContext $overload, int $paramIndex): ?string
+    {
+        if (!$this->isConstructor) {
+            return null;
+        }
+
+        if (!in_array($this->className, ['QMouseEvent', 'QWheelEvent'], true)) {
+            return null;
+        }
+
+        $param = $overload->params[$paramIndex] ?? null;
+        if ($param === null || !$param->hasDefault || $param->phpType !== 'QPointingDevice') {
+            return null;
+        }
+
+        // Qt defaults these optional event-constructor device parameters to the
+        // process primary pointing device; passing NULL crashes real construction.
+        return 'QPointingDevice::primaryPointingDevice()';
     }
 
     /**

@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use Qt\Core\QEvent;
 use Qt\Gui\QMatrix4x4;
 use Qt\Gui\QMouseEvent;
 use Qt\Gui\QOpenGLContext;
@@ -311,28 +310,40 @@ final class ObjBrowserWidget extends QOpenGLWidget
         $this->program->release();
     }
 
-    public function event(QEvent $event): bool
+    protected function mousePressEvent(QMouseEvent $event): void
     {
-        $type = $event->type();
-
-        if ($event instanceof QMouseEvent) {
-            if ($type === QEvent::MouseMove) {
-                $this->handleMouseMove($event);
-            } elseif ($type === QEvent::MouseButtonPress && $event->button() === 1) {
-                $this->dragging = true;
-                $this->lastPointer = ['x' => $event->x(), 'y' => $event->y()];
-            } elseif ($type === QEvent::MouseButtonRelease && $event->button() === 1) {
-                $this->dragging = false;
-            }
-        } elseif ($event instanceof QWheelEvent) {
-            $delta = $event->angleDelta()->y();
-            if ($delta !== 0) {
-                $this->distance = max(0.6, $this->distance * ($delta > 0 ? 0.9 : 1.1));
-                $this->update();
-            }
+        if ($event->button() === 1) {
+            $this->dragging = true;
+            $this->lastPointer = ['x' => $event->x(), 'y' => $event->y()];
         }
 
-        return parent::event($event);
+        parent::mousePressEvent($event);
+    }
+
+    protected function mouseReleaseEvent(QMouseEvent $event): void
+    {
+        if ($event->button() === 1) {
+            $this->dragging = false;
+        }
+
+        parent::mouseReleaseEvent($event);
+    }
+
+    protected function mouseMoveEvent(QMouseEvent $event): void
+    {
+        $this->handleMouseMove($event);
+        parent::mouseMoveEvent($event);
+    }
+
+    protected function wheelEvent(QWheelEvent $event): void
+    {
+        $delta = $event->angleDelta()->y();
+        if ($delta !== 0) {
+            $this->distance = max(0.6, $this->distance * ($delta > 0 ? 0.9 : 1.1));
+            $this->update();
+        }
+
+        parent::wheelEvent($event);
     }
 
     private function handleMouseMove(QMouseEvent $event): void
@@ -501,6 +512,9 @@ final class ObjBrowserWidget extends QOpenGLWidget
      */
     private function decodeTextureImage(string $texturePath): ?array
     {
+        // The ideal Qt path here is QImage/QOpenGLTexture, but that wrapper path
+        // is still unstable in this environment. Decode via GD and upload raw
+        // RGBA bytes so the example remains runnable.
         if (!function_exists('imagecreatefromstring')) {
             return null;
         }

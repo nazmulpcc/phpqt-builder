@@ -623,6 +623,7 @@ class TypeBridge
         bool $isWritableByRef = false,
         bool $isWritableByRefPointer = false,
         bool $isWritableQtString = false,
+        ?string $nullableObjectFallbackExpr = null,
     ): array {
         if (
             $persistentStorageVar !== null
@@ -674,8 +675,8 @@ class TypeBridge
             return [
                 'lines' => [],
                 'expr' => $sourceIsZval
-                    ? $this->zvalToNativeExpr($phpType, $cppType, $sourceVarName, $nullable)
-                    : $this->directPhpToNativeExpr($phpType, $cppType, $sourceVarName, $nullable),
+                    ? $this->zvalToNativeExpr($phpType, $cppType, $sourceVarName, $nullable, $nullableObjectFallbackExpr)
+                    : $this->directPhpToNativeExpr($phpType, $cppType, $sourceVarName, $nullable, $nullableObjectFallbackExpr),
                 'local_var' => null,
             ];
         }
@@ -785,8 +786,8 @@ class TypeBridge
 
         if ($isRvalueReference) {
             $initExpr = $sourceIsZval
-                ? $this->zvalToNativeRvalueExpr($phpType, $cppType, $sourceVarName, $nullable)
-                : $this->directPhpToNativeRvalueExpr($phpType, $cppType, $sourceVarName, $nullable);
+                ? $this->zvalToNativeRvalueExpr($phpType, $cppType, $sourceVarName, $nullable, $nullableObjectFallbackExpr)
+                : $this->directPhpToNativeRvalueExpr($phpType, $cppType, $sourceVarName, $nullable, $nullableObjectFallbackExpr);
 
             return [
                 'lines' => [sprintf('%s %s = %s;', $this->localValueType($phpType, $cppType), $nativeVarName, $initExpr)],
@@ -797,8 +798,8 @@ class TypeBridge
 
         if ($this->isNonConstReferenceType($cppType) && $this->shouldMaterializeReferenceLocal($phpType, $cppType)) {
             $initExpr = $sourceIsZval
-                ? $this->zvalToNativeExpr($phpType, $cppType, $sourceVarName, $nullable)
-                : $this->directPhpToNativeExpr($phpType, $cppType, $sourceVarName, $nullable);
+                ? $this->zvalToNativeExpr($phpType, $cppType, $sourceVarName, $nullable, $nullableObjectFallbackExpr)
+                : $this->directPhpToNativeExpr($phpType, $cppType, $sourceVarName, $nullable, $nullableObjectFallbackExpr);
 
             return [
                 'lines' => [sprintf('%s %s = %s;', $this->localValueType($phpType, $cppType), $nativeVarName, $initExpr)],
@@ -810,8 +811,8 @@ class TypeBridge
         return [
             'lines' => [],
             'expr' => $sourceIsZval
-                ? $this->zvalToNativeExpr($phpType, $cppType, $sourceVarName, $nullable)
-                : $this->directPhpToNativeExpr($phpType, $cppType, $sourceVarName, $nullable),
+                ? $this->zvalToNativeExpr($phpType, $cppType, $sourceVarName, $nullable, $nullableObjectFallbackExpr)
+                : $this->directPhpToNativeExpr($phpType, $cppType, $sourceVarName, $nullable, $nullableObjectFallbackExpr),
             'local_var' => null,
         ];
     }
@@ -897,7 +898,13 @@ class TypeBridge
      * @param string $varName  C variable name (zval*)
      * @return string  C++ expression
      */
-    public function zvalToNativeExpr(string $phpType, string $cppType, string $varName, bool $nullable = false): string
+    public function zvalToNativeExpr(
+        string $phpType,
+        string $cppType,
+        string $varName,
+        bool $nullable = false,
+        ?string $nullableObjectFallbackExpr = null,
+    ): string
     {
         if ($nullable) {
             return match ($phpType) {
@@ -923,7 +930,7 @@ class TypeBridge
             } ?? match ($phpType) {
                 'array' => $varName,
                 default => $this->isObjectType($phpType)
-                    ? $this->phpObjectToNativeExpr($phpType, $cppType, $varName, true)
+                    ? $this->phpObjectToNativeExpr($phpType, $cppType, $varName, true, $nullableObjectFallbackExpr)
                     : $varName,
             };
         }
@@ -934,12 +941,18 @@ class TypeBridge
             'bool' => sprintf('Z_TYPE_P(%s) == IS_TRUE', $varName),
             'string' => $this->phpStringToNativeExpr($cppType, sprintf('Z_STR_P(%s)', $varName)),
             default => $this->isObjectType($phpType)
-                ? $this->phpObjectToNativeExpr($phpType, $cppType, $varName, $nullable)
+                ? $this->phpObjectToNativeExpr($phpType, $cppType, $varName, $nullable, $nullableObjectFallbackExpr)
                 : $varName,
         };
     }
 
-    private function zvalToNativeRvalueExpr(string $phpType, string $cppType, string $varName, bool $nullable = false): string
+    private function zvalToNativeRvalueExpr(
+        string $phpType,
+        string $cppType,
+        string $varName,
+        bool $nullable = false,
+        ?string $nullableObjectFallbackExpr = null,
+    ): string
     {
         if ($nullable) {
             return match ($phpType) {
@@ -965,7 +978,7 @@ class TypeBridge
             } ?? match ($phpType) {
                 'array' => $varName,
                 default => $this->isObjectType($phpType)
-                    ? $this->phpObjectToNativeRvalueExpr($phpType, $cppType, $varName, true)
+                    ? $this->phpObjectToNativeRvalueExpr($phpType, $cppType, $varName, true, $nullableObjectFallbackExpr)
                     : $varName,
             };
         }
@@ -976,12 +989,18 @@ class TypeBridge
             'bool' => sprintf('Z_TYPE_P(%s) == IS_TRUE', $varName),
             'string' => $this->phpStringToNativeExpr($cppType, sprintf('Z_STR_P(%s)', $varName)),
             default => $this->isObjectType($phpType)
-                ? $this->phpObjectToNativeRvalueExpr($phpType, $cppType, $varName, $nullable)
+                ? $this->phpObjectToNativeRvalueExpr($phpType, $cppType, $varName, $nullable, $nullableObjectFallbackExpr)
                 : $varName,
         };
     }
 
-    private function directPhpToNativeExpr(string $phpType, string $cppType, string $varName, bool $nullable = false): string
+    private function directPhpToNativeExpr(
+        string $phpType,
+        string $cppType,
+        string $varName,
+        bool $nullable = false,
+        ?string $nullableObjectFallbackExpr = null,
+    ): string
     {
         return match ($phpType) {
             'int' => $this->phpIntToNativeExpr($cppType, $varName),
@@ -989,12 +1008,18 @@ class TypeBridge
             'bool' => $varName,
             'string' => $this->phpStringToNativeExpr($cppType, $varName),
             default => $this->isObjectType($phpType)
-                ? $this->phpObjectToNativeExpr($phpType, $cppType, $varName, $nullable)
+                ? $this->phpObjectToNativeExpr($phpType, $cppType, $varName, $nullable, $nullableObjectFallbackExpr)
                 : $varName,
         };
     }
 
-    private function directPhpToNativeRvalueExpr(string $phpType, string $cppType, string $varName, bool $nullable = false): string
+    private function directPhpToNativeRvalueExpr(
+        string $phpType,
+        string $cppType,
+        string $varName,
+        bool $nullable = false,
+        ?string $nullableObjectFallbackExpr = null,
+    ): string
     {
         return match ($phpType) {
             'int' => $this->phpIntToNativeExpr($cppType, $varName),
@@ -1002,7 +1027,7 @@ class TypeBridge
             'bool' => $varName,
             'string' => $this->phpStringToNativeExpr($cppType, $varName),
             default => $this->isObjectType($phpType)
-                ? $this->phpObjectToNativeRvalueExpr($phpType, $cppType, $varName, $nullable)
+                ? $this->phpObjectToNativeRvalueExpr($phpType, $cppType, $varName, $nullable, $nullableObjectFallbackExpr)
                 : $varName,
         };
     }
@@ -1016,7 +1041,13 @@ class TypeBridge
      * @param string $varName  C variable name (zval *)
      * @return string  C++ expression
      */
-    public function phpObjectToNativeExpr(string $phpType, string $cppType, string $varName, bool $nullable = false): string
+    public function phpObjectToNativeExpr(
+        string $phpType,
+        string $cppType,
+        string $varName,
+        bool $nullable = false,
+        ?string $nullableFallbackExpr = null,
+    ): string
     {
         $fromObj = $this->fromObjFuncName($phpType);
         $baseExpr = sprintf('%s(Z_OBJ_P(%s))->native_ptr', $fromObj, $varName);
@@ -1024,7 +1055,12 @@ class TypeBridge
         // If C++ expects a pointer, pass the pointer directly
         if (str_contains($cppType, '*') && !str_contains($cppType, '&')) {
             if ($nullable) {
-                return sprintf('(%1$s != NULL && Z_TYPE_P(%1$s) == IS_OBJECT ? %2$s : NULL)', $varName, $baseExpr);
+                return sprintf(
+                    '(%1$s != NULL && Z_TYPE_P(%1$s) == IS_OBJECT ? %2$s : %3$s)',
+                    $varName,
+                    $baseExpr,
+                    $nullableFallbackExpr ?? 'NULL',
+                );
             }
 
             return $baseExpr;
@@ -1036,14 +1072,20 @@ class TypeBridge
                 '(%1$s != NULL && Z_TYPE_P(%1$s) == IS_OBJECT ? *%2$s : %3$s())',
                 $varName,
                 $baseExpr,
-                $this->normalizeCppType($cppType),
+                $nullableFallbackExpr ?? $this->normalizeCppType($cppType),
             );
         }
 
         return '*' . $baseExpr;
     }
 
-    public function phpObjectToNativeRvalueExpr(string $phpType, string $cppType, string $varName, bool $nullable = false): string
+    public function phpObjectToNativeRvalueExpr(
+        string $phpType,
+        string $cppType,
+        string $varName,
+        bool $nullable = false,
+        ?string $nullableFallbackExpr = null,
+    ): string
     {
         $fromObj = $this->fromObjFuncName($phpType);
         $baseExpr = sprintf('%s(Z_OBJ_P(%s))->native_ptr', $fromObj, $varName);
@@ -1054,7 +1096,7 @@ class TypeBridge
                 '(%1$s != NULL && Z_TYPE_P(%1$s) == IS_OBJECT ? %2$s : %3$s())',
                 $varName,
                 $this->nonNullableObjectRvalueExpr($normalizedType, $baseExpr),
-                $normalizedType,
+                $nullableFallbackExpr ?? $normalizedType,
             );
         }
 

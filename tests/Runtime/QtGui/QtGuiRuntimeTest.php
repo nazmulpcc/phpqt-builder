@@ -30,3 +30,11 @@ it('supports QList-derived floating point polygons through synthetic list parent
         ->and($payload['x'])->toBe(1.5)
         ->and($payload['y'])->toBe(2.5);
 });
+
+it('constructs mouse and wheel events without an explicit pointing device', function (): void {
+    $payload = qt_runtime_payload('QtGui/input_event_defaults.php', ['QT_QPA_PLATFORM' => 'offscreen']);
+
+    expect($payload['mouse_x'])->toBe(20)
+        ->and($payload['mouse_y'])->toBe(30)
+        ->and($payload['wheel_delta_y'])->toBe(120);
+});
