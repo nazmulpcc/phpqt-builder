@@ -4,6 +4,11 @@ A widget-based OpenGL demo rendered from PHP with `QOpenGLWidget`, `QOpenGLShade
 
 The scene is a fullscreen fragment shader on a quad, with live uniforms driven by Qt Widgets controls and mouse motion.
 
+Shader sources live in sibling files:
+
+- `shader.vert`
+- `shader.frag`
+
 ## Required build
 
 ```sh
