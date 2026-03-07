@@ -43,7 +43,11 @@ it('maps supported opengl numeric pointer inputs to php arrays', function (): vo
     $mapper = new CppToPhpTypeMapper();
 
     expect($mapper->map('const GLfloat *'))->toBe('array')
-        ->and($mapper->map('const GLint *'))->toBe('array');
+        ->and($mapper->map('const GLdouble *'))->toBe('array')
+        ->and($mapper->map('const GLint *'))->toBe('array')
+        ->and($mapper->map('const GLshort *'))->toBe('array')
+        ->and($mapper->map('const GLushort *'))->toBe('array')
+        ->and($mapper->map('const GLuint *'))->toBe('array');
 });
 
 it('maps opengl raw input buffers to strings only for opengl owners', function (): void {

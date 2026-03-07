@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace QtBuilder\CodeGen;
 
 use QtBuilder\Definition\ContainerType;
+use QtBuilder\Support\OpenGLNumericPointerArrayRegistry;
 
 /**
  * Maps PHP type names (from the IR) to Zend C API constructs needed
@@ -1887,13 +1888,12 @@ class TypeBridge
 
     private function numericPointerArrayPhpType(string $cppType): ?string
     {
-        $normalized = trim(preg_replace('/\s+/', ' ', $cppType) ?? $cppType);
+        return OpenGLNumericPointerArrayRegistry::resolve($cppType)['php_type'] ?? null;
+    }
 
-        return match (true) {
-            preg_match('/^const GLfloat\s*\*$/', $normalized) === 1 => 'float',
-            preg_match('/^const GLint\s*\*$/', $normalized) === 1 => 'int',
-            default => null,
-        };
+    private function numericPointerArrayNativeType(string $cppType): ?string
+    {
+        return OpenGLNumericPointerArrayRegistry::resolve($cppType)['native_type'] ?? null;
     }
 
     /**
@@ -2372,7 +2372,7 @@ class TypeBridge
         string $sourceVarName,
         string $nativeVarName,
     ): string {
-        $baseType = $this->normalizeCppType($cppType);
+        $baseType = $this->numericPointerArrayNativeType($cppType) ?? $this->normalizeCppType($cppType);
         $phpType = $this->numericPointerArrayPhpType($cppType);
         $storageVar = $nativeVarName . '_storage';
         $entryVar = $nativeVarName . '_entry';

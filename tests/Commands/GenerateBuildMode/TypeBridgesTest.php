@@ -322,12 +322,20 @@ it('supports input-only opengl numeric pointer arrays', function (): void {
         $header = $outputDir . '/qglnumericarrayholder.h';
         file_put_contents($header, <<<'CPP'
 typedef float GLfloat;
+typedef double GLdouble;
 typedef int GLint;
+typedef short GLshort;
+typedef unsigned short GLushort;
+typedef unsigned int GLuint;
 
 class QGlNumericArrayHolder {
 public:
 void uploadFloats(const GLfloat *values, int count);
+void uploadDoubles(const GLdouble *values, int count);
 void uploadInts(const GLint *values, int count);
+void uploadShorts(const GLshort *values, int count);
+void uploadUshorts(const GLushort *values, int count);
+void uploadUints(const GLuint *values, int count);
 };
 CPP);
 
@@ -354,16 +362,32 @@ CPP);
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qglnumericarrayholder.cpp');
 
         Assert::assertStringContainsString('public function uploadFloats(array $values, int $count): void {}', $stub);
+        Assert::assertStringContainsString('public function uploadDoubles(array $values, int $count): void {}', $stub);
         Assert::assertStringContainsString('public function uploadInts(array $values, int $count): void {}', $stub);
+        Assert::assertStringContainsString('public function uploadShorts(array $values, int $count): void {}', $stub);
+        Assert::assertStringContainsString('public function uploadUshorts(array $values, int $count): void {}', $stub);
+        Assert::assertStringContainsString('public function uploadUints(array $values, int $count): void {}', $stub);
         Assert::assertStringContainsString('std::vector<GLfloat> _qt_arg_0_storage;', $cpp);
         Assert::assertStringContainsString('const GLfloat * _qt_arg_0 = NULL;', $cpp);
         Assert::assertStringContainsString('Expected PHP array for OpenGL numeric buffer conversion.', $cpp);
         Assert::assertStringContainsString('Expected array of numeric values.', $cpp);
         Assert::assertStringContainsString('_qt_arg_0_storage.push_back((GLfloat)zval_get_double(_qt_arg_0_entry));', $cpp);
+        Assert::assertStringContainsString('std::vector<GLdouble> _qt_arg_0_storage;', $cpp);
+        Assert::assertStringContainsString('const GLdouble * _qt_arg_0 = NULL;', $cpp);
+        Assert::assertStringContainsString('_qt_arg_0_storage.push_back((GLdouble)zval_get_double(_qt_arg_0_entry));', $cpp);
         Assert::assertStringContainsString('std::vector<GLint> _qt_arg_0_storage;', $cpp);
         Assert::assertStringContainsString('const GLint * _qt_arg_0 = NULL;', $cpp);
         Assert::assertStringContainsString('Expected array of ints.', $cpp);
         Assert::assertStringContainsString('_qt_arg_0_storage.push_back((GLint)Z_LVAL_P(_qt_arg_0_entry));', $cpp);
+        Assert::assertStringContainsString('std::vector<GLshort> _qt_arg_0_storage;', $cpp);
+        Assert::assertStringContainsString('const GLshort * _qt_arg_0 = NULL;', $cpp);
+        Assert::assertStringContainsString('_qt_arg_0_storage.push_back((GLshort)Z_LVAL_P(_qt_arg_0_entry));', $cpp);
+        Assert::assertStringContainsString('std::vector<GLushort> _qt_arg_0_storage;', $cpp);
+        Assert::assertStringContainsString('const GLushort * _qt_arg_0 = NULL;', $cpp);
+        Assert::assertStringContainsString('_qt_arg_0_storage.push_back((GLushort)Z_LVAL_P(_qt_arg_0_entry));', $cpp);
+        Assert::assertStringContainsString('std::vector<GLuint> _qt_arg_0_storage;', $cpp);
+        Assert::assertStringContainsString('const GLuint * _qt_arg_0 = NULL;', $cpp);
+        Assert::assertStringContainsString('_qt_arg_0_storage.push_back((GLuint)Z_LVAL_P(_qt_arg_0_entry));', $cpp);
 });
 
 it('supports opengl raw input buffers as php strings', function (): void {

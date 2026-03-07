@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace QtBuilder\Parsing;
 
+use QtBuilder\Support\OpenGLNumericPointerArrayRegistry;
+
 /**
  * Maps C++ type strings (as reported by libclang) to PHP type names.
  *
@@ -218,9 +220,7 @@ class CppToPhpTypeMapper
 
     private function isSupportedNumericArrayPointerType(string $cppType): bool
     {
-        $normalized = trim(preg_replace('/\s+/', ' ', $cppType) ?? $cppType);
-
-        return preg_match('/^const (GLfloat|GLint)\s*\*$/', $normalized) === 1;
+        return OpenGLNumericPointerArrayRegistry::supports($cppType);
     }
 
     private function isOpenGLRawInputBufferType(string $cppType, ?string $ownerClass): bool

@@ -8,6 +8,7 @@ use QtBuilder\Build\EnumHolderRegistry;
 use QtBuilder\CodeGen\ContainerBridge;
 use QtBuilder\CodeGen\TypeBridge;
 use QtBuilder\Parsing\CppToPhpTypeMapper;
+use QtBuilder\Support\OpenGLNumericPointerArrayRegistry;
 
 class MethodExposurePolicy
 {
@@ -882,7 +883,7 @@ class MethodExposurePolicy
             return false;
         }
 
-        if (preg_match('/^const (GLfloat|GLint)\s*\*$/', trim($cppType)) === 1) {
+        if (OpenGLNumericPointerArrayRegistry::supports($cppType)) {
             return true;
         }
 
