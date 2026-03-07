@@ -10,6 +10,7 @@ use CParser\Cursor;
 use CParser\CursorKind;
 use CParser\FieldCursor;
 use CParser\MethodCursor;
+use CParser\NamespaceCursor;
 use CParser\ParameterCursor;
 use CParser\TranslationUnit;
 use CParser\TranslationUnitFlags;
@@ -56,17 +57,24 @@ class QtClassInspector
      *
      * Prefers the class definition over a forward declaration when both exist.
      */
-    public function findClass(string $className): ?ClassCursor
+    public function findClass(string $className, ?string $preferredHeaderPath = null): ?ClassCursor
     {
+        $preferredHeader = $this->normalizePath($preferredHeaderPath);
         $candidate = null;
+        $candidateScore = PHP_INT_MIN;
 
-        foreach ($this->tu->classes() as $class) {
-            if ($class->getSpelling() === $className) {
-                if ($class->isDefinition()) {
-                    return $class;
-                }
-                $candidate ??= $class;
+        foreach ($this->tu->cursors() as $cursor) {
+            if (!$cursor instanceof ClassCursor || !$this->classMatchesLookup($cursor, $className)) {
+                continue;
             }
+
+            $score = $this->classMatchScore($cursor, $className, $preferredHeader);
+            if ($candidate !== null && $score <= $candidateScore) {
+                continue;
+            }
+
+            $candidate = $cursor;
+            $candidateScore = $score;
         }
 
         return $candidate;
@@ -84,7 +92,7 @@ class QtClassInspector
     {
         $this->parse($headerPath);
 
-        $classCursor = $this->findClass($className);
+        $classCursor = $this->findClass($className, $headerPath);
 
         if ($classCursor === null) {
             return null;
@@ -94,13 +102,13 @@ class QtClassInspector
             return $this->extractClassData($classCursor);
         }
 
-        return $this->extractClassDataFromTranslationUnit($className, $classCursor);
+        return $this->extractClassDataFromTranslationUnit($classCursor);
     }
 
     public function locateClassHeader(string $headerPath, string $className): ?string
     {
         $this->parse($headerPath);
-        $classCursor = $this->findClass($className);
+        $classCursor = $this->findClass($className, $headerPath);
         if ($classCursor === null) {
             return null;
         }
@@ -140,14 +148,16 @@ class QtClassInspector
      * nodes for the actual definition. In that case we recover members by scanning the
      * translation unit for methods/fields whose parent spelling matches the class name.
      *
-     * @return array{name: string, is_abstract: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, enum_constants: list<array<string, mixed>>}
+     * @return array{name: string, qualified_name: string, is_abstract: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, enum_constants: list<array<string, mixed>>}
      */
-    private function extractClassDataFromTranslationUnit(string $className, ?ClassCursor $classCursor = null): array
+    private function extractClassDataFromTranslationUnit(ClassCursor $classCursor): array
     {
+        $className = $classCursor->getSpelling();
+        $qualifiedName = $this->qualifiedCursorName($classCursor);
         $properties = [];
         $propertySignatures = [];
         foreach ($this->tu->cursors(CursorKind::FieldDecl) as $field) {
-            if (!$field instanceof FieldCursor || !$this->belongsToClass($field, $className)) {
+            if (!$field instanceof FieldCursor || !$this->belongsToClass($field, $classCursor)) {
                 continue;
             }
 
@@ -164,7 +174,7 @@ class QtClassInspector
         $methodSignatures = [];
 
         foreach ($this->tu->cursors(CursorKind::CXXConstructor) as $ctor) {
-            if (!$this->belongsToClass($ctor, $className)) {
+            if (!$this->belongsToClass($ctor, $classCursor)) {
                 continue;
             }
 
@@ -182,7 +192,7 @@ class QtClassInspector
 
             $methods[] = [
                 'name' => $className,
-                'declaring_class' => $className,
+                'declaring_class' => $qualifiedName,
                 'return_type' => 'void',
                 'access' => 'public',
                 'parameters' => $parameters,
@@ -197,7 +207,7 @@ class QtClassInspector
         }
 
         foreach ($this->tu->cursors(CursorKind::CXXMethod) as $method) {
-            if (!$method instanceof MethodCursor || !$this->belongsToClass($method, $className)) {
+            if (!$method instanceof MethodCursor || !$this->belongsToClass($method, $classCursor)) {
                 continue;
             }
 
@@ -218,29 +228,116 @@ class QtClassInspector
 
         return [
             'name' => $className,
-            'is_abstract' => $classCursor?->isAbstract() ?? false,
-            'is_struct' => $classCursor?->isStruct() ?? false,
-            'bases' => $classCursor !== null ? array_values(array_map(
+            'qualified_name' => $qualifiedName,
+            'is_abstract' => $classCursor->isAbstract(),
+            'is_struct' => $classCursor->isStruct(),
+            'bases' => array_values(array_map(
                 static fn(ClassCursor $base): string => $base->getSpelling(),
                 iterator_to_array($classCursor->getBases(), false),
-            )) : [],
+            )),
             'properties' => $properties,
             'methods' => $methods,
-            'enum_constants' => $classCursor !== null ? $this->extractEnumConstants($classCursor) : [],
+            'enum_constants' => $this->extractEnumConstants($classCursor),
         ];
     }
 
-    private function belongsToClass(Cursor $cursor, string $className): bool
+    private function belongsToClass(Cursor $cursor, ClassCursor $classCursor): bool
     {
         $parent = $cursor->getParent();
+        if ($parent === null) {
+            return false;
+        }
 
-        return $parent !== null && $parent->getSpelling() === $className;
+        $targetName = $this->qualifiedCursorName($classCursor);
+        if ($targetName !== '' && $targetName === $this->qualifiedCursorName($parent)) {
+            return true;
+        }
+
+        return $parent->getSpelling() === $classCursor->getSpelling()
+            && $this->cursorLocationFile($parent) === $this->cursorLocationFile($classCursor);
+    }
+
+    private function classMatchesLookup(ClassCursor $class, string $className): bool
+    {
+        if (str_contains($className, '::')) {
+            return $this->qualifiedCursorName($class) === $className;
+        }
+
+        return $class->getSpelling() === $className;
+    }
+
+    private function classMatchScore(ClassCursor $class, string $className, ?string $preferredHeader): int
+    {
+        $score = 0;
+        if (str_contains($className, '::') && $this->qualifiedCursorName($class) === $className) {
+            $score += 100;
+        }
+
+        if ($preferredHeader !== null && $this->cursorLocationFile($class) === $preferredHeader) {
+            $score += 50;
+        }
+
+        if ($class->getParent() instanceof NamespaceCursor || $class->getParent() instanceof ClassCursor) {
+            $score += 5;
+        }
+
+        if ($class->isDefinition()) {
+            $score += 10;
+        }
+
+        return $score;
+    }
+
+    private function qualifiedCursorName(Cursor $cursor): string
+    {
+        $name = trim($cursor->getSpelling());
+        if ($name === '') {
+            return '';
+        }
+
+        $owners = [];
+        $current = $cursor->getParent();
+        while ($current instanceof NamespaceCursor || $current instanceof ClassCursor) {
+            $owner = trim($current->getSpelling());
+            if ($owner !== '') {
+                array_unshift($owners, $owner);
+            }
+
+            $current = $current->getParent();
+        }
+
+        if ($owners === []) {
+            return $name;
+        }
+
+        return implode('::', [...$owners, $name]);
+    }
+
+    private function cursorLocationFile(Cursor $cursor): ?string
+    {
+        $file = $cursor->getLocation()['file'] ?? null;
+        if (!is_string($file) || $file === '') {
+            return null;
+        }
+
+        return $this->normalizePath($file);
+    }
+
+    private function normalizePath(?string $path): ?string
+    {
+        if (!is_string($path) || $path === '') {
+            return null;
+        }
+
+        $real = realpath($path);
+
+        return $real !== false ? $real : $path;
     }
 
     /**
      * Extract structured metadata from a ClassCursor.
      *
-     * @return array{name: string, is_abstract: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, enum_constants: list<array<string, mixed>>}
+     * @return array{name: string, qualified_name: string, is_abstract: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, enum_constants: list<array<string, mixed>>}
      */
     public function extractClassData(ClassCursor $class): array
     {
@@ -269,6 +366,7 @@ class QtClassInspector
 
         return [
             'name' => $class->getSpelling(),
+            'qualified_name' => $this->qualifiedCursorName($class),
             'is_abstract' => $class->isAbstract(),
             'is_struct' => $class->isStruct(),
             'bases' => $bases,
@@ -336,7 +434,9 @@ class QtClassInspector
 
         return [
             'name' => $method->getSpelling(),
-            'declaring_class' => $method->getParent()?->getSpelling() ?? '',
+            'declaring_class' => $method->getParent() instanceof Cursor
+                ? $this->qualifiedCursorName($method->getParent())
+                : '',
             'return_type' => $method->getReturnType()->toString(),
             'access' => self::accessLabel($method->getAccessSpecifier()),
             'parameters' => $parameters,
@@ -396,7 +496,7 @@ class QtClassInspector
             // will rename it to __construct.
             $constructors[] = [
                 'name' => $ctor->getSpelling(),
-                'declaring_class' => $class->getSpelling(),
+                'declaring_class' => $this->qualifiedCursorName($class),
                 'return_type' => 'void',
                 'access' => 'public', // generic Cursor lacks getAccessSpecifier()
                 'parameters' => $parameters,

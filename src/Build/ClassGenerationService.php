@@ -16,6 +16,7 @@ use QtBuilder\Parsing\ClassDefinitionBuilder;
 use QtBuilder\Parsing\ClangArgumentBuilder;
 use QtBuilder\Parsing\CppToPhpTypeMapper;
 use QtBuilder\Parsing\QtClassInspector;
+use QtBuilder\Support\CppName;
 
 class ClassGenerationService
 {
@@ -496,6 +497,7 @@ class ClassGenerationService
                 classConstants: $phpClass->classConstants,
                 nativeIncludes: $phpClass->nativeIncludes,
                 nativeAliasOf: $phpClass->nativeAliasOf,
+                nativeCppType: $phpClass->nativeCppType,
             ),
             'skipped_methods' => $skippedMethods,
         ];
@@ -1455,6 +1457,7 @@ class ClassGenerationService
                 classConstants: $phpClass->classConstants,
                 nativeIncludes: $phpClass->nativeIncludes,
                 nativeAliasOf: $phpClass->nativeAliasOf,
+                nativeCppType: $phpClass->nativeCppType,
             ),
             'skipped_methods' => $skippedMethods,
         ];
@@ -1956,6 +1959,7 @@ class ClassGenerationService
                 classConstants: $phpClass->classConstants,
                 nativeIncludes: $phpClass->nativeIncludes,
                 nativeAliasOf: $phpClass->nativeAliasOf,
+                nativeCppType: $phpClass->nativeCppType,
             ),
             'skipped_methods' => [[
                 'name' => '__construct',
@@ -2026,6 +2030,7 @@ class ClassGenerationService
             classConstants: $phpClass->classConstants,
             nativeIncludes: $phpClass->nativeIncludes,
             nativeAliasOf: $phpClass->nativeAliasOf,
+            nativeCppType: $phpClass->nativeCppType,
         );
     }
 
@@ -2082,7 +2087,11 @@ class ClassGenerationService
             $declaringClass = is_string($method['declaring_class'] ?? null)
                 ? (string) $method['declaring_class']
                 : $className;
-            if ($declaringClass !== '' && $className !== '' && $declaringClass !== $className) {
+            if (
+                $declaringClass !== ''
+                && $className !== ''
+                && CppName::unqualify($declaringClass) !== $className
+            ) {
                 continue;
             }
 
@@ -3014,6 +3023,7 @@ class ClassGenerationService
             classConstants: $phpClass->classConstants,
             nativeIncludes: $phpClass->nativeIncludes,
             nativeAliasOf: $phpClass->nativeAliasOf,
+            nativeCppType: $phpClass->nativeCppType,
         );
     }
 
@@ -3110,7 +3120,7 @@ class ClassGenerationService
             $base = preg_replace('/\b(public|protected|private|virtual)\b/', ' ', $base) ?? $base;
             $base = trim(preg_replace('/\s+/', ' ', $base) ?? $base);
             if ($base !== '') {
-                $bases[] = $base;
+                $bases[] = CppName::unqualify($base);
             }
         }
 

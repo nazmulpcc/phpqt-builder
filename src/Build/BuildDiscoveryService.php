@@ -8,12 +8,13 @@ use QtBuilder\Filtering\ClassExposurePolicy;
 use QtBuilder\Qt\QtInstallation;
 use QtBuilder\Scanning\HeaderCandidate;
 use QtBuilder\Scanning\ModuleHeaderScanner;
+use QtBuilder\Support\ModuleNamespace;
 use Symfony\Component\Console\Helper\ProgressBar;
 use Symfony\Component\Console\Output\OutputInterface;
 
 class BuildDiscoveryService
 {
-    private const CLASS_CACHE_SCHEMA_VERSION = 3;
+    private const CLASS_CACHE_SCHEMA_VERSION = 4;
 
     public function __construct(
         private readonly GenerateWorkerPool $workerPool = new GenerateWorkerPool(__DIR__ . '/../..'),
@@ -861,7 +862,7 @@ class BuildDiscoveryService
 
     private function namespaceForModule(string $module): string
     {
-        return 'Qt\\' . preg_replace('/^Qt/', '', $module);
+        return ModuleNamespace::forQtModule($module);
     }
 
     private function classCacheDir(string $metadataDir): string

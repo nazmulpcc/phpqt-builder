@@ -11,6 +11,7 @@ use CParser\TranslationUnit;
 use CParser\TranslationUnitFlags;
 use QtBuilder\Parsing\ClangArgumentBuilder;
 use QtBuilder\Scanning\HeaderCandidate;
+use QtBuilder\Support\ModuleNamespace;
 
 class EnumHolderExtractor
 {
@@ -323,9 +324,7 @@ class EnumHolderExtractor
                 $aliasHeaderFiles[$enumHeaderPath] = true;
             }
             $cppType = $owner['cpp_prefix'] . '::' . $enumName;
-            $phpNamespace = $owner['cpp_prefix'] === 'Qt'
-                ? 'Qt'
-                : $this->moduleNamespaceFor($module) . '\\' . str_replace('::', '\\', $owner['cpp_prefix']);
+            $phpNamespace = $this->ownerPhpNamespace($module, $owner['cpp_prefix']);
 
             $holders[$cppType] ??= new EnumHolderDefinition(
                 module: $module,
@@ -340,9 +339,7 @@ class EnumHolderExtractor
         foreach ($this->discoverNamespaceFlagAliasesFromFiles(array_keys($aliasHeaderFiles)) as $aliasDefinition) {
             $ownerCppPrefix = $aliasDefinition['owner'];
             $module = $this->moduleForHeaderPath($aliasDefinition['header'], $fallbackModule);
-            $ownerPhpNamespace = $ownerCppPrefix === 'Qt'
-                ? 'Qt'
-                : $this->moduleNamespaceFor($module) . '\\' . str_replace('::', '\\', $ownerCppPrefix);
+            $ownerPhpNamespace = $this->ownerPhpNamespace($module, $ownerCppPrefix);
 
             $sourceCppType = str_contains($aliasDefinition['source'], '::')
                 ? $aliasDefinition['source']
@@ -557,7 +554,30 @@ class EnumHolderExtractor
 
     private function moduleNamespaceFor(string $module): string
     {
-        return 'Qt\\' . preg_replace('/^Qt/', '', $module);
+        return ModuleNamespace::forQtModule($module);
+    }
+
+    private function ownerPhpNamespace(string $module, string $ownerCppPrefix): string
+    {
+        if ($ownerCppPrefix === 'Qt') {
+            return 'Qt';
+        }
+
+        $moduleNamespace = $this->moduleNamespaceFor($module);
+        if ($ownerCppPrefix === $module) {
+            return $moduleNamespace;
+        }
+
+        $modulePrefix = $module . '::';
+        if (str_starts_with($ownerCppPrefix, $modulePrefix)) {
+            $suffix = substr($ownerCppPrefix, strlen($modulePrefix));
+
+            return $suffix === ''
+                ? $moduleNamespace
+                : $moduleNamespace . '\\' . str_replace('::', '\\', $suffix);
+        }
+
+        return $moduleNamespace . '\\' . str_replace('::', '\\', $ownerCppPrefix);
     }
 
     /**

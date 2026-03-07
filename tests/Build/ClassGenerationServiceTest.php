@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use QtBuilder\Build\ClassGenerationService;
 use QtBuilder\Definition\PhpMethod;
+use QtBuilder\Support\ModuleNamespace;
 
 it('widens child visibility for abstract public parent contracts', function (): void {
     $service = new ClassGenerationService();
@@ -41,4 +42,11 @@ it('widens child visibility for abstract public parent contracts', function (): 
     expect($normalized)->toHaveCount(1)
         ->and($normalized[0]->access)->toBe('public')
         ->and($normalized[0]->name)->toBe('createShader');
+});
+
+it('maps Qt module names to valid PHP namespaces', function (): void {
+    expect(ModuleNamespace::forQtModule('QtCore'))->toBe('Qt\\Core')
+        ->and(ModuleNamespace::forQtModule('QtQuick3D'))->toBe('Qt\\Quick3D')
+        ->and(ModuleNamespace::forQtModule('Qt3DCore'))->toBe('Qt\\Qt3DCore')
+        ->and(ModuleNamespace::forQtModule('Qt3DRender'))->toBe('Qt\\Qt3DRender');
 });

@@ -30,11 +30,14 @@ class ClassDefinitionBuilder
     /**
      * Build a PhpClass from the array produced by QtClassInspector::inspect().
      *
-     * @param array{name: string, is_abstract: bool, is_copy_constructible?: bool, has_public_constructor?: bool, has_public_destructor?: bool, is_qobject_derived?: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, signals?: list<array<string, mixed>>, enum_constants?: list<array<string, mixed>>} $classData
+     * @param array{name: string, qualified_name?: string, is_abstract: bool, is_copy_constructible?: bool, has_public_constructor?: bool, has_public_destructor?: bool, is_qobject_derived?: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, signals?: list<array<string, mixed>>, enum_constants?: list<array<string, mixed>>} $classData
      */
     public function build(array $classData): PhpClass
     {
         $className = $classData['name'];
+        $qualifiedName = is_string($classData['qualified_name'] ?? null)
+            ? trim((string) $classData['qualified_name'])
+            : '';
         $properties = $this->buildProperties($classData['properties'], $className);
         $methods = $this->buildMethods($classData['methods'], $className);
         $signals = $this->buildMethods($classData['signals'] ?? [], $className);
@@ -55,6 +58,7 @@ class ClassDefinitionBuilder
             methods: $methods,
             signals: $signals,
             classConstants: $classConstants,
+            nativeCppType: $qualifiedName !== '' && $qualifiedName !== $className ? $qualifiedName : null,
         );
     }
 

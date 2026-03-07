@@ -10,6 +10,8 @@ use QtBuilder\Definition\PhpClass;
 use QtBuilder\Definition\PhpMethod;
 use QtBuilder\IO\FileWriteStats;
 use QtBuilder\Scanning\HeaderCandidate;
+use QtBuilder\Support\CppName;
+use QtBuilder\Support\ModuleNamespace;
 use Symfony\Component\Console\Helper\ProgressBar;
 use Symfony\Component\Console\Helper\Table;
 use Symfony\Component\Console\Output\OutputInterface;
@@ -939,6 +941,7 @@ class BuildPipeline
                 classConstants: $phpClass->classConstants,
                 nativeIncludes: $phpClass->nativeIncludes,
                 nativeAliasOf: $phpClass->nativeAliasOf,
+                nativeCppType: $phpClass->nativeCppType,
             );
         }
 
@@ -1001,6 +1004,7 @@ class BuildPipeline
             classConstants: $phpClass->classConstants,
             nativeIncludes: [$resolvedInclude],
             nativeAliasOf: $phpClass->nativeAliasOf,
+            nativeCppType: $phpClass->nativeCppType,
         );
     }
 
@@ -1020,11 +1024,13 @@ class BuildPipeline
     {
         $normalized = str_replace('\\', '/', $headerPath);
 
-        if (preg_match('~/Qt[^/]+\.framework(?:/Versions/[^/]+)?/Headers/(.+)$~', $normalized, $matches) === 1) {
-            return is_string($matches[1]) && $matches[1] !== '' ? $matches[1] : null;
+        if (preg_match('~/(Qt[^/]+)\.framework(?:/Versions/[^/]+)?/Headers/(.+)$~', $normalized, $matches) === 1) {
+            return is_string($matches[1] ?? null) && is_string($matches[2] ?? null) && $matches[1] !== '' && $matches[2] !== ''
+                ? $matches[1] . '/' . $matches[2]
+                : null;
         }
 
-        if (preg_match('~/include/Qt[^/]+/(.+)$~', $normalized, $matches) === 1) {
+        if (preg_match('~/include/(Qt[^/]+/.+)$~', $normalized, $matches) === 1) {
             return is_string($matches[1]) && $matches[1] !== '' ? $matches[1] : null;
         }
 
@@ -1137,7 +1143,7 @@ class BuildPipeline
             $base = preg_replace('/\b(public|protected|private|virtual)\b/', ' ', $base) ?? $base;
             $base = trim(preg_replace('/\s+/', ' ', $base) ?? $base);
             if ($base !== '') {
-                $bases[] = $base;
+                $bases[] = CppName::unqualify($base);
             }
         }
 
@@ -1513,7 +1519,7 @@ class BuildPipeline
 
     private function namespaceForModule(string $module): string
     {
-        return 'Qt\\' . preg_replace('/^Qt/', '', $module);
+        return ModuleNamespace::forQtModule($module);
     }
 
     private function ensureDirectory(string $directory): void

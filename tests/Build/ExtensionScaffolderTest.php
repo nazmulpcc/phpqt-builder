@@ -305,6 +305,35 @@ it('qualifies cross namespace qt types in generated stubs', function (): void {
     );
 });
 
+it('emits qualified native cpp types for namespaced classes', function (): void {
+    $outputDir = qt_temp_dir('qtbuilder-generator-');
+    $generator = new ExtensionGenerator();
+    $phpClass = new PhpClass(
+        name: 'QNode',
+        parent: 'QObject',
+        isAbstract: false,
+        isCopyConstructible: false,
+        hasPublicConstructor: true,
+        hasPublicDestructor: true,
+        properties: [],
+        methods: [],
+        signals: [],
+        isQObjectDerived: true,
+        nativeIncludes: ['<Qt3DCore/QNode>'],
+        nativeCppType: 'Qt3DCore::QNode',
+    );
+
+    $generator->generate($phpClass, 'Qt\\Qt3DCore', $outputDir, ['QObject' => 'Qt\\Core']);
+
+    $header = (string) file_get_contents($outputDir . '/qt_qnode.h');
+
+    expect($header)->toContain(
+        '#include <Qt3DCore/QNode>',
+        'Qt3DCore::QNode *native_ptr;',
+        'qt_qnode_wrap_native(zval *return_value, Qt3DCore::QNode *native,',
+    );
+});
+
 it('disables cloning for value types without copy constructors', function (): void {
     $outputDir = qt_temp_dir('qtbuilder-generator-');
     $generator = new ExtensionGenerator();

@@ -47,6 +47,12 @@ class ClassContext
     /** C++ type for native_ptr (e.g. "QWidget") */
     public readonly string $nativeCppType;
 
+    /** Constructor owner type for inherited constructor forwarding */
+    public readonly string $nativeCtorOwnerType;
+
+    /** Constructor name used in using Base::Base; */
+    public readonly string $nativeCtorName;
+
     /** Whether this is a value type (copyable, no ownership model) */
     public readonly bool $isValueType;
 
@@ -200,7 +206,11 @@ class ClassContext
         $this->phpNamespace = $namespace;
         $this->classNamespaces = $classNamespaces;
         $this->phpClassName = $phpClass->name;
-        $this->nativeCppType = $phpClass->name;
+        $this->nativeCppType = $phpClass->nativeCppType ?? $phpClass->name;
+        $this->nativeCtorOwnerType = $this->nativeCppType;
+        $this->nativeCtorName = str_contains($this->nativeCppType, '::')
+            ? (string) substr($this->nativeCppType, (int) strrpos($this->nativeCppType, '::') + 2)
+            : $phpClass->name;
         $this->isQObjectDerived = $phpClass->isQObjectDerived;
         $this->isQObjectClass = $phpClass->name === 'QObject';
 

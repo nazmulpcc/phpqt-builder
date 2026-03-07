@@ -55,3 +55,21 @@ it('merges parameters using the minimum required argument count across overloads
         ->and($constructor->parameters[0]->phpType)->toBe('QWidget|string')
         ->and($constructor->parameters[1]->phpType)->toBe('QWidget');
 });
+
+it('preserves qualified native cpp types for namespaced classes', function (): void {
+    $builder = new ClassDefinitionBuilder();
+
+    $class = $builder->build([
+        'name' => 'QNode',
+        'qualified_name' => 'Qt3DCore::QNode',
+        'is_abstract' => false,
+        'is_struct' => false,
+        'bases' => ['QObject'],
+        'properties' => [],
+        'methods' => [],
+        'signals' => [],
+    ]);
+
+    expect($class->nativeCppType)->toBe('Qt3DCore::QNode')
+        ->and($class->parent)->toBe('QObject');
+});

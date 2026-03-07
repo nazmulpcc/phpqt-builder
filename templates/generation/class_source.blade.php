@@ -977,7 +977,7 @@ static inline void qt_signal_dispatch(InvokeCallback invoke)
 class {!! $ctx->accessShimTypeName !!} : public {!! $ctx->nativeCppType !!}
 {
 public:
-    using {!! $ctx->nativeCppType !!}::{!! $ctx->nativeCppType !!};
+    using {!! $ctx->nativeCtorOwnerType !!}::{!! $ctx->nativeCtorName !!};
 
 @foreach($ctx->methodsWithCallableProtectedOverloads() as $method)
 @foreach($method->overloads as $overloadIndex => $overload)

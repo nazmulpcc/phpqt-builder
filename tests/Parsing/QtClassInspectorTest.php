@@ -5,6 +5,18 @@ declare(strict_types=1);
 use QtBuilder\Parsing\ClangArgumentBuilder;
 use QtBuilder\Parsing\QtClassInspector;
 
+function namespacedQtInspector(): QtClassInspector
+{
+    $fixtureRoot = qt_fixture_path('namespaced-qt');
+    $includeRoot = $fixtureRoot . '/include';
+
+    return new QtClassInspector(new ClangArgumentBuilder([
+        $includeRoot,
+        $includeRoot . '/Qt3DCore',
+        $includeRoot . '/QtGui',
+    ]));
+}
+
 it('detects signal and slot methods via annotations', function (): void {
     if (!method_exists(\CParser\Cursor::class, 'getAnnotations')) {
         test()->markTestSkipped('ext-cparser does not expose cursor annotations.');
@@ -95,4 +107,42 @@ it('extracts enum constants with scalar values', function (): void {
         ->and($constants['Off']['enum_name'])->toBe('Mode')
         ->and($constants['Off']['value'])->toBe(0)
         ->and($constants['On']['value'])->toBe(1);
+});
+
+it('finds namespaced classes from the requested header', function (): void {
+    $fixtureRoot = qt_fixture_path('namespaced-qt');
+    $header = $fixtureRoot . '/include/Qt3DCore/qnode.h';
+
+    $inspector = namespacedQtInspector();
+    $classData = $inspector->inspect($header, 'QNode');
+
+    expect($classData)->not->toBeNull()
+        ->and($classData['name'])->toBe('QNode')
+        ->and($classData['bases'])->toBe([])
+        ->and(array_column($classData['methods'], 'name'))->toContain('setEnabled');
+});
+
+it('supports qualified lookup for namespaced classes', function (): void {
+    $fixtureRoot = qt_fixture_path('namespaced-qt');
+    $header = $fixtureRoot . '/include/Qt3DCore/qnode.h';
+
+    $inspector = namespacedQtInspector();
+    $inspector->parse($header);
+    $class = $inspector->findClass('Qt3DCore::QNode', $header);
+
+    expect($class)->not->toBeNull()
+        ->and($class?->getSpelling())->toBe('QNode');
+});
+
+it('prefers the namespaced class defined in the requested header over included collisions', function (): void {
+    $fixtureRoot = qt_fixture_path('namespaced-qt');
+    $header = $fixtureRoot . '/include/Qt3DCore/qtransform.h';
+
+    $inspector = namespacedQtInspector();
+    $classData = $inspector->inspect($header, 'QTransform');
+
+    expect($classData)->not->toBeNull()
+        ->and($classData['bases'])->toBe(['QComponent'])
+        ->and(array_column($classData['methods'], 'name'))->toContain('setTranslation')
+        ->and(array_column($classData['methods'], 'name'))->not->toContain('map');
 });
