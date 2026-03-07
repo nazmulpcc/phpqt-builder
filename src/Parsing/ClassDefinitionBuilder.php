@@ -35,7 +35,7 @@ class ClassDefinitionBuilder
     public function build(array $classData): PhpClass
     {
         $className = $classData['name'];
-        $properties = $this->buildProperties($classData['properties']);
+        $properties = $this->buildProperties($classData['properties'], $className);
         $methods = $this->buildMethods($classData['methods'], $className);
         $signals = $this->buildMethods($classData['signals'] ?? [], $className);
         $classConstants = $this->buildClassConstants($classData['enum_constants'] ?? []);
@@ -104,7 +104,7 @@ class ClassDefinitionBuilder
      * @param list<array{name: string, type: string, access: string, is_static: bool}> $fields
      * @return list<PhpProperty>
      */
-    private function buildProperties(array $fields): array
+    private function buildProperties(array $fields, string $className): array
     {
         $properties = [];
 
@@ -115,7 +115,7 @@ class ClassDefinitionBuilder
 
             $properties[] = new PhpProperty(
                 name: $field['name'],
-                phpType: $this->typeMapper->map($field['type']),
+                phpType: $this->typeMapper->map($field['type'], $className),
                 cppType: $field['type'],
                 access: $field['access'],
                 isStatic: $field['is_static'],
@@ -175,7 +175,7 @@ class ClassDefinitionBuilder
         $result = [];
 
         foreach ($grouped as $name => $variants) {
-            $result[] = $this->mergeOverloads($name, $variants);
+            $result[] = $this->mergeOverloads($name, $variants, $className);
         }
 
         return $result;
@@ -186,10 +186,10 @@ class ClassDefinitionBuilder
      *
      * @param list<array<string, mixed>> $variants
      */
-    private function mergeOverloads(string $name, array $variants): PhpMethod
+    private function mergeOverloads(string $name, array $variants, string $className): PhpMethod
     {
         // Build the MethodOverload list from all variants.
-        $overloads = array_map($this->buildOverload(...), $variants);
+        $overloads = array_map(fn(array $variant): MethodOverload => $this->buildOverload($variant, $className), $variants);
 
         // Determine access: use the most permissive (public > protected).
         $access = $this->mostPermissiveAccess($variants);
@@ -198,10 +198,10 @@ class ClassDefinitionBuilder
         $isStatic = $this->allStatic($variants);
 
         // Build the merged PHP return type.
-        $returnType = $this->mergeReturnTypes($variants);
+        $returnType = $this->mergeReturnTypes($variants, $className);
 
         // Build the merged PHP parameter list.
-        $parameters = $this->mergeParameters($variants);
+        $parameters = $this->mergeParameters($variants, $className);
 
         return new PhpMethod(
             name: $name,
@@ -220,13 +220,13 @@ class ClassDefinitionBuilder
     /**
      * @param array<string, mixed> $variant
      */
-    private function buildOverload(array $variant): MethodOverload
+    private function buildOverload(array $variant, string $className): MethodOverload
     {
         $parameters = $this->normalizeWritableParameterDefaults($variant['parameters']);
         $params = array_map(
-            function (array $p): OverloadParameter {
+            function (array $p) use ($className): OverloadParameter {
                 $metadata = $this->analyzeCppParameterType((string) ($p['type'] ?? ''));
-                $phpType = $this->typeMapper->map((string) ($p['type'] ?? ''));
+                $phpType = $this->typeMapper->map((string) ($p['type'] ?? ''), $className);
                 $writableByRefMeta = $this->analyzeWritableByRefParameter(
                     (string) ($p['type'] ?? ''),
                     $phpType,
@@ -294,12 +294,12 @@ class ClassDefinitionBuilder
      *
      * @param list<array<string, mixed>> $variants
      */
-    private function mergeReturnTypes(array $variants): string
+    private function mergeReturnTypes(array $variants, string $className): string
     {
         $phpTypes = [];
 
         foreach ($variants as $v) {
-            $phpTypes[] = $this->typeMapper->map($v['return_type']);
+            $phpTypes[] = $this->typeMapper->map($v['return_type'], $className);
         }
 
         return $this->unionType($phpTypes);
@@ -322,7 +322,7 @@ class ClassDefinitionBuilder
      * @param list<array<string, mixed>> $variants
      * @return list<PhpParameter>
      */
-    private function mergeParameters(array $variants): array
+    private function mergeParameters(array $variants, string $className): array
     {
         $maxParams = 0;
         $minRequiredCount = PHP_INT_MAX;
@@ -367,9 +367,9 @@ class ClassDefinitionBuilder
                     continue;
                 }
 
-                $phpTypes[] = $this->typeMapper->map($params[$i]['type']);
+                $phpTypes[] = $this->typeMapper->map($params[$i]['type'], $className);
                 $paramType = (string) ($params[$i]['type'] ?? '');
-                $paramPhpType = $this->typeMapper->map($paramType);
+                $paramPhpType = $this->typeMapper->map($paramType, $className);
                 $paramMeta = $this->analyzeCppParameterType($paramType);
                 $writableMeta = $this->analyzeWritableByRefParameter(
                     $paramType,

@@ -334,6 +334,84 @@ CPP);
         Assert::assertStringContainsString('_qt_arg_0_storage.push_back((GLint)Z_LVAL_P(_qt_arg_0_entry));', $cpp);
 });
 
+it('supports opengl raw input buffers as php strings', function (): void {
+        $fixtureRoot = qt_fixture_path('policy-qt');
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+        mkdir($outputDir, 0777, true);
+
+        $header = $outputDir . '/qopenglrawbufferholder.h';
+        file_put_contents($header, <<<'CPP'
+typedef void GLvoid;
+
+class QOpenGLRawBufferHolder {
+public:
+void uploadBytes(int size, const void *data);
+void uploadGlBytes(int size, const GLvoid *data);
+};
+CPP);
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $header,
+            'class' => 'QOpenGLRawBufferHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QOpenGLRawBufferHolder',
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        Assert::assertSame('ok', $payload['status']);
+        Assert::assertNotContains('unsupported_parameter_type', array_column($payload['skipped_methods'], 'reason_code'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qopenglrawbufferholder.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qopenglrawbufferholder.cpp');
+
+        Assert::assertStringContainsString('public function uploadBytes(int $size, string $data): void {}', $stub);
+        Assert::assertStringContainsString('public function uploadGlBytes(int $size, string $data): void {}', $stub);
+        Assert::assertStringContainsString('intern->native_ptr->uploadBytes((int)size, (const void *)ZSTR_VAL(data));', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr->uploadGlBytes((int)size, (const GLvoid *)ZSTR_VAL(data));', $cpp);
+    });
+
+it('keeps non-opengl raw input buffers unsupported', function (): void {
+        $fixtureRoot = qt_fixture_path('policy-qt');
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+        mkdir($outputDir, 0777, true);
+
+        $header = $outputDir . '/qrawbufferholder.h';
+        file_put_contents($header, <<<'CPP'
+class QRawBufferHolder {
+public:
+void uploadBytes(const void *data);
+};
+CPP);
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $header,
+            'class' => 'QRawBufferHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QRawBufferHolder',
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        Assert::assertSame('skipped', $payload['status']);
+        Assert::assertSame('no_supported_methods', $payload['reason_code']);
+        Assert::assertContains('unsupported_parameter_type', array_column($payload['skipped_methods'], 'reason_code'));
+    });
+
 it('treats qbitarray factories as value returns and supports bool out parameters by-ref', function (): void {
         $fixtureRoot = qt_fixture_path('policy-qt');
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));

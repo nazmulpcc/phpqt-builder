@@ -99,7 +99,7 @@ class CppToPhpTypeMapper
     /**
      * Map a raw C++ type string to a PHP type name.
      */
-    public function map(string $cppType): string
+    public function map(string $cppType, ?string $ownerClass = null): string
     {
         $trimmed = trim($cppType);
 
@@ -109,6 +109,10 @@ class CppToPhpTypeMapper
 
         if ($this->isSupportedNumericArrayPointerType($trimmed)) {
             return 'array';
+        }
+
+        if ($this->isOpenGLRawInputBufferType($trimmed, $ownerClass)) {
+            return 'string';
         }
 
         if ($this->isVoidPointerType($trimmed)) {
@@ -201,7 +205,7 @@ class CppToPhpTypeMapper
         $normalized = preg_replace('/\bconst\b/', '', $cppType) ?? $cppType;
         $normalized = trim(preg_replace('/\s+/', ' ', $normalized) ?? $normalized);
 
-        return preg_match('/^void(\s*\*)+$/', $normalized) === 1;
+        return preg_match('/^(?:GL)?void(\s*\*)+$/', $normalized) === 1;
     }
 
     private function isSupportedNumericArrayPointerType(string $cppType): bool
@@ -209,6 +213,26 @@ class CppToPhpTypeMapper
         $normalized = trim(preg_replace('/\s+/', ' ', $cppType) ?? $cppType);
 
         return preg_match('/^const (GLfloat|GLint)\s*\*$/', $normalized) === 1;
+    }
+
+    private function isOpenGLRawInputBufferType(string $cppType, ?string $ownerClass): bool
+    {
+        if (!$this->isOpenGLScopedOwner($ownerClass)) {
+            return false;
+        }
+
+        $normalized = trim(preg_replace('/\s+/', ' ', $cppType) ?? $cppType);
+
+        return preg_match('/^const (?:GL)?void\s*\*$/', $normalized) === 1;
+    }
+
+    private function isOpenGLScopedOwner(?string $ownerClass): bool
+    {
+        if (!is_string($ownerClass) || $ownerClass === '') {
+            return false;
+        }
+
+        return str_starts_with($ownerClass, 'QOpenGL');
     }
 
     /**

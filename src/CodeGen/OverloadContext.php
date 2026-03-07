@@ -71,12 +71,13 @@ class OverloadContext
         $this->isPureVirtual = $overload->isPureVirtual;
 
         // Map the C++ return type through the type mapper to get strategy
-        $this->phpReturnType = $this->cppReturnToPhp($overload->returnType, $typeBridge);
+        $ownerClass = $overload->declaringClass !== '' ? $overload->declaringClass : $classCtx->nativeCppType;
+        $this->phpReturnType = $this->cppReturnToPhp($overload->returnType, $ownerClass);
         $this->returnStrategy = $typeBridge->returnStrategyForCpp($this->phpReturnType, $overload->returnType);
 
         $params = [];
         foreach ($overload->parameters as $param) {
-            $params[] = new OverloadParamContext($param, $typeBridge);
+            $params[] = new OverloadParamContext($param, $ownerClass, $typeBridge);
         }
         $this->params = $params;
     }
@@ -84,8 +85,8 @@ class OverloadContext
     /**
      * Quick C++ return type to PHP type mapping for strategy determination.
      */
-    private function cppReturnToPhp(string $cppType, TypeBridge $typeBridge): string
+    private function cppReturnToPhp(string $cppType, string $ownerClass): string
     {
-        return $this->typeMapper->map($cppType);
+        return $this->typeMapper->map($cppType, $ownerClass);
     }
 }

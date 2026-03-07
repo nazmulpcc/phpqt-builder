@@ -382,7 +382,7 @@ class MethodExposurePolicy
             return null;
         }
 
-        $phpType = $this->typeMapper->map($trimmed);
+        $phpType = $this->typeMapper->map($trimmed, $className);
         if (!$this->typeBridge->isObjectType($phpType) || $phpType === $className) {
             return null;
         }
@@ -517,13 +517,13 @@ class MethodExposurePolicy
             return false;
         }
 
-        if ($this->hasMultiplePointerIndirection($trimmed) && !$this->isSupportedArrayType($trimmed)) {
+        if ($this->hasMultiplePointerIndirection($trimmed) && !$this->isSupportedArrayType($trimmed, $className)) {
             return false;
         }
 
         if (
-            $this->isUnsupportedScalarPointerType($trimmed)
-            && !(!$isReturn && $this->isSupportedWritableScalarPointerType($trimmed))
+            $this->isUnsupportedScalarPointerType($trimmed, $className)
+            && !(!$isReturn && $this->isSupportedWritableScalarPointerType($trimmed, $className))
         ) {
             return false;
         }
@@ -536,7 +536,7 @@ class MethodExposurePolicy
             return true;
         }
 
-        $phpType = $this->typeMapper->map($trimmed);
+        $phpType = $this->typeMapper->map($trimmed, $className);
         if (
             str_contains($trimmed, '::')
             && in_array($phpType, ['int', 'float', 'bool'], true)
@@ -550,7 +550,7 @@ class MethodExposurePolicy
         }
 
         if ($phpType === 'array') {
-            if ($this->isSupportedArrayType($trimmed, $isReturn)) {
+            if ($this->isSupportedArrayType($trimmed, $className, $isReturn)) {
                 return true;
             }
 
@@ -799,7 +799,7 @@ class MethodExposurePolicy
         return trim($cppType) === 'Qt::Disambiguated_t';
     }
 
-    private function isUnsupportedScalarPointerType(string $cppType): bool
+    private function isUnsupportedScalarPointerType(string $cppType, ?string $className = null): bool
     {
         if (!str_contains($cppType, '*')) {
             return false;
@@ -809,12 +809,12 @@ class MethodExposurePolicy
             return true;
         }
 
-        $phpType = $this->typeMapper->map($cppType);
+        $phpType = $this->typeMapper->map($cppType, $className);
 
         return in_array($phpType, ['int', 'float', 'bool'], true);
     }
 
-    private function isSupportedWritableScalarPointerType(string $cppType): bool
+    private function isSupportedWritableScalarPointerType(string $cppType, ?string $className = null): bool
     {
         $trimmed = trim($cppType);
         if (substr_count($trimmed, '*') !== 1 || str_contains($trimmed, '&')) {
@@ -825,7 +825,7 @@ class MethodExposurePolicy
             return false;
         }
 
-        $phpType = $this->typeMapper->map($trimmed);
+        $phpType = $this->typeMapper->map($trimmed, $className);
 
         return in_array($phpType, ['int', 'float', 'bool'], true);
     }
@@ -869,7 +869,7 @@ class MethodExposurePolicy
         return true;
     }
 
-    private function isSupportedArrayType(string $cppType, bool $isReturn = false): bool
+    private function isSupportedArrayType(string $cppType, ?string $className = null, bool $isReturn = false): bool
     {
         $normalized = preg_replace('/\bconst\b/', '', $cppType) ?? $cppType;
         $normalized = trim(preg_replace('/\s+/', ' ', $normalized) ?? $normalized);
@@ -882,7 +882,20 @@ class MethodExposurePolicy
             return false;
         }
 
-        return preg_match('/^const (GLfloat|GLint)\s*\*$/', trim($cppType)) === 1;
+        if (preg_match('/^const (GLfloat|GLint)\s*\*$/', trim($cppType)) === 1) {
+            return true;
+        }
+
+        if (!$this->isOpenGLScopedOwner($className)) {
+            return false;
+        }
+
+        return preg_match('/^const (?:GL)?void\s*\*$/', trim($cppType)) === 1;
+    }
+
+    private function isOpenGLScopedOwner(?string $className): bool
+    {
+        return is_string($className) && $className !== '' && str_starts_with($className, 'QOpenGL');
     }
 
     private function isKnownQualifiedScalarType(string $cppType): bool
@@ -972,7 +985,7 @@ class MethodExposurePolicy
         ];
 
         foreach ($variant['parameters'] as $parameter) {
-            $parts[] = $this->typeMapper->map((string) ($parameter['type'] ?? ''));
+            $parts[] = $this->typeMapper->map((string) ($parameter['type'] ?? ''), $variant['declaring_class'] ?? null);
             $parts[] = (($parameter['has_default'] ?? false) === true) ? '1' : '0';
         }
 

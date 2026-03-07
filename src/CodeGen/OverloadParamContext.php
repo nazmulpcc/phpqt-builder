@@ -53,6 +53,7 @@ class OverloadParamContext
 
     public function __construct(
         OverloadParameter $param,
+        string $ownerClass,
         TypeBridge $typeBridge,
     ) {
         $this->name = $param->name !== '' ? $param->name : 'p' . spl_object_id($param);
@@ -65,7 +66,7 @@ class OverloadParamContext
         $this->pointerDepth = $param->pointerDepth;
 
         $mapper = new CppToPhpTypeMapper();
-        $this->phpType = $mapper->map($param->cppType);
+        $this->phpType = $mapper->map($param->cppType, $ownerClass);
         $this->isCharPointerArray = $this->phpType === 'array' && $param->pointerDepth >= 2;
         $this->isWritableByRef = $param->isWritableByRef;
         $this->isWritableByRefPointer = $param->isWritableByRefPointer;

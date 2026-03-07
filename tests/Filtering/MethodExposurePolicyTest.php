@@ -117,3 +117,41 @@ it('does not treat qt function typedef names as enums', function (): void {
     Assert::assertSame([], $result['selected_methods']);
     Assert::assertContains('unsupported_parameter_type', array_column($result['skipped_methods'], 'reason_code'));
 });
+
+it('supports opengl const void input buffers only for opengl classes', function (): void {
+    $policy = new MethodExposurePolicy();
+
+    $openGlClassData = [
+        'name' => 'QOpenGLBuffer',
+        'methods' => [[
+            'name' => 'allocate',
+            'return_type' => 'void',
+            'access' => 'public',
+            'parameters' => [
+                ['name' => 'data', 'type' => 'const void *', 'has_default' => false],
+                ['name' => 'count', 'type' => 'int', 'has_default' => false],
+            ],
+            'is_static' => false,
+        ]],
+    ];
+
+    $genericClassData = [
+        'name' => 'QByteArray',
+        'methods' => [[
+            'name' => 'fromBlob',
+            'return_type' => 'void',
+            'access' => 'public',
+            'parameters' => [
+                ['name' => 'data', 'type' => 'const void *', 'has_default' => false],
+            ],
+            'is_static' => false,
+        ]],
+    ];
+
+    $openGlResult = $policy->filter($openGlClassData, ['QOpenGLBuffer']);
+    $genericResult = $policy->filter($genericClassData, ['QByteArray']);
+
+    Assert::assertSame(['allocate'], array_column($openGlResult['selected_methods'], 'name'));
+    Assert::assertSame([], $genericResult['selected_methods']);
+    Assert::assertContains('unsupported_parameter_type', array_column($genericResult['skipped_methods'], 'reason_code'));
+});

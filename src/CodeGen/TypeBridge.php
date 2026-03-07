@@ -669,6 +669,16 @@ class TypeBridge
             ];
         }
 
+        if ($phpType === 'string' && $this->isOpenGLRawInputBufferType($cppType)) {
+            return [
+                'lines' => [],
+                'expr' => $sourceIsZval
+                    ? $this->zvalToNativeExpr($phpType, $cppType, $sourceVarName, $nullable)
+                    : $this->directPhpToNativeExpr($phpType, $cppType, $sourceVarName, $nullable),
+                'local_var' => null,
+            ];
+        }
+
         if ($phpType === 'array' && $this->isSupportedContainerType($cppType)) {
             return [
                 'lines' => $this->phpArrayToNativeContainerLines($cppType, $sourceVarName, $nativeVarName),
@@ -1785,6 +1795,10 @@ class TypeBridge
             return sprintf('std::filesystem::path(std::string(ZSTR_VAL(%s), ZSTR_LEN(%s)))', $varName, $varName);
         }
 
+        if ($base === 'void' || $base === 'GLvoid') {
+            return sprintf('(%s)ZSTR_VAL(%s)', trim($cppType), $varName);
+        }
+
         if ($base === 'char') {
             if ($this->isPointerType($cppType)) {
                 return sprintf('ZSTR_VAL(%s)', $varName);
@@ -1854,6 +1868,13 @@ class TypeBridge
     private function isSupportedNumericPointerArrayType(string $cppType): bool
     {
         return $this->numericPointerArrayPhpType($cppType) !== null;
+    }
+
+    private function isOpenGLRawInputBufferType(string $cppType): bool
+    {
+        $normalized = trim(preg_replace('/\s+/', ' ', $cppType) ?? $cppType);
+
+        return preg_match('/^const (?:GL)?void\s*\*$/', $normalized) === 1;
     }
 
     private function numericPointerArrayPhpType(string $cppType): ?string
