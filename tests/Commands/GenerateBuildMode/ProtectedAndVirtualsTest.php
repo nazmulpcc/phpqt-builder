@@ -210,6 +210,72 @@ it('does not generate trampolines for final virtual methods', function (): void 
         Assert::assertStringContainsString('RETURN_LONG((zend_long)(_result));', $cpp);
 });
 
+it('pulls inherited QWidget input virtuals into widget subclasses', function (): void {
+        $fixtureRoot = qt_fixture_path('policy-qt');
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtWidgets/qwidgeteventchild.h',
+            'class' => 'QWidgetEventChild',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtWidgets',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QWidgetEventChild,QWidget,QEvent,QMouseEvent,QWheelEvent',
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        Assert::assertSame('ok', $payload['status']);
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qwidgeteventchild.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qwidgeteventchild.cpp');
+
+        Assert::assertStringContainsString('protected function mousePressEvent(', $stub);
+        Assert::assertStringContainsString('protected function mouseMoveEvent(', $stub);
+        Assert::assertStringContainsString('protected function wheelEvent(', $stub);
+        Assert::assertStringContainsString('"mousePressEvent",', $cpp);
+        Assert::assertStringContainsString('"mouseMoveEvent",', $cpp);
+        Assert::assertStringContainsString('"wheelEvent",', $cpp);
+        Assert::assertStringContainsString('void mousePressEvent(', $cpp);
+        Assert::assertStringContainsString('void mouseMoveEvent(', $cpp);
+        Assert::assertStringContainsString('void wheelEvent(', $cpp);
+});
+
+it('does not add widget input virtuals to unrelated non-widget subclasses', function (): void {
+        $fixtureRoot = qt_fixture_path('policy-qt');
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qprotectedvirtualthing.h',
+            'class' => 'QProtectedVirtualThing',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QProtectedVirtualThing',
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode);
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qprotectedvirtualthing.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qprotectedvirtualthing.cpp');
+
+        Assert::assertStringNotContainsString('mousePressEvent', $stub);
+        Assert::assertStringNotContainsString('mouseMoveEvent', $stub);
+        Assert::assertStringNotContainsString('wheelEvent', $stub);
+        Assert::assertStringNotContainsString('"mousePressEvent",', $cpp);
+        Assert::assertStringNotContainsString('"mouseMoveEvent",', $cpp);
+        Assert::assertStringNotContainsString('"wheelEvent",', $cpp);
+});
+
 it('uses a shim only for the protected overload branch', function (): void {
         $fixtureRoot = qt_fixture_path('policy-qt');
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));

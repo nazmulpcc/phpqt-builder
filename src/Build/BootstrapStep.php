@@ -15,6 +15,7 @@ readonly class BootstrapStep
         public string $workingDirectory,
         public string $stdoutLogPath,
         public string $stderrLogPath,
+        public float $durationSeconds,
     ) {}
 
     /**
@@ -23,7 +24,8 @@ readonly class BootstrapStep
      *   command: list<string>,
      *   working_directory: string,
      *   stdout_log: string,
-     *   stderr_log: string
+     *   stderr_log: string,
+     *   duration_seconds: float
      * }
      */
     public function toArray(): array
@@ -34,6 +36,7 @@ readonly class BootstrapStep
             'working_directory' => $this->workingDirectory,
             'stdout_log' => $this->stdoutLogPath,
             'stderr_log' => $this->stderrLogPath,
+            'duration_seconds' => $this->durationSeconds,
         ];
     }
 }

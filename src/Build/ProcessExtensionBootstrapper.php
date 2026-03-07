@@ -64,6 +64,8 @@ class ProcessExtensionBootstrapper implements ExtensionBootstrapper
      */
     private function runStep(string $name, array $command, string $workingDirectory, string $metadataDir, ?callable $onEvent = null): BootstrapStep
     {
+        $startedAt = microtime(true);
+
         if ($onEvent !== null) {
             $onEvent([
                 'type' => 'step_started',
@@ -72,6 +74,7 @@ class ProcessExtensionBootstrapper implements ExtensionBootstrapper
                 'stdout_log' => null,
                 'stderr_log' => null,
                 'message' => null,
+                'duration_seconds' => null,
             ]);
         }
 
@@ -86,6 +89,7 @@ class ProcessExtensionBootstrapper implements ExtensionBootstrapper
         file_put_contents($stderrLogPath, $process->getErrorOutput());
 
         if (!$process->isSuccessful()) {
+            $durationSeconds = microtime(true) - $startedAt;
             if ($onEvent !== null) {
                 $onEvent([
                     'type' => 'step_failed',
@@ -100,6 +104,7 @@ class ProcessExtensionBootstrapper implements ExtensionBootstrapper
                         $stdoutLogPath,
                         $stderrLogPath,
                     ),
+                    'duration_seconds' => $durationSeconds,
                 ]);
             }
             throw new \RuntimeException(sprintf(
@@ -111,6 +116,7 @@ class ProcessExtensionBootstrapper implements ExtensionBootstrapper
             ));
         }
 
+        $durationSeconds = microtime(true) - $startedAt;
         if ($onEvent !== null) {
             $onEvent([
                 'type' => 'step_succeeded',
@@ -119,9 +125,10 @@ class ProcessExtensionBootstrapper implements ExtensionBootstrapper
                 'stdout_log' => $stdoutLogPath,
                 'stderr_log' => $stderrLogPath,
                 'message' => null,
+                'duration_seconds' => $durationSeconds,
             ]);
         }
 
-        return new BootstrapStep($name, $command, $workingDirectory, $stdoutLogPath, $stderrLogPath);
+        return new BootstrapStep($name, $command, $workingDirectory, $stdoutLogPath, $stderrLogPath, $durationSeconds);
     }
 }

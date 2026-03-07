@@ -1,0 +1,4 @@
+newmtl SampleMaterial
+Kd 0.92 0.95 1.00
+d 1.0
+map_Kd sample_diffuse.png
