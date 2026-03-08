@@ -284,6 +284,9 @@ class ClassDefinitionBuilder
                 );
                 $metadata = $this->analyzeCppParameterType($cppType);
                 $phpType = $this->typeMapper->map($cppType, $className, $classTypeResolver, $resolutionContext, $smartPointerAliases);
+                if ($this->shouldExpandStringLikeForClass($className) && $this->canAcceptPhpStringForParameter($metadata)) {
+                    $phpType = $this->expandStringLikeParameterPhpType($phpType, $cppType);
+                }
                 $smartPointerTargetCppType = $this->resolveSmartPointerTargetCppType($cppType, $smartPointerAliases);
                 $writableByRefMeta = $this->analyzeWritableByRefParameter(
                     $cppType,
@@ -455,9 +458,12 @@ class ClassDefinitionBuilder
                     $classTypeResolver,
                     $resolutionContext,
                 );
-                $phpTypes[] = $this->typeMapper->map($paramType, $className, $classTypeResolver, $resolutionContext, $smartPointerAliases);
-                $paramPhpType = $this->typeMapper->map($paramType, $className, $classTypeResolver, $resolutionContext, $smartPointerAliases);
+                $mappedParamPhpType = $this->typeMapper->map($paramType, $className, $classTypeResolver, $resolutionContext, $smartPointerAliases);
                 $paramMeta = $this->analyzeCppParameterType($paramType);
+                $paramPhpType = ($this->shouldExpandStringLikeForClass($className) && $this->canAcceptPhpStringForParameter($paramMeta))
+                    ? $this->expandStringLikeParameterPhpType($mappedParamPhpType, $paramType)
+                    : $mappedParamPhpType;
+                $phpTypes[] = $paramPhpType;
                 $writableMeta = $this->analyzeWritableByRefParameter(
                     $paramType,
                     $paramPhpType,
@@ -675,6 +681,47 @@ class ClassDefinitionBuilder
         }
 
         return trim($type);
+    }
+
+    private function expandStringLikeParameterPhpType(string $phpType, string $cppType): string
+    {
+        if ($phpType === '' || $phpType === 'mixed' || str_contains($phpType, 'string')) {
+            return $phpType;
+        }
+
+        $baseType = $this->normalizeBaseCppType($cppType);
+        if (!\in_array($baseType, [
+            'QString',
+            'QByteArray',
+            'QStringView',
+            'QLatin1StringView',
+            'QAnyStringView',
+        ], true)) {
+            return $phpType;
+        }
+
+        return $this->unionType([$phpType, 'string']);
+    }
+
+    /**
+     * @param array{is_reference: bool, is_const_reference: bool, is_non_const_reference: bool, is_rvalue_reference: bool, pointer_depth: int} $paramMetadata
+     */
+    private function canAcceptPhpStringForParameter(array $paramMetadata): bool
+    {
+        return !$paramMetadata['is_non_const_reference']
+            && !$paramMetadata['is_rvalue_reference']
+            && $paramMetadata['pointer_depth'] === 0;
+    }
+
+    private function shouldExpandStringLikeForClass(string $className): bool
+    {
+        return !in_array($className, [
+            'QString',
+            'QByteArray',
+            'QStringView',
+            'QLatin1StringView',
+            'QAnyStringView',
+        ], true);
     }
 
     /**

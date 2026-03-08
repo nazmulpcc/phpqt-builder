@@ -88,7 +88,9 @@ class OverloadParamContext
                 $typeBridge->smartPointerAliases(),
             );
         }
-        $this->phpType = $resolvedPhpType;
+        $this->phpType = ($this->shouldExpandStringLikeForOwner($ownerClass) && $this->canAcceptPhpStringForParameter($param))
+            ? $this->expandStringLikeParameterPhpType($resolvedPhpType, $param->cppType)
+            : $resolvedPhpType;
         $this->isCharPointerArray = $this->phpType === 'array' && $param->pointerDepth >= 2;
         $this->isWritableByRef = $param->isWritableByRef;
         $this->isWritableByRefPointer = $param->isWritableByRefPointer;
@@ -102,5 +104,60 @@ class OverloadParamContext
         }
 
         return (string) substr($ownerClass, (int) strrpos($ownerClass, '::') + 2);
+    }
+
+    private function expandStringLikeParameterPhpType(string $phpType, string $cppType): string
+    {
+        if ($phpType === '' || $phpType === 'mixed' || str_contains($phpType, 'string')) {
+            return $phpType;
+        }
+
+        $baseType = $this->normalizeBaseCppType($cppType);
+        if (!\in_array($baseType, [
+            'QString',
+            'QByteArray',
+            'QStringView',
+            'QLatin1StringView',
+            'QAnyStringView',
+        ], true)) {
+            return $phpType;
+        }
+
+        return $phpType . '|string';
+    }
+
+    private function canAcceptPhpStringForParameter(OverloadParameter $param): bool
+    {
+        return !$param->isNonConstReference
+            && !$param->isRvalueReference
+            && $param->pointerDepth === 0;
+    }
+
+    private function shouldExpandStringLikeForOwner(string $ownerClass): bool
+    {
+        $ownerName = $this->ownerClassName($ownerClass);
+
+        return !\in_array($ownerName, [
+            'QString',
+            'QByteArray',
+            'QStringView',
+            'QLatin1StringView',
+            'QAnyStringView',
+        ], true);
+    }
+
+    private function normalizeBaseCppType(string $cppType): string
+    {
+        $type = trim($cppType);
+        $type = preg_replace('/\bconst\b/', '', $type) ?? $type;
+        $type = trim(preg_replace('/\s+/', ' ', $type) ?? $type);
+        $type = rtrim($type, '& ');
+        if (!str_contains($type, '<')) {
+            while (str_ends_with($type, '*')) {
+                $type = rtrim(substr($type, 0, -1));
+            }
+        }
+
+        return trim($type);
     }
 }

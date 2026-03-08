@@ -26,6 +26,9 @@
 #include <QByteArray>
 #include <QVariant>
 #include <QMetaType>
+@if($ctx->nativeCppType === 'QString')
+#include <Zend/zend_interfaces.h>
+@endif
 @if($ctx->hasQObjectPropertySupport())
 #include "qt_qvariant.h"
 #include <QMetaMethod>
@@ -1488,6 +1491,26 @@ PHP_QT_API void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativ
 @include('generation.method.simple', ['ctx' => $ctx, 'method' => $method])
 @endif
 @endforeach
+@if($ctx->nativeCppType === 'QString')
+
+/* __toString */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __toString)
+{
+    ZEND_PARSE_PARAMETERS_NONE();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (intern->native_ptr == NULL) {
+        RETURN_EMPTY_STRING();
+    }
+
+    QByteArray _qt_utf8 = intern->native_ptr->toUtf8();
+    RETURN_STRINGL(_qt_utf8.constData(), _qt_utf8.size());
+}
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX({!! $ctx->filePrefix !!}_arginfo___tostring, 0, 0, IS_STRING, 0)
+ZEND_END_ARG_INFO()
+
+@endif
 @if($ctx->isQObjectClass)
 
 /* property */
@@ -1746,6 +1769,9 @@ static const zend_function_entry {!! $ctx->filePrefix !!}_methods[] = {
     ZEND_ME({!! $ctx->zendClassSymbol !!}, {!! $method->name !!}, {!! $method->arginfoName !!}, {!! $method->accessFlags !!})
 @endif
 @endforeach
+@if($ctx->nativeCppType === 'QString')
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, __toString, {!! $ctx->filePrefix !!}_arginfo___tostring, ZEND_ACC_PUBLIC)
+@endif
 @if($ctx->isQObjectClass)
     ZEND_ME({!! $ctx->zendClassSymbol !!}, property, {!! $ctx->propertyArginfoName !!}, ZEND_ACC_PUBLIC)
     ZEND_ME({!! $ctx->zendClassSymbol !!}, setProperty, {!! $ctx->setPropertyArginfoName !!}, ZEND_ACC_PUBLIC)
@@ -1779,6 +1805,9 @@ PHP_MINIT_FUNCTION({!! $ctx->minitName !!})
     {!! $ctx->ceVarName !!} = zend_register_internal_class_ex(&ce, {!! $ctx->parentCeVarName !!});
 @else
     {!! $ctx->ceVarName !!} = zend_register_internal_class(&ce);
+@endif
+@if($ctx->nativeCppType === 'QString')
+    zend_class_implements({!! $ctx->ceVarName !!}, 1, zend_ce_stringable);
 @endif
 
 @if($ctx->isFinal)

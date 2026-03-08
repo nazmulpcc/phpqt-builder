@@ -275,6 +275,41 @@ it('includes qstring and qbytearray headers in generated source', function (): v
     expect($source)->toContain('#include <QString>', '#include <QByteArray>');
 });
 
+it('makes generated qstring wrappers stringable', function (): void {
+    $outputDir = qt_temp_dir('qtbuilder-generator-');
+    $generator = new ExtensionGenerator();
+    $phpClass = new PhpClass(
+        name: 'QString',
+        parent: null,
+        isAbstract: false,
+        isCopyConstructible: true,
+        hasPublicConstructor: true,
+        hasPublicDestructor: true,
+        properties: [],
+        methods: [],
+        signals: [],
+        isQObjectDerived: false,
+        nativeIncludes: ['<QString>'],
+        nativeCppType: 'QString',
+    );
+
+    $generator->generate($phpClass, 'Qt\\Core', $outputDir);
+
+    $stub = (string) file_get_contents($outputDir . '/qt_qstring.stub.php');
+    $source = (string) file_get_contents($outputDir . '/qt_qstring.cpp');
+
+    expect($stub)->toContain(
+        'class QString implements \\Stringable',
+        'public function __toString(): string {}',
+    );
+
+    expect($source)->toContain(
+        'ZEND_METHOD(Qt_Core_QString, __toString)',
+        'QByteArray _qt_utf8 = intern->native_ptr->toUtf8();',
+        'zend_class_implements(qt_ce_qstring, 1, zend_ce_stringable);',
+    );
+});
+
 it('qualifies cross namespace qt types in generated stubs', function (): void {
     $outputDir = qt_temp_dir('qtbuilder-generator-');
     $generator = new ExtensionGenerator();

@@ -1060,6 +1060,30 @@ class TypeBridge
         ?string $nullableObjectFallbackExpr = null,
     ): string
     {
+        if ($this->isUnionType($phpType)) {
+            $parts = array_values(array_filter(
+                explode('|', $phpType),
+                static fn(string $part): bool => $part !== '' && $part !== 'null',
+            ));
+            if ($parts === []) {
+                return $varName;
+            }
+
+            $fallbackExpr = $this->zvalToNativeExpr($parts[0], $cppType, $varName, true, $nullableObjectFallbackExpr);
+            $expr = $fallbackExpr;
+            for ($i = count($parts) - 1; $i >= 0; --$i) {
+                $part = $parts[$i];
+                $expr = sprintf(
+                    '(%s ? %s : %s)',
+                    $this->zvalTypeMatchExpr($varName, $part),
+                    $this->zvalToNativeExpr($part, $cppType, $varName, $nullable, $nullableObjectFallbackExpr),
+                    $expr,
+                );
+            }
+
+            return $expr;
+        }
+
         if ($nullable) {
             return match ($phpType) {
                 'int' => sprintf(
@@ -1108,6 +1132,30 @@ class TypeBridge
         ?string $nullableObjectFallbackExpr = null,
     ): string
     {
+        if ($this->isUnionType($phpType)) {
+            $parts = array_values(array_filter(
+                explode('|', $phpType),
+                static fn(string $part): bool => $part !== '' && $part !== 'null',
+            ));
+            if ($parts === []) {
+                return $varName;
+            }
+
+            $fallbackExpr = $this->zvalToNativeRvalueExpr($parts[0], $cppType, $varName, true, $nullableObjectFallbackExpr);
+            $expr = $fallbackExpr;
+            for ($i = count($parts) - 1; $i >= 0; --$i) {
+                $part = $parts[$i];
+                $expr = sprintf(
+                    '(%s ? %s : %s)',
+                    $this->zvalTypeMatchExpr($varName, $part),
+                    $this->zvalToNativeRvalueExpr($part, $cppType, $varName, $nullable, $nullableObjectFallbackExpr),
+                    $expr,
+                );
+            }
+
+            return $expr;
+        }
+
         if ($nullable) {
             return match ($phpType) {
                 'int' => sprintf(
@@ -1946,7 +1994,7 @@ class TypeBridge
 
     private function generationIdForTypeName(string $typeName): string
     {
-        $trimmed = ltrim(trim($typeName), '\\');
+        $trimmed = ltrim(trim($this->runtimeSymbolTypeName($typeName)), '\\');
         if ($trimmed === '') {
             return '';
         }
@@ -2008,6 +2056,26 @@ class TypeBridge
         }
 
         return GeneratedTypeIdentity::fromNames(CppName::unqualify($trimmed), str_contains($trimmed, '::') ? $trimmed : null)->generationId;
+    }
+
+    private function runtimeSymbolTypeName(string $typeName): string
+    {
+        if (!str_contains($typeName, '|')) {
+            return $typeName;
+        }
+
+        $parts = array_values(array_filter(
+            array_map(static fn(string $part): string => trim($part), explode('|', $typeName)),
+            static fn(string $part): bool => $part !== '' && $part !== 'null',
+        ));
+
+        foreach ($parts as $part) {
+            if ($this->isObjectType($part)) {
+                return $part;
+            }
+        }
+
+        return $parts[0] ?? $typeName;
     }
 
     private function phpTypeBaseName(string $type): string

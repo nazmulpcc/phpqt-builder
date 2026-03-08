@@ -7,7 +7,6 @@ require dirname(__DIR__) . '/_support/bootstrap.php';
 use Qt\Core\QCoreApplication;
 use Qt\Core\QRectF;
 use Qt\Core\QSize;
-use Qt\Core\QString;
 use Qt\Core\QTimer;
 use Qt\Core\QUrl;
 use Qt\Gui\QColor;
@@ -30,11 +29,6 @@ use Qt\Qt3DRender\QViewport;
 
 if (!class_exists(\Qt\Qt3DCore\QAspectEngine::class)) {
     example_fail('Qt3DCore classes are unavailable in this build. Rebuild with Qt3DCore and Qt3DRender support.');
-}
-
-function qt3d_qstring(string $value): QString
-{
-    return new QString($value);
 }
 
 final class Qt3DSceneWindow extends QWindow
@@ -180,7 +174,7 @@ final class Qt3DSceneWindow extends QWindow
 
     private function configureWindow(): void
     {
-        $this->setTitle(qt3d_qstring('Qt3D Scene Loader'));
+        $this->setTitle('Qt3D Scene Loader');
         $this->setSurfaceType(QSurface::OpenGLSurface);
         $this->setMinimumSize(new QSize(960, 620));
         $this->resize(1280, 780);
@@ -226,7 +220,7 @@ final class Qt3DSceneWindow extends QWindow
         $this->create();
         $this->buildScene();
         $this->refreshCamera();
-        $this->sceneLoader?->setSource(QUrl::fromLocalFile(qt3d_qstring($this->scenePath)));
+        $this->sceneLoader?->setSource(QUrl::fromLocalFile($this->scenePath));
         $this->sceneInitialized = true;
     }
 
@@ -236,7 +230,7 @@ final class Qt3DSceneWindow extends QWindow
         $this->engine->setRunMode(QAspectEngine::Automatic);
         // Let Qt own the render aspect lifecycle instead of keeping a PHP-owned
         // QRenderAspect alive across window teardown.
-        $this->engine->registerAspect(qt3d_qstring('render'));
+        $this->engine->registerAspect('render');
 
         $this->rootEntity = new QEntity();
 
@@ -363,7 +357,7 @@ final class Qt3DSceneWindow extends QWindow
     {
         $this->statusLine = $message;
         $prefix = $healthy ? 'Qt3D Scene Loader' : 'Qt3D Scene Loader (issue)';
-        $this->setTitle(qt3d_qstring(sprintf('%s • %s • %s', $prefix, $this->sceneLabel, $message)));
+        $this->setTitle(sprintf('%s • %s • %s', $prefix, $this->sceneLabel, $message));
         example_line(sprintf('[qt3d] %s', $message));
     }
 
@@ -410,7 +404,7 @@ example_section('Qt3D Scene Loader');
 $argc = 0;
 $argvList = [];
 $app = new QGuiApplication($argc, $argvList);
-QCoreApplication::setApplicationName(qt3d_qstring('Qt3D Scene Loader'));
+QCoreApplication::setApplicationName('Qt3D Scene Loader');
 QGuiApplication::setQuitOnLastWindowClosed(false);
 
 $scenePath = $argv[1] ?? (__DIR__ . '/../obj-browser/sample.obj');

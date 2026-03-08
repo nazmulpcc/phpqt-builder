@@ -17,6 +17,7 @@ namespace {!! $ctx->phpNamespace !!};
     if ($ctx->isFinal) $classDecl .= 'final ';
     $classDecl .= 'class ' . $ctx->phpClassName;
     if ($ctx->stubParentClassName) $classDecl .= ' extends ' . $ctx->stubParentClassName;
+    if ($ctx->nativeCppType === 'QString') $classDecl .= ' implements \Stringable';
 @endphp
 {!! $classDecl !!}
 {
@@ -42,6 +43,10 @@ namespace {!! $ctx->phpNamespace !!};
 
 @endif
 @endforeach
+@if($ctx->nativeCppType === 'QString')
+    public function __toString(): string {}
+
+@endif
 @if($ctx->isQObjectClass)
 
     public function property(string $name): mixed {}
