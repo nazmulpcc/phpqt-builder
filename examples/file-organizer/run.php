@@ -12,6 +12,7 @@ use Examples\Support\Widgets\Banner;
 use Examples\Support\Widgets\SearchBar;
 use Examples\Support\Widgets\StatusBarMessage;
 use Qt\Core\QModelIndex;
+use Qt\Core\QString;
 use Qt\Core\QSortFilterProxyModel;
 use Qt\Core\QVariant;
 use Qt\Widgets\QApplication;
@@ -39,7 +40,7 @@ final class OrganizerFileSystemModel extends \Qt\Gui\QFileSystemModel
         return parent::parentModelIndex($child);
     }
 
-    public function index(int|string $row, int $column = 0, ?QModelIndex $parent = null): QModelIndex
+    public function index(QString|string|int $row, int $column = 0, ?QModelIndex $parent = null): QModelIndex
     {
         return parent::index($row, $column, $parent ?? new QModelIndex());
     }

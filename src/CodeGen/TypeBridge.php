@@ -211,6 +211,13 @@ class TypeBridge
             module: $module,
             namespace: $namespace,
         );
+        if ($this->containerBridge !== null) {
+            $this->containerBridge->setTypeResolutionMetadata(
+                $this->currentClassTypeResolver,
+                $this->currentTypeResolutionContext,
+                $this->currentSmartPointerAliases,
+            );
+        }
     }
 
     /**
@@ -2286,7 +2293,17 @@ class TypeBridge
 
     private function containerBridge(): ContainerBridge
     {
-        return $this->containerBridge ??= new ContainerBridge();
+        if ($this->containerBridge === null) {
+            $this->containerBridge = new ContainerBridge();
+        }
+
+        $this->containerBridge->setTypeResolutionMetadata(
+            $this->currentClassTypeResolver,
+            $this->currentTypeResolutionContext,
+            $this->currentSmartPointerAliases,
+        );
+
+        return $this->containerBridge;
     }
 
     private function containerSpec(string $cppType): ?ContainerType
