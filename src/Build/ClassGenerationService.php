@@ -343,6 +343,7 @@ class ClassGenerationService
         ?CppClassTypeResolver $classTypeResolver = null,
         ?TypeResolutionContext $resolutionContext = null,
     ): array {
+        $disallowedBySignature = [];
         $constructorCountByArity = [];
         $disallowedByUniqueArity = [];
 

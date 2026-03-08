@@ -274,7 +274,7 @@ it('does not mistake self pointer constructors for copy constructors', function 
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qselfparentthing.cpp');
     
         Assert::assertStringContainsString('public function __construct(QSelfParentThing|null $parent = null)', $stub);
-        Assert::assertStringContainsString('intern->native_ptr = new QSelfParentThing((parent != NULL && Z_TYPE_P(parent) == IS_OBJECT ? qt_qselfparentthing_from_obj(Z_OBJ_P(parent))->native_ptr : NULL));', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr = new QSelfParentThing(((parent != NULL && Z_TYPE_P(parent) == IS_OBJECT && instanceof_function(Z_OBJCE_P(parent), qt_ce_qselfparentthing)) ? qt_qselfparentthing_from_obj(Z_OBJ_P(parent))->native_ptr : NULL));', $cpp);
 });
 
 it('keeps supported constructor overloads when one sibling is unsupported', function (): void {
