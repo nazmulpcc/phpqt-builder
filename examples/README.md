@@ -5,7 +5,7 @@ These examples are fuller, more product-like applications than the low-level `ma
 ## Recommended build
 
 ```sh
-php qtb build QtCore,QtGui,QtWidgets,QtQml,QtQuick,QtOpenGL,QtOpenGLWidgets
+php qtb build QtCore,QtGui,QtWidgets,QtQml,QtQuick,QtOpenGL,QtOpenGLWidgets,Qt3DCore,Qt3DRender
 ```
 
 ## Run
@@ -36,6 +36,8 @@ php -dextension=$PWD/build/ext/.libs/qt.so examples/<example>/run.php
   A widget-based OpenGL shader playground with live controls, animated uniforms, and native GL rendering from PHP.
 - `obj-browser`
   A widget-based OBJ + MTL + texture viewer with orbit camera controls, file loading, and native OpenGL rendering from PHP.
+- `qt3d-scene-loader`
+  A low-level Qt3D window that loads a scene with `QSceneLoader`, builds a manual frame graph, and supports orbit + zoom camera controls.
 - `true-3d`
   A native QtQuick3D scene rendered from PHP via inline QML, with animated meshes, camera, and lighting.
 - `gpu-stress`

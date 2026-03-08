@@ -539,6 +539,24 @@ class MethodContext
             return [[0, 'QLayout']];
         }
 
+        if (
+            $this->name === 'setRootEntity'
+            && $classCtx->phpClassName === 'QAspectEngine'
+            && $firstParam->smartPointerTargetCppType !== null
+            && $firstParam->phpType === 'QEntity'
+        ) {
+            // Qt3D keeps the root entity through a QSharedPointer alias after
+            // the call returns, so the PHP wrapper must stop owning the pointee.
+            return [[0, 'QEntity']];
+        }
+
+        if ($this->name === 'setSurface' && $classCtx->phpClassName === 'QRenderSurfaceSelector' && $firstParam->phpType === 'QObject') {
+            // The frame graph retains the target surface object beyond the
+            // setter call. QWindow instances have no QObject parent, so the
+            // generic parent-based ownership probe is too weak here.
+            return [[0, 'QObject']];
+        }
+
         return [];
     }
 
@@ -549,6 +567,17 @@ class MethodContext
     {
         if (!$classCtx->typeBridge->isObjectType($param->phpType) || $classCtx->typeBridge->isValueType($param->phpType)) {
             return null;
+        }
+
+        // Smart-pointer aliases like QEntityPtr become non-owning QSharedPointer<T>
+        // wrappers around an existing native pointer at the PHP boundary. The
+        // callee may retain that shared-pointer alias after the PHP wrapper falls
+        // out of scope, so the pointee must not be deleted by the PHP wrapper.
+        if ($param->smartPointerTargetCppType !== null) {
+            return [
+                $param->phpType,
+                'true',
+            ];
         }
 
         $probeVar = sprintf('_qt_owned_arg_%d', $paramIndex);

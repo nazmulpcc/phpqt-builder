@@ -173,6 +173,63 @@ it('uses the automatic qobject ownership probe', function (): void {
         Assert::assertStringContainsString('_qt_owned_arg_0->prevent_destroy = true;', $cpp);
 });
 
+it('pins qt3d retained objects after setter calls', function (): void {
+        $fixtureRoot = qt_fixture_path('ownership-qt');
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-qt3d-ownership-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/Qt3DCore/qaspectengine.h',
+            'class' => 'QAspectEngine',
+            '--qt-path' => '/definitely/not/a/qt/root',
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+                $fixtureRoot . '/include/Qt3DCore',
+            ],
+            '--module' => 'Qt3DCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QObject,QEntity,QAspectEngine',
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $aspectEngineCpp = (string) file_get_contents($outputDir . '/classes/qt_qaspectengine.cpp');
+        Assert::assertStringContainsString('intern->native_ptr->setRootEntity(QEntityPtr(qt_qentity_from_obj(Z_OBJ_P(root))->native_ptr, [](QEntity *) {}));', $aspectEngineCpp);
+        Assert::assertStringContainsString('qt_qentity_object *_qt_owned_arg_0 = qt_qentity_from_obj(Z_OBJ_P(root));', $aspectEngineCpp);
+        Assert::assertStringContainsString('_qt_owned_arg_0->prevent_destroy = true;', $aspectEngineCpp);
+        Assert::assertStringNotContainsString('if (qt_native_has_qobject_parent(_qt_owned_arg_0->native_ptr)) {', $aspectEngineCpp);
+
+        $tester = new CommandTester(new GenerateCommand(FakeSystemInformation::passing()));
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/Qt3DRender/qrendersurfaceselector.h',
+            'class' => 'QRenderSurfaceSelector',
+            '--qt-path' => '/definitely/not/a/qt/root',
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+                $fixtureRoot . '/include/Qt3DRender',
+            ],
+            '--module' => 'Qt3DRender',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QObject,QRenderSurfaceSelector',
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $surfaceSelectorCpp = (string) file_get_contents($outputDir . '/classes/qt_qrendersurfaceselector.cpp');
+        Assert::assertStringContainsString('intern->native_ptr->setSurface(qt_qobject_from_obj(Z_OBJ_P(surfaceObject))->native_ptr);', $surfaceSelectorCpp);
+        Assert::assertStringContainsString('qt_qobject_object *_qt_owned_arg_0 = qt_qobject_from_obj(Z_OBJ_P(surfaceObject));', $surfaceSelectorCpp);
+        Assert::assertStringContainsString('_qt_owned_arg_0->prevent_destroy = true;', $surfaceSelectorCpp);
+        Assert::assertStringNotContainsString('if (qt_native_has_qobject_parent(_qt_owned_arg_0->native_ptr)) {', $surfaceSelectorCpp);
+});
+
 it('adds qobject property apis and handlers', function (): void {
         $fixtureRoot = qt_fixture_path('ownership-qt');
         $outputDir = sys_get_temp_dir() . '/qtbuilder-qobject-properties-' . bin2hex(random_bytes(4));
