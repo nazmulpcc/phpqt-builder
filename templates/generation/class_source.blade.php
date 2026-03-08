@@ -1265,6 +1265,11 @@ static inline void qt_delete_native_ptr(T *ptr)
     }
 }
 
+static inline bool qt_request_in_shutdown()
+{
+    return (EG(flags) & EG_FLAGS_IN_SHUTDOWN) != 0;
+}
+
 template <typename T>
 static inline T *qt_new_default_native()
 {
@@ -1314,7 +1319,8 @@ static void {!! $ctx->filePrefix !!}_free_object(zend_object *object)
 
 @if($ctx->hasPreventDestroy)
 @if($ctx->hasPublicDestructor && $ctx->hasConstructibleConstructor)
-    if (qt_should_delete_native(intern->native_ptr, intern->prevent_destroy)) {
+    if (qt_should_delete_native(intern->native_ptr, intern->prevent_destroy)
+        && !(qt_request_in_shutdown() && {!! $ctx->skipNativeDeleteInRequestShutdown ? 'true' : 'false' !!})) {
 @if($ctx->tracksGeneratedNativeSubclass)
         if (intern->native_is_generated_subclass) {
 @if($ctx->requiresVirtualTrampoline)
@@ -1343,7 +1349,8 @@ static void {!! $ctx->filePrefix !!}_free_object(zend_object *object)
 @endif
 @else
 @if($ctx->hasPublicDestructor && $ctx->hasConstructibleConstructor)
-    if (intern->native_ptr) {
+    if (intern->native_ptr
+        && !(qt_request_in_shutdown() && {!! $ctx->skipNativeDeleteInRequestShutdown ? 'true' : 'false' !!})) {
 @if($ctx->tracksGeneratedNativeSubclass)
         if (intern->native_is_generated_subclass) {
 @if($ctx->requiresVirtualTrampoline)

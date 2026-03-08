@@ -91,14 +91,6 @@ final class Qt3DSceneWindow extends QWindow
         $this->refreshCamera();
     }
 
-    protected function closeEvent(\Qt\Gui\QCloseEvent $event): void
-    {
-        // Qt3DRender still crashes in native shutdown when this demo lets the
-        // engine/window unwind normally after a close request.
-        $event->accept();
-        exit(0);
-    }
-
     protected function mousePressEvent(QMouseEvent $event): void
     {
         if ($event->button() === \Qt\MouseButton::LeftButton) {
@@ -334,7 +326,9 @@ $argc = 0;
 $argvList = [];
 $app = new QGuiApplication($argc, $argvList);
 QCoreApplication::setApplicationName(qt3d_qstring('Qt3D Scene Loader'));
-QGuiApplication::setQuitOnLastWindowClosed(true);
+$app->onAboutToQuit(static function (): void {
+    example_line('[qt3d] aboutToQuit received, exiting demo');
+});
 
 $scenePath = $argv[1] ?? (__DIR__ . '/../obj-browser/sample.obj');
 $resolvedScenePath = realpath($scenePath);

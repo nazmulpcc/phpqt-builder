@@ -183,6 +183,9 @@ class ClassContext
     /** TypeBridge for templates that need dynamic type lookups */
     public readonly TypeBridge $typeBridge;
 
+    /** Skip native delete during request shutdown for unstable Qt3D teardown paths */
+    public readonly bool $skipNativeDeleteInRequestShutdown;
+
     /** @var array<string, string> */
     public readonly array $classNamespaces;
 
@@ -234,6 +237,7 @@ class ClassContext
             : $phpClass->name;
         $this->isQObjectDerived = $phpClass->isQObjectDerived;
         $this->isQObjectClass = $phpClass->name === 'QObject';
+        $this->skipNativeDeleteInRequestShutdown = str_starts_with($namespace, 'Qt\\Qt3D');
 
         // Naming
         $this->zendClassSymbol = $typeBridge->zendClassSymbol($namespace, $phpClass->name);

@@ -336,6 +336,33 @@ it('emits qualified native cpp types for namespaced classes', function (): void 
     );
 });
 
+it('skips Qt3D native deletion during request shutdown', function (): void {
+    $outputDir = qt_temp_dir('qtbuilder-generator-');
+    $generator = new ExtensionGenerator();
+    $phpClass = new PhpClass(
+        name: 'QAspectEngine',
+        parent: null,
+        isAbstract: false,
+        isCopyConstructible: false,
+        hasPublicConstructor: true,
+        hasPublicDestructor: true,
+        properties: [],
+        methods: [],
+        signals: [],
+        nativeIncludes: ['<Qt3DCore/QAspectEngine>'],
+        nativeCppType: 'Qt3DCore::QAspectEngine',
+    );
+
+    $generator->generate($phpClass, 'Qt\\Qt3DCore', $outputDir);
+
+    $source = (string) file_get_contents($outputDir . '/qt_qaspectengine__qt3dcore.cpp');
+
+    expect($source)->toContain(
+        'static inline bool qt_request_in_shutdown()',
+        'qt_request_in_shutdown() && true',
+    );
+});
+
 it('emits distinct wrapper artifacts for colliding short names across modules', function (): void {
     $outputDir = qt_temp_dir('qtbuilder-generator-');
     $generator = new ExtensionGenerator();
