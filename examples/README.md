@@ -5,7 +5,7 @@ These examples are fuller, more product-like applications than the low-level `ma
 ## Recommended build
 
 ```sh
-php qtb build QtCore,QtGui,QtWidgets,QtQml,QtQuick,QtOpenGL,QtOpenGLWidgets,Qt3DCore,Qt3DRender
+php qtb build QtCore,QtGui,QtWidgets,QtQml,QtQuick,QtOpenGL,QtOpenGLWidgets,Qt3DCore,Qt3DRender,Qt3DExtras,Qt3DInput
 ```
 
 ## Run
@@ -38,6 +38,8 @@ php -dextension=$PWD/build/ext/.libs/qt.so examples/<example>/run.php
   A widget-based OBJ + MTL + texture viewer with orbit camera controls, file loading, and native OpenGL rendering from PHP.
 - `qt3d-scene-loader`
   A low-level Qt3D window that loads a scene with `QSceneLoader`, builds a manual frame graph, and supports orbit + zoom camera controls.
+- `qt3d-modules-showcase`
+  A focused Qt3D integration baseline that wires Qt3DCore + Qt3DRender + Qt3DExtras + Qt3DInput in one scene graph.
 - `true-3d`
   A native QtQuick3D scene rendered from PHP via inline QML, with animated meshes, camera, and lighting.
 - `gpu-stress`

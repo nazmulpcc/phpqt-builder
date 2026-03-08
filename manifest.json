@@ -63,6 +63,39 @@
                 "QtWidgets"
             ]
         },
+        "Qt3DCore": {
+            "extension_name": "qt3dcore",
+            "dependencies": [
+                "QtCore",
+                "QtGui"
+            ]
+        },
+        "Qt3DRender": {
+            "extension_name": "qt3drender",
+            "dependencies": [
+                "QtCore",
+                "QtGui",
+                "Qt3DCore"
+            ]
+        },
+        "Qt3DInput": {
+            "extension_name": "qt3dinput",
+            "dependencies": [
+                "QtCore",
+                "QtGui",
+                "Qt3DCore"
+            ]
+        },
+        "Qt3DExtras": {
+            "extension_name": "qt3dextras",
+            "dependencies": [
+                "QtCore",
+                "QtGui",
+                "Qt3DCore",
+                "Qt3DRender",
+                "Qt3DInput"
+            ]
+        },
         "QtQml": {
             "extension_name": "qtqml",
             "dependencies": [

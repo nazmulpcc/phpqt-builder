@@ -1,13 +1,18 @@
 # Qt3D Scene Loader
 
-A minimal low-level Qt3D demo rendered from PHP with `QAspectEngine`, `QRenderSettings`, a manual frame graph, `QCamera`, and `QSceneLoader`.
+A low-level Qt3D demo rendered from PHP with `QAspectEngine`, `QRenderSettings`, a manual frame graph, `QCamera`, `QSceneLoader`, plus input/camera-control helpers.
 
-This example intentionally avoids `QtWidgets` and `Qt3DExtras`. It uses a plain `QWindow` so it stays close to the currently proven wrapper surface for `Qt3DCore` and `Qt3DRender`.
+It uses a plain `QWindow` (no `QtWidgets`) and integrates:
+
+- `Qt3DCore`
+- `Qt3DRender`
+- `Qt3DExtras` (`QOrbitCameraController`)
+- `Qt3DInput` (`QInputAspect`, `QInputSettings`)
 
 ## Required build
 
 ```sh
-php qtb build QtCore,QtGui,Qt3DCore,Qt3DRender
+php qtb build QtCore,QtGui,Qt3DCore,Qt3DRender,Qt3DExtras,Qt3DInput
 ```
 
 ## Run

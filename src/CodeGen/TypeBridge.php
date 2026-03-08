@@ -1273,8 +1273,8 @@ class TypeBridge
 
             if ($nullable) {
                 return sprintf(
-                    '(%1$s != NULL && Z_TYPE_P(%1$s) == IS_OBJECT ? %2$s : %3$s())',
-                    $varName,
+                    '(%1$s ? %2$s : %3$s())',
+                    $this->zvalIsExpectedObjectExpr($varName, $phpType),
                     $sharedExpr,
                     $aliasCppType,
                 );
@@ -1290,8 +1290,8 @@ class TypeBridge
         if (str_contains($cppType, '*') && !str_contains($cppType, '&')) {
             if ($nullable) {
                 return sprintf(
-                    '(%1$s != NULL && Z_TYPE_P(%1$s) == IS_OBJECT ? %2$s : %3$s)',
-                    $varName,
+                    '(%1$s ? %2$s : %3$s)',
+                    $this->zvalIsExpectedObjectExpr($varName, $phpType),
                     $baseExpr,
                     $nullableFallbackExpr ?? 'NULL',
                 );
@@ -1303,8 +1303,8 @@ class TypeBridge
         // Otherwise (const ref, value), dereference
         if ($nullable) {
             return sprintf(
-                '(%1$s != NULL && Z_TYPE_P(%1$s) == IS_OBJECT ? *%2$s : %3$s())',
-                $varName,
+                '(%1$s ? *%2$s : %3$s())',
+                $this->zvalIsExpectedObjectExpr($varName, $phpType),
                 $baseExpr,
                 $nullableFallbackExpr ?? $this->normalizeCppType($cppType),
             );
@@ -1327,8 +1327,8 @@ class TypeBridge
 
         if ($nullable) {
             return sprintf(
-                '(%1$s != NULL && Z_TYPE_P(%1$s) == IS_OBJECT ? %2$s : %3$s())',
-                $varName,
+                '(%1$s ? %2$s : %3$s())',
+                $this->zvalIsExpectedObjectExpr($varName, $phpType),
                 $this->nonNullableObjectRvalueExpr($normalizedType, $baseExpr),
                 $nullableFallbackExpr ?? $normalizedType,
             );
@@ -2185,6 +2185,15 @@ class TypeBridge
     private function zvalDerefExpr(string $varName): string
     {
         return sprintf('((Z_TYPE_P(%1$s) == IS_REFERENCE) ? Z_REFVAL_P(%1$s) : (%1$s))', $varName);
+    }
+
+    private function zvalIsExpectedObjectExpr(string $varName, string $phpType): string
+    {
+        return sprintf(
+            '(%1$s != NULL && Z_TYPE_P(%1$s) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s), %2$s))',
+            $varName,
+            $this->ceVarName($phpType),
+        );
     }
 
     private function typeIncludes(string $phpType, string $needle): bool

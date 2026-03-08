@@ -14,11 +14,15 @@ use Qt\Gui\QGuiApplication;
 use Qt\Gui\QMouseEvent;
 use Qt\Gui\QSurface;
 use Qt\Gui\QSurfaceFormat;
+use Qt\Gui\QTouchEvent;
 use Qt\Gui\QWheelEvent;
 use Qt\Gui\QWindow;
 use Qt\Gui\QVector3D;
 use Qt\Qt3DCore\QAspectEngine;
 use Qt\Qt3DCore\QEntity;
+use Qt\Qt3DExtras\QOrbitCameraController;
+use Qt\Qt3DInput\QInputAspect;
+use Qt\Qt3DInput\QInputSettings;
 use Qt\Qt3DRender\QCamera;
 use Qt\Qt3DRender\QCameraSelector;
 use Qt\Qt3DRender\QClearBuffers;
@@ -45,13 +49,14 @@ final class Qt3DSceneWindow extends QWindow
     private ?QClearBuffers $clearBuffers = null;
     private ?QCameraSelector $cameraSelector = null;
     private ?QCamera $camera = null;
+    private ?QOrbitCameraController $orbitController = null;
+    private ?QInputAspect $inputAspect = null;
+    private ?QInputSettings $inputSettings = null;
     private ?QSceneLoader $sceneLoader = null;
-
     private float $yawDegrees = 28.0;
     private float $pitchDegrees = -18.0;
     private float $distance = 16.0;
-    private float $targetY = 1.4;
-
+    private float $targetY = 1.2;
     private bool $dragging = false;
     private float $lastMouseX = 0.0;
     private float $lastMouseY = 0.0;
@@ -88,6 +93,9 @@ final class Qt3DSceneWindow extends QWindow
         $this->clearBuffers = null;
         $this->cameraSelector = null;
         $this->camera = null;
+        $this->orbitController = null;
+        $this->inputAspect = null;
+        $this->inputSettings = null;
         $this->sceneLoader = null;
     }
 
@@ -147,16 +155,9 @@ final class Qt3DSceneWindow extends QWindow
         }
 
         $position = $event->position();
-        $dx = $position->x() - $this->lastMouseX;
-        $dy = $position->y() - $this->lastMouseY;
-
-        $this->yawDegrees += $dx * 0.42;
-        $this->pitchDegrees += $dy * 0.28;
-        $this->pitchDegrees = max(-75.0, min(15.0, $this->pitchDegrees));
-
+        $this->applyOrbitDelta($position->x() - $this->lastMouseX, $position->y() - $this->lastMouseY, 0.42, 0.28);
         $this->lastMouseX = $position->x();
         $this->lastMouseY = $position->y();
-
         $this->refreshCamera();
 
         parent::mouseMoveEvent($event);
@@ -164,12 +165,33 @@ final class Qt3DSceneWindow extends QWindow
 
     protected function wheelEvent(QWheelEvent $event): void
     {
-        $delta = $event->angleDelta()->y();
+        $delta = (float) $event->angleDelta()->y();
+        if ($delta === 0.0) {
+            $delta = (float) $event->pixelDelta()->y() * 0.25;
+        }
+
         $this->distance -= $delta * 0.01;
-        $this->distance = max(4.0, min(45.0, $this->distance));
+        $this->distance = max(2.5, min(60.0, $this->distance));
         $this->refreshCamera();
 
         parent::wheelEvent($event);
+    }
+
+    protected function touchEvent(QTouchEvent $event): void
+    {
+        $points = $event->touchPoints();
+        if ($points === []) {
+            parent::touchEvent($event);
+            return;
+        }
+
+        $point = $points[0];
+        $position = $point->position();
+        $last = $point->lastPosition();
+        $this->applyOrbitDelta($position->x() - $last->x(), $position->y() - $last->y(), 0.35, 0.24);
+        $this->refreshCamera();
+
+        parent::touchEvent($event);
     }
 
     private function configureWindow(): void
@@ -228,11 +250,16 @@ final class Qt3DSceneWindow extends QWindow
     {
         $this->engine = new QAspectEngine();
         $this->engine->setRunMode(QAspectEngine::Automatic);
-        // Let Qt own the render aspect lifecycle instead of keeping a PHP-owned
-        // QRenderAspect alive across window teardown.
+        // Let Qt own aspect lifecycles instead of keeping PHP-owned aspect wrappers alive.
         $this->engine->registerAspect('render');
+        $this->engine->registerAspect('logic');
+        $this->inputAspect = new QInputAspect($this->engine);
+        $this->engine->registerAspect($this->inputAspect);
 
         $this->rootEntity = new QEntity();
+        $this->inputSettings = new QInputSettings($this->rootEntity);
+        $this->inputSettings->setEventSource($this);
+        $this->rootEntity->addComponent($this->inputSettings);
 
         $this->renderSettings = new QRenderSettings($this->rootEntity);
         $this->renderSettings->setRenderPolicy(QRenderSettings::Always);
@@ -255,7 +282,16 @@ final class Qt3DSceneWindow extends QWindow
         $this->camera->setFarPlane(2000.0);
         $this->camera->setFieldOfView(42.0);
         $this->camera->setUpVector(new QVector3D(0.0, 1.0, 0.0));
+        $this->camera->setPosition(new QVector3D(8.0, 3.2, 11.0));
+        $this->camera->setViewCenter(new QVector3D(0.0, 1.2, 0.0));
         $this->cameraSelector->setCamera($this->camera);
+
+        $this->orbitController = new QOrbitCameraController($this->rootEntity);
+        $this->orbitController->setCamera($this->camera);
+        $this->orbitController->setLinearSpeed(55.0);
+        $this->orbitController->setLookSpeed(185.0);
+        $this->orbitController->setZoomInLimit(2.5);
+        $this->orbitController->setZoomTranslateViewCenter(true);
 
         $this->renderSettings->setActiveFrameGraph($this->surfaceSelector);
 
@@ -340,7 +376,6 @@ final class Qt3DSceneWindow extends QWindow
         $yaw = deg2rad($this->yawDegrees);
         $pitch = deg2rad($this->pitchDegrees);
         $radius = $this->distance * cos($pitch);
-
         $target = new QVector3D(0.0, $this->targetY, 0.0);
         $position = new QVector3D(
             $radius * sin($yaw),
@@ -351,6 +386,13 @@ final class Qt3DSceneWindow extends QWindow
         $this->camera->setAspectRatio((float) $aspect);
         $this->camera->setPosition($position);
         $this->camera->setViewCenter($target);
+    }
+
+    private function applyOrbitDelta(float $dx, float $dy, float $xSpeed, float $ySpeed): void
+    {
+        $this->yawDegrees += $dx * $xSpeed;
+        $this->pitchDegrees += $dy * $ySpeed;
+        $this->pitchDegrees = max(-82.0, min(20.0, $this->pitchDegrees));
     }
 
     private function updateStatus(string $message, bool $healthy): void
@@ -420,6 +462,7 @@ $window->enableAutoQuitOnTerminalStatus(false);
 $window->scheduleAutoQuit($autoQuitSeconds);
 
 $window->show();
+$window->requestActivate();
 
 example_line('qt3d scene loader ready');
 QGuiApplication::exec();

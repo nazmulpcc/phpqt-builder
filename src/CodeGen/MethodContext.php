@@ -550,6 +550,15 @@ class MethodContext
             return [[0, 'QEntity']];
         }
 
+        if (
+            $this->name === 'registerAspect'
+            && $classCtx->phpClassName === 'QAspectEngine'
+            && $this->paramHasPhpType($firstParam, 'QAbstractAspect')
+        ) {
+            // QAspectEngine retains registered aspect instances.
+            return [[0, 'QAbstractAspect']];
+        }
+
         if ($this->name === 'setSurface' && $classCtx->phpClassName === 'QRenderSurfaceSelector' && $this->paramHasPhpType($firstParam, 'QObject')) {
             // The frame graph retains the target surface object beyond the
             // setter call. QWindow instances have no QObject parent, so the
@@ -565,6 +574,10 @@ class MethodContext
      */
     private function ownershipProbeSpec(ClassContext $classCtx, int $paramIndex, OverloadParamContext $param): ?array
     {
+        if (!$this->isObjectOnlyTypeUnion($param->phpType)) {
+            return null;
+        }
+
         $objectPhpType = $this->firstObjectType($param->phpType);
         if ($objectPhpType === null || $classCtx->typeBridge->isValueType($objectPhpType)) {
             return null;
@@ -604,7 +617,65 @@ class MethodContext
 
     private function paramHasPhpType(OverloadParamContext $param, string $phpType): bool
     {
-        return in_array($phpType, explode('|', $param->phpType), true);
+        foreach (explode('|', $param->phpType) as $candidate) {
+            if ($this->phpTypeMatches(trim($candidate), $phpType)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function phpTypeMatches(string $actual, string $expected): bool
+    {
+        if ($actual === $expected) {
+            return true;
+        }
+
+        if ($actual === '' || $actual === 'null') {
+            return false;
+        }
+
+        $actualBase = $this->phpTypeBaseName($actual);
+        $expectedBase = $this->phpTypeBaseName($expected);
+
+        return $actualBase !== '' && $actualBase === $expectedBase;
+    }
+
+    private function phpTypeBaseName(string $phpType): string
+    {
+        $trimmed = ltrim(trim($phpType), '\\');
+        if ($trimmed === '' || in_array($trimmed, ['null', 'int', 'float', 'bool', 'string', 'array', 'mixed', 'void'], true)) {
+            return $trimmed;
+        }
+
+        $separator = strrpos($trimmed, '\\');
+        if ($separator === false) {
+            return $trimmed;
+        }
+
+        return substr($trimmed, $separator + 1);
+    }
+
+    private function isObjectOnlyTypeUnion(string $phpType): bool
+    {
+        $parts = array_values(array_filter(explode('|', $phpType), static fn(string $part): bool => trim($part) !== ''));
+        if ($parts === []) {
+            return false;
+        }
+
+        foreach ($parts as $part) {
+            $trimmed = trim($part);
+            if ($trimmed === 'null') {
+                continue;
+            }
+
+            if (!$this->typeBridge->isObjectType($trimmed)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function firstObjectType(string $phpType): ?string

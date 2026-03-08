@@ -18,6 +18,10 @@ it('loads supported modules from the static manifest', function (): void {
         'QtMultimedia',
         'QtOpenGL',
         'QtOpenGLWidgets',
+        'Qt3DCore',
+        'Qt3DRender',
+        'Qt3DInput',
+        'Qt3DExtras',
         'QtQml',
         'QtQuick',
         'QtQuick3D',
@@ -39,6 +43,20 @@ it('expands transitive dependencies with a stable topological order', function (
         ->and($graph->autoAddedModules())->toBe(['QtCore', 'QtGui', 'QtNetwork', 'QtQml', 'QtQuick'])
         ->and($graph->dependenciesFor('QtQuick3D'))->toBe(['QtCore', 'QtGui', 'QtQml', 'QtQuick'])
         ->and($graph->extensionNameFor('QtQuick3D'))->toBe('qtquick3d')
+        ->and($graph->dependencySource)->toBe('static_manifest');
+});
+
+it('expands qt3d extras dependencies in topological order', function (): void {
+    $resolver = new StaticModuleDependencyResolver();
+
+    $graph = $resolver->resolve(['Qt3DExtras']);
+
+    expect($graph)->toBeInstanceOf(ResolvedModuleGraph::class)
+        ->and($graph->requestedModules)->toBe(['Qt3DExtras'])
+        ->and($graph->expandedModules())->toBe(['QtCore', 'QtGui', 'Qt3DCore', 'Qt3DRender', 'Qt3DInput', 'Qt3DExtras'])
+        ->and($graph->autoAddedModules())->toBe(['QtCore', 'QtGui', 'Qt3DCore', 'Qt3DRender', 'Qt3DInput'])
+        ->and($graph->dependenciesFor('Qt3DExtras'))->toBe(['QtCore', 'QtGui', 'Qt3DCore', 'Qt3DRender', 'Qt3DInput'])
+        ->and($graph->extensionNameFor('Qt3DExtras'))->toBe('qt3dextras')
         ->and($graph->dependencySource)->toBe('static_manifest');
 });
 

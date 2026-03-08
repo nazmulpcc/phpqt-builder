@@ -31,7 +31,8 @@ it('uses nullable unions for optional value object parameters', function (): voi
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qabstractitemmodel.cpp');
     
         Assert::assertStringContainsString('QModelIndex|null $parent = null', $stub);
-        Assert::assertStringContainsString('(parent != NULL && Z_TYPE_P(parent) == IS_OBJECT ? *qt_qmodelindex_from_obj(Z_OBJ_P(parent))->native_ptr : QModelIndex())', $cpp);
+        Assert::assertStringContainsString('instanceof_function(Z_OBJCE_P(parent), qt_ce_qmodelindex)', $cpp);
+        Assert::assertStringContainsString('*qt_qmodelindex_from_obj(Z_OBJ_P(parent))->native_ptr', $cpp);
 });
 
 it('skips methods with value object dependencies outside the allow list', function (): void {
@@ -83,7 +84,8 @@ it('uses nullable unions for optional qobject parameters', function (): void {
     
         Assert::assertStringContainsString('QNode|null $node = null', $stub);
         Assert::assertStringContainsString('Z_PARAM_OBJECT_OF_CLASS_OR_NULL(node, qt_ce_qnode)', $cpp);
-        Assert::assertStringContainsString('(node != NULL && Z_TYPE_P(node) == IS_OBJECT ? qt_qnode_from_obj(Z_OBJ_P(node))->native_ptr : NULL)', $cpp);
+        Assert::assertStringContainsString('instanceof_function(Z_OBJCE_P(node), qt_ce_qnode)', $cpp);
+        Assert::assertStringContainsString('qt_qnode_from_obj(Z_OBJ_P(node))->native_ptr', $cpp);
 });
 
 it('transfers ownership for layout attachment methods', function (): void {
@@ -171,6 +173,8 @@ it('uses the automatic qobject ownership probe', function (): void {
         Assert::assertStringContainsString('static zend_always_inline bool qt_native_has_qobject_parent(T *ptr)', $cpp);
         Assert::assertStringContainsString('if (qt_native_has_qobject_parent(_qt_owned_arg_0->native_ptr)) {', $cpp);
         Assert::assertStringContainsString('_qt_owned_arg_0->prevent_destroy = true;', $cpp);
+        Assert::assertStringContainsString('if (QCoreApplication::closingDown()) {', $cpp);
+        Assert::assertStringContainsString('if ((EG(flags) & EG_FLAGS_IN_SHUTDOWN) != 0) {', $cpp);
         Assert::assertStringContainsString('if (qt_runtime_is_shutdown_in_progress()) {', $cpp);
         Assert::assertStringContainsString('qt_runtime_try_hook_about_to_quit();', $cpp);
 });

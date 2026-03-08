@@ -1257,6 +1257,16 @@ qt_should_delete_native(T *ptr, bool prevent_destroy)
         return false;
     }
 
+    if (QCoreApplication::closingDown()) {
+        return false;
+    }
+
+#ifdef EG_FLAGS_IN_SHUTDOWN
+    if ((EG(flags) & EG_FLAGS_IN_SHUTDOWN) != 0) {
+        return false;
+    }
+#endif
+
     if (qt_runtime_is_shutdown_in_progress()) {
         return false;
     }
