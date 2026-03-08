@@ -94,6 +94,9 @@
 @endif
 @if($ctx->hasPreventDestroy)
             qt_track_native_instance(intern->native_ptr);
+@if($ctx->isQObjectDerived)
+            qt_runtime_try_hook_about_to_quit();
+@endif
 @foreach($method->params as $param)
 @if($param->isObject && !$param->isUnion)
             if ({!! $param->cVarName !!} != NULL) {

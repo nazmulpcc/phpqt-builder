@@ -142,7 +142,28 @@ it('registers parents before children in extension source', function (): void {
     $source = (string) file_get_contents($outputDir . '/qt.cpp');
 
     expect(strpos($source, 'PHP_MINIT(qt_qobject)'))
-        ->toBeLessThan(strpos($source, 'PHP_MINIT(qt_qcoreapplication)'));
+        ->toBeLessThan(strpos($source, 'PHP_MINIT(qt_qcoreapplication)'))
+        ->and($source)->toContain(
+            'static std::atomic_bool qt_shutdown_in_progress{false};',
+            'static std::atomic_bool qt_about_to_quit_hooked{false};',
+            'bool qt_runtime_is_shutdown_in_progress(void)',
+            'void qt_runtime_mark_shutdown_in_progress(void)',
+            'void qt_runtime_try_hook_about_to_quit(void)',
+            'static inline void qt_runtime_shutdown_qcoreapplication(void)',
+            'PHP_RINIT_FUNCTION(qt)',
+            'PHP_RSHUTDOWN_FUNCTION(qt)',
+            'PHP_RINIT(qt)',
+            'PHP_RSHUTDOWN(qt)',
+            '&QCoreApplication::aboutToQuit',
+            'qt_runtime_shutdown_qcoreapplication();',
+        );
+
+    $header = (string) file_get_contents($outputDir . '/php_qt.h');
+    expect($header)->toContain(
+        'bool qt_runtime_is_shutdown_in_progress(void);',
+        'void qt_runtime_mark_shutdown_in_progress(void);',
+        'void qt_runtime_try_hook_about_to_quit(void);',
+    );
 });
 
 it('registers typed dependencies before consumers', function (): void {
@@ -374,7 +395,9 @@ it('emits distinct wrapper artifacts for colliding short names across modules', 
     $generator->generate($qt3dTransform, 'Qt\\Qt3DCore', $outputDir, ['QComponent' => 'Qt\\Qt3DCore']);
 
     $guiHeader = (string) file_get_contents($outputDir . '/qt_qtransform.h');
+    $guiSource = (string) file_get_contents($outputDir . '/qt_qtransform.cpp');
     $qt3dHeader = (string) file_get_contents($outputDir . '/qt_qtransform__qt3dcore.h');
+    $qt3dSource = (string) file_get_contents($outputDir . '/qt_qtransform__qt3dcore.cpp');
 
     expect($guiHeader)->toContain(
         '#include <QtGui/QTransform>',
@@ -388,6 +411,9 @@ it('emits distinct wrapper artifacts for colliding short names across modules', 
         'qt_ce_qtransform__qt3dcore',
         'qt_qtransform__qt3dcore_wrap_native',
     );
+
+    expect($guiSource)->not->toContain('qt_runtime_try_hook_about_to_quit();');
+    expect($qt3dSource)->toContain('qt_runtime_try_hook_about_to_quit();');
 });
 
 it('disables cloning for value types without copy constructors', function (): void {

@@ -8,6 +8,7 @@ use Qt\Core\QCoreApplication;
 use Qt\Core\QRectF;
 use Qt\Core\QSize;
 use Qt\Core\QString;
+use Qt\Core\QTimer;
 use Qt\Core\QUrl;
 use Qt\Gui\QColor;
 use Qt\Gui\QGuiApplication;
@@ -63,6 +64,10 @@ final class Qt3DSceneWindow extends QWindow
     private string $statusLine = 'Booting scene loader';
     private bool $autoQuitOnTerminalStatus = false;
     private bool $sceneInitialized = false;
+    private bool $shutdownRequested = false;
+    private ?QTimer $shutdownTimer = null;
+    private ?QTimer $quitTimer = null;
+    private ?QTimer $autoQuitTimer = null;
 
     public function __construct(string $scenePath)
     {
@@ -73,6 +78,23 @@ final class Qt3DSceneWindow extends QWindow
 
         $this->configureWindow();
         $this->updateStatus('Loading scene', true);
+    }
+
+    public function cleanUp()
+    {
+        $this->shutdownTimer = null;
+        $this->quitTimer = null;
+        $this->autoQuitTimer = null;
+        $this->engine = null;
+        $this->rootEntity = null;
+        $this->sceneEntity = null;
+        $this->renderSettings = null;
+        $this->surfaceSelector = null;
+        $this->viewport = null;
+        $this->clearBuffers = null;
+        $this->cameraSelector = null;
+        $this->camera = null;
+        $this->sceneLoader = null;
     }
 
     protected function exposeEvent(\Qt\Gui\QExposeEvent $event): void
@@ -93,10 +115,13 @@ final class Qt3DSceneWindow extends QWindow
 
     protected function closeEvent(\Qt\Gui\QCloseEvent $event): void
     {
-        // Qt3DRender still crashes in native shutdown when this demo lets the
-        // engine/window unwind normally after a close request.
-        $event->accept();
-        exit(0);
+        if ($this->shutdownRequested) {
+            $event->accept();
+            return;
+        }
+
+        $event->ignore();
+        $this->requestShutdown();
     }
 
     protected function mousePressEvent(QMouseEvent $event): void
@@ -256,7 +281,7 @@ final class Qt3DSceneWindow extends QWindow
                 $this->camera->viewEntity($this->sceneEntity);
                 $this->refreshCamera();
                 if ($this->autoQuitOnTerminalStatus) {
-                    exit(0);
+                    $this->requestShutdown();
                 }
                 return;
             }
@@ -264,7 +289,7 @@ final class Qt3DSceneWindow extends QWindow
             if ($status === QSceneLoader::Error) {
                 $this->updateStatus('Scene loader error', false);
                 if ($this->autoQuitOnTerminalStatus) {
-                    exit(1);
+                    $this->requestShutdown();
                 }
                 return;
             }
@@ -277,6 +302,21 @@ final class Qt3DSceneWindow extends QWindow
     public function enableAutoQuitOnTerminalStatus(bool $enabled): void
     {
         $this->autoQuitOnTerminalStatus = $enabled;
+    }
+
+    public function scheduleAutoQuit(int $seconds): void
+    {
+        if ($seconds <= 0) {
+            $this->autoQuitTimer = null;
+            return;
+        }
+
+        $this->autoQuitTimer = new QTimer();
+        $this->autoQuitTimer->setSingleShot(true);
+        $this->autoQuitTimer->onTimeout(function (): void {
+            $this->requestShutdown();
+        });
+        $this->autoQuitTimer->start($seconds * 1000);
     }
 
     private function syncSurfaceMetrics(): void
@@ -326,6 +366,43 @@ final class Qt3DSceneWindow extends QWindow
         $this->setTitle(qt3d_qstring(sprintf('%s • %s • %s', $prefix, $this->sceneLabel, $message)));
         example_line(sprintf('[qt3d] %s', $message));
     }
+
+    private function requestShutdown(): void
+    {
+        if ($this->shutdownRequested) {
+            return;
+        }
+
+        $this->shutdownRequested = true;
+        $this->hide();
+
+        $this->shutdownTimer = new QTimer();
+        $this->shutdownTimer->setSingleShot(true);
+        $this->shutdownTimer->onTimeout(function (): void {
+            if ($this->sceneLoader !== null) {
+                $this->sceneLoader->setSource(new QUrl());
+                $this->sceneLoader->deleteLater();
+            }
+            if ($this->sceneEntity !== null) {
+                $this->sceneEntity->deleteLater();
+            }
+            if ($this->rootEntity !== null) {
+                $this->rootEntity->deleteLater();
+            }
+            if ($this->engine !== null) {
+                $this->engine->setRunMode(QAspectEngine::Manual);
+                $this->engine->deleteLater();
+            }
+
+            $this->quitTimer = new QTimer();
+            $this->quitTimer->setSingleShot(true);
+            $this->quitTimer->onTimeout(static function (): void {
+                QCoreApplication::quit();
+            });
+            $this->quitTimer->start(25);
+        });
+        $this->shutdownTimer->start(0);
+    }
 }
 
 example_section('Qt3D Scene Loader');
@@ -334,7 +411,7 @@ $argc = 0;
 $argvList = [];
 $app = new QGuiApplication($argc, $argvList);
 QCoreApplication::setApplicationName(qt3d_qstring('Qt3D Scene Loader'));
-QGuiApplication::setQuitOnLastWindowClosed(true);
+QGuiApplication::setQuitOnLastWindowClosed(false);
 
 $scenePath = $argv[1] ?? (__DIR__ . '/../obj-browser/sample.obj');
 $resolvedScenePath = realpath($scenePath);
@@ -343,9 +420,10 @@ if ($resolvedScenePath === false) {
 }
 
 $window = new Qt3DSceneWindow($resolvedScenePath);
-
+// $app->onAboutToQuit(fn() => $window->cleanUp());
 $autoQuitSeconds = example_auto_quit_seconds();
-$window->enableAutoQuitOnTerminalStatus($autoQuitSeconds > 0);
+$window->enableAutoQuitOnTerminalStatus(false);
+$window->scheduleAutoQuit($autoQuitSeconds);
 
 $window->show();
 

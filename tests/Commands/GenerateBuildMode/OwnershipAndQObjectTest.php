@@ -171,6 +171,8 @@ it('uses the automatic qobject ownership probe', function (): void {
         Assert::assertStringContainsString('static zend_always_inline bool qt_native_has_qobject_parent(T *ptr)', $cpp);
         Assert::assertStringContainsString('if (qt_native_has_qobject_parent(_qt_owned_arg_0->native_ptr)) {', $cpp);
         Assert::assertStringContainsString('_qt_owned_arg_0->prevent_destroy = true;', $cpp);
+        Assert::assertStringContainsString('if (qt_runtime_is_shutdown_in_progress()) {', $cpp);
+        Assert::assertStringContainsString('qt_runtime_try_hook_about_to_quit();', $cpp);
 });
 
 it('pins qt3d retained objects after setter calls', function (): void {
@@ -398,7 +400,6 @@ it('transfers qevent ownership for post event', function (): void {
         Assert::assertSame('ok', $payload['status']);
     
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qcoreapplication.cpp');
-    
         Assert::assertStringContainsString('QCoreApplication::postEvent(qt_qobject_from_obj(Z_OBJ_P(receiver))->native_ptr, qt_qevent_from_obj(Z_OBJ_P(event))->native_ptr, (int)priority);', $cpp);
         Assert::assertStringContainsString('qt_qevent_object *_qt_posted_event = qt_qevent_from_obj(Z_OBJ_P(event));', $cpp);
         Assert::assertStringContainsString('_qt_posted_event->prevent_destroy = true;', $cpp);

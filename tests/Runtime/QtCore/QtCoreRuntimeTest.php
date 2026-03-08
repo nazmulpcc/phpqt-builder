@@ -73,3 +73,12 @@ it('supports QList-derived xml stream attributes through synthetic list parents'
         ->and($payload['count'])->toBe(1)
         ->and($payload['item_class'])->toBe('Qt\\Core\\QXmlStreamAttribute');
 });
+
+it('exits cleanly on qcoreapplication quit with qobject signal callbacks', function (): void {
+    $payload = qt_runtime_payload('QtCore/qobject_shutdown_quit.php');
+
+    expect($payload['ticks'])->toBe(1)
+        ->and($payload['about_to_quit_hits'])->toBe(0)
+        ->and($payload['notify_hits'])->toBe(1)
+        ->and($payload['connections_are_objects'])->toBeTrue();
+});

@@ -40,12 +40,22 @@
 #include <QMetaObject>
 #include <QThread>
 @endif
+@if($ctx->hasPreventDestroy && !$ctx->hasSignals())
+#include <QCoreApplication>
+@endif
 @if($ctx->parentCeVarName && $ctx->parentFilePrefix)
 #include "{!! $ctx->parentFilePrefix !!}.h"
 @endif
 @foreach($ctx->requiredIncludes as $include)
 #include "{!! $include !!}"
 @endforeach
+
+@if($ctx->hasPreventDestroy || $ctx->isQObjectDerived)
+bool qt_runtime_is_shutdown_in_progress(void);
+@endif
+@if($ctx->isQObjectDerived)
+void qt_runtime_try_hook_about_to_quit(void);
+@endif
 
 /* ------------------------------------------------------------------ */
 /* Globals                                                             */
@@ -933,6 +943,12 @@ static inline std::shared_ptr<qt_signal_callback_t> qt_signal_callback_create(co
 
 static inline bool qt_signal_callback_invoke(const std::shared_ptr<qt_signal_callback_t> &callback, uint32_t param_count, zval *params)
 {
+@if($ctx->isQObjectDerived)
+    if (qt_runtime_is_shutdown_in_progress()) {
+        return false;
+    }
+@endif
+
     zval retval;
     ZVAL_NULL(&retval);
 
@@ -1238,6 +1254,10 @@ qt_should_delete_native(T *ptr, bool prevent_destroy)
         return false;
     }
 
+    if (qt_runtime_is_shutdown_in_progress()) {
+        return false;
+    }
+
     {
         std::lock_guard<std::mutex> lock(qt_native_registry_mutex<T>());
         if (qt_native_registry<T>().find(static_cast<void *>(ptr)) == qt_native_registry<T>().end()) {
@@ -1441,6 +1461,9 @@ PHP_QT_API void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativ
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(return_value);
     intern->native_ptr = native;
     qt_track_native_instance(intern->native_ptr);
+@if($ctx->isQObjectDerived)
+    qt_runtime_try_hook_about_to_quit();
+@endif
     intern->prevent_destroy = prevent_destroy;
 @if($ctx->tracksGeneratedNativeSubclass)
     intern->native_is_generated_subclass = false;
