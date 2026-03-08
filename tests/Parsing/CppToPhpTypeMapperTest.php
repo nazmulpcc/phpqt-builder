@@ -3,6 +3,8 @@
 declare(strict_types=1);
 
 use QtBuilder\Parsing\CppToPhpTypeMapper;
+use QtBuilder\Support\CppClassTypeResolver;
+use QtBuilder\Support\TypeResolutionContext;
 
 it('maps qt global enum-like names to int', function (): void {
     $mapper = new CppToPhpTypeMapper();
@@ -59,4 +61,28 @@ it('maps opengl raw input buffers to strings only for opengl owners', function (
         ->and($mapper->map('const void *', 'QByteArray'))->toBe('mixed')
         ->and($mapper->map('const GLvoid *', 'QByteArray'))->toBe('mixed')
         ->and($mapper->map('const GLubyte *', 'QByteArray'))->toBe('int');
+});
+
+it('maps qualified namespaced class types to their php class identity when resolver data is available', function (): void {
+    $mapper = new CppToPhpTypeMapper();
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'QNodeId', 'qualified_name' => 'Qt3DCore::QNodeId', 'module' => 'Qt3DCore'],
+    ]);
+    $context = TypeResolutionContext::fromNames('QRayCasterHit', 'Qt3DRender::QRayCasterHit');
+
+    expect($mapper->map('Qt3DCore::QNodeId', 'QRayCasterHit', $resolver, $context))->toBe('\\Qt\\Qt3DCore\\QNodeId')
+        ->and($mapper->map('const Qt3DCore::QNodeId &', 'QRayCasterHit', $resolver, $context))->toBe('\\Qt\\Qt3DCore\\QNodeId');
+});
+
+it('maps qsharedpointer aliases to the underlying php object type when alias metadata is available', function (): void {
+    $mapper = new CppToPhpTypeMapper();
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'QEntity', 'qualified_name' => 'Qt3DCore::QEntity', 'module' => 'Qt3DCore'],
+        ['name' => 'QAspectEngine', 'qualified_name' => 'Qt3DCore::QAspectEngine', 'module' => 'Qt3DCore'],
+    ]);
+    $context = TypeResolutionContext::fromNames('QAspectEngine', 'Qt3DCore::QAspectEngine');
+    $aliases = ['QEntityPtr' => 'Qt3DCore::QEntity'];
+
+    expect($mapper->map('QEntityPtr', 'QAspectEngine', $resolver, $context, $aliases))->toBe('\\Qt\\Qt3DCore\\QEntity')
+        ->and($mapper->map('const QEntityPtr &', 'QAspectEngine', $resolver, $context, $aliases))->toBe('\\Qt\\Qt3DCore\\QEntity');
 });

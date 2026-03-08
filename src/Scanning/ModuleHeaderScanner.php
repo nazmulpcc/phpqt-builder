@@ -5,10 +5,15 @@ declare(strict_types=1);
 namespace QtBuilder\Scanning;
 
 use QtBuilder\Qt\QtInstallation;
+use QtBuilder\Support\SmartPointerAliasResolver;
 use RuntimeException;
 
 class ModuleHeaderScanner
 {
+    public function __construct(
+        private readonly SmartPointerAliasResolver $smartPointerAliasResolver = new SmartPointerAliasResolver(),
+    ) {}
+
     /**
      * @return list<HeaderCandidate>
      */
@@ -40,6 +45,9 @@ class ModuleHeaderScanner
             }
 
             $parseHeader = $this->resolveParseHeader($publicHeader);
+            if ($this->smartPointerAliasResolver->resolve($parseHeader, $entry) !== null) {
+                continue;
+            }
             $candidates[] = new HeaderCandidate(
                 module: $module,
                 className: $entry,

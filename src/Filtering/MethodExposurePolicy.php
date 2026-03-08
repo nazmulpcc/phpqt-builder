@@ -8,7 +8,10 @@ use QtBuilder\Build\EnumHolderRegistry;
 use QtBuilder\CodeGen\ContainerBridge;
 use QtBuilder\CodeGen\TypeBridge;
 use QtBuilder\Parsing\CppToPhpTypeMapper;
+use QtBuilder\Support\CppClassTypeResolver;
+use QtBuilder\Support\CppName;
 use QtBuilder\Support\OpenGLNumericPointerArrayRegistry;
+use QtBuilder\Support\TypeResolutionContext;
 
 class MethodExposurePolicy
 {
@@ -51,6 +54,7 @@ class MethodExposurePolicy
         array $allowedClasses = [],
         bool $preferExternalDependencyReasons = false,
         ?EnumHolderRegistry $enumRegistry = null,
+        ?CppClassTypeResolver $classTypeResolver = null,
     ): array
     {
         $selectedMethods = [];
@@ -65,6 +69,8 @@ class MethodExposurePolicy
                 $classData['enum_names'],
             ), static fn(string $value): bool => $value !== ''))
             : [];
+        /** @var array<string, string> $smartPointerAliases */
+        $smartPointerAliases = is_array($classData['smart_pointer_aliases'] ?? null) ? $classData['smart_pointer_aliases'] : [];
 
         foreach ($classData['methods'] as $method) {
             $grouped[$method['name']][] = $method;
@@ -75,6 +81,7 @@ class MethodExposurePolicy
         $hasPublicDefaultConstructor = (bool) ($classData['has_public_default_constructor'] ?? true);
         $hasPublicDestructor = (bool) ($classData['has_public_destructor'] ?? true);
         $isAbstractClass = (bool) ($classData['is_abstract'] ?? false);
+        $resolutionContext = TypeResolutionContext::fromClassData($classData);
 
         foreach ($grouped as $methodName => $variants) {
             $result = $this->selectVariants(
@@ -91,6 +98,9 @@ class MethodExposurePolicy
                 $isAbstractClass,
                 $preferExternalDependencyReasons,
                 $enumRegistry,
+                $classTypeResolver,
+                $resolutionContext,
+                $smartPointerAliases,
             );
             foreach ($result['selected'] as $selectedVariant) {
                 $selectedMethods[] = $selectedVariant;
@@ -127,6 +137,9 @@ class MethodExposurePolicy
         bool $isAbstractClass,
         bool $preferExternalDependencyReasons = false,
         ?EnumHolderRegistry $enumRegistry = null,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
+        array $smartPointerAliases = [],
     ): array
     {
         if ($this->isFilteredMethodName($methodName)) {
@@ -152,9 +165,19 @@ class MethodExposurePolicy
             }
             $seenSignatures[$signature] = true;
 
-            $unsupportedReason = $this->unsupportedReason(
+            $normalizedVariant = $this->normalizeSpecialTypes(
                 $className,
                 $variant,
+                $flagAliases,
+                $enumNames,
+                $isAbstractClass,
+                $enumRegistry,
+                $resolutionContext,
+            );
+            $normalizedVariant = $this->canonicalizeVariantTypes($normalizedVariant, $classTypeResolver, $resolutionContext);
+            $unsupportedReason = $this->unsupportedReason(
+                $className,
+                $normalizedVariant,
                 $allowedClasses,
                 $flagAliases,
                 $enumNames,
@@ -165,6 +188,9 @@ class MethodExposurePolicy
                 $isAbstractClass,
                 $preferExternalDependencyReasons,
                 $enumRegistry,
+                $classTypeResolver,
+                $resolutionContext,
+                $smartPointerAliases,
             );
             if ($unsupportedReason !== null) {
                 $skipped[] = [
@@ -175,8 +201,7 @@ class MethodExposurePolicy
                 continue;
             }
 
-            $normalizedVariant = $this->normalizeSpecialTypes($className, $variant, $flagAliases, $enumNames, $isAbstractClass, $enumRegistry);
-            $dispatchSignature = $this->dispatchSignature($normalizedVariant);
+            $dispatchSignature = $this->dispatchSignature($normalizedVariant, $classTypeResolver, $resolutionContext);
             $score = $this->score($normalizedVariant);
             $existing = $selectedByDispatch[$dispatchSignature] ?? null;
 
@@ -266,6 +291,9 @@ class MethodExposurePolicy
         bool $isAbstractClass = false,
         bool $preferExternalDependencyReasons = false,
         ?EnumHolderRegistry $enumRegistry = null,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
+        array $smartPointerAliases = [],
     ): ?array
     {
         $access = (string) ($variant['access'] ?? 'unknown');
@@ -289,7 +317,7 @@ class MethodExposurePolicy
                 return ['code' => 'deleted_constructor', 'message' => 'Deleted constructors are not exposed.'];
             }
 
-            if ($this->isCopyConstructor($className, $variant)) {
+            if ($this->isCopyConstructor($className, $variant, $classTypeResolver, $resolutionContext)) {
                 return ['code' => 'copy_constructor_filtered', 'message' => 'Copy constructors are not exposed as PHP constructors.'];
             }
 
@@ -306,7 +334,7 @@ class MethodExposurePolicy
             }
         }
 
-        if (!$isCopyConstructible && $this->isCopyConstructor($className, $variant)) {
+        if (!$isCopyConstructible && $this->isCopyConstructor($className, $variant, $classTypeResolver, $resolutionContext)) {
             return ['code' => 'noncopyable_copy_constructor', 'message' => 'Copy constructor is disabled by the native class definition.'];
         }
 
@@ -320,7 +348,7 @@ class MethodExposurePolicy
         }
 
         $externalReturnDependency = $preferExternalDependencyReasons
-            ? $this->unavailableExternalClassDependency($returnType, $className, $allowedClasses)
+            ? $this->unavailableExternalClassDependency($returnType, $className, $allowedClasses, $classTypeResolver, $resolutionContext, $smartPointerAliases)
             : null;
         if ($externalReturnDependency !== null) {
             return [
@@ -333,7 +361,7 @@ class MethodExposurePolicy
             ];
         }
 
-        if (!$this->isSupportedType($returnType, $className, $allowedClasses, true, $flagAliases, $enumNames, $enumRegistry)) {
+        if (!$this->isSupportedType($returnType, $className, $allowedClasses, true, $flagAliases, $enumNames, $enumRegistry, $classTypeResolver, $resolutionContext, $smartPointerAliases)) {
             return ['code' => 'unsupported_return_type', 'message' => sprintf('Return type %s is not supported.', $returnType)];
         }
 
@@ -343,7 +371,7 @@ class MethodExposurePolicy
                 return ['code' => 'unsupported_output_parameter', 'message' => sprintf('Parameter type %s looks like an output parameter.', $type)];
             }
             $externalParameterDependency = $preferExternalDependencyReasons
-                ? $this->unavailableExternalClassDependency($type, $className, $allowedClasses)
+                ? $this->unavailableExternalClassDependency($type, $className, $allowedClasses, $classTypeResolver, $resolutionContext, $smartPointerAliases)
                 : null;
             if ($externalParameterDependency !== null) {
                 return [
@@ -355,7 +383,7 @@ class MethodExposurePolicy
                     ),
                 ];
             }
-            if (!$this->isSupportedType($type, $className, $allowedClasses, false, $flagAliases, $enumNames, $enumRegistry)) {
+            if (!$this->isSupportedType($type, $className, $allowedClasses, false, $flagAliases, $enumNames, $enumRegistry, $classTypeResolver, $resolutionContext, $smartPointerAliases)) {
                 return ['code' => 'unsupported_parameter_type', 'message' => sprintf('Parameter type %s is not supported.', $type)];
             }
         }
@@ -366,16 +394,24 @@ class MethodExposurePolicy
     /**
      * @param list<string> $allowedClasses
      */
-    private function unavailableExternalClassDependency(string $cppType, string $className, array $allowedClasses): ?string
+    private function unavailableExternalClassDependency(
+        string $cppType,
+        string $className,
+        array $allowedClasses,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
+        array $smartPointerAliases = [],
+    ): ?string
     {
-        $trimmed = trim($cppType);
+        $trimmed = trim($this->canonicalizeType($cppType, $classTypeResolver, $resolutionContext));
         if ($trimmed === '') {
             return null;
         }
 
         if ($this->containerBridge->isSupported($trimmed)) {
             foreach ($this->containerBridge->classRefs($trimmed) as $classRef) {
-                if ($classRef !== $className && !in_array($classRef, $allowedClasses, true)) {
+                $resolvedClassRef = $this->allowedClassLookupKey($classRef, $classTypeResolver, $resolutionContext);
+                if ($resolvedClassRef !== $className && !$this->allowedClassesContainType($allowedClasses, $resolvedClassRef)) {
                     return $classRef;
                 }
             }
@@ -383,12 +419,18 @@ class MethodExposurePolicy
             return null;
         }
 
-        $phpType = $this->typeMapper->map($trimmed, $className);
+        $phpType = $this->typeMapper->map($trimmed, $className, $classTypeResolver, $resolutionContext, $smartPointerAliases);
         if (!$this->typeBridge->isObjectType($phpType) || $phpType === $className) {
             return null;
         }
 
-        return in_array($phpType, $allowedClasses, true) ? null : $phpType;
+        $allowedLookup = $this->allowedClassLookupKey(
+            $this->resolveSmartPointerAliasTargetCppType($trimmed, $smartPointerAliases) ?? $trimmed,
+            $classTypeResolver,
+            $resolutionContext,
+        );
+
+        return $this->allowedClassesContainType($allowedClasses, $allowedLookup) ? null : $phpType;
     }
 
     /**
@@ -417,7 +459,12 @@ class MethodExposurePolicy
     /**
      * @param array<string, mixed> $variant
      */
-    private function isCopyConstructor(string $className, array $variant): bool
+    private function isCopyConstructor(
+        string $className,
+        array $variant,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
+    ): bool
     {
         if (!$this->isConstructor($className, $variant)) {
             return false;
@@ -438,7 +485,17 @@ class MethodExposurePolicy
             return false;
         }
 
-        return $this->normalizeSelfType($trimmed) === $className;
+        $normalized = $this->normalizeSelfType($trimmed);
+        $resolvedPhpClass = $classTypeResolver?->resolvePhpClassIdentity($normalized, $resolutionContext);
+        if ($resolvedPhpClass !== null) {
+            return $resolvedPhpClass === $className;
+        }
+
+        if (str_contains($normalized, '::')) {
+            $normalized = (string) substr($normalized, (int) strrpos($normalized, '::') + 2);
+        }
+
+        return $normalized === $className;
     }
 
     /**
@@ -495,9 +552,12 @@ class MethodExposurePolicy
         array $flagAliases = [],
         array $enumNames = [],
         ?EnumHolderRegistry $enumRegistry = null,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
+        array $smartPointerAliases = [],
     ): bool
     {
-        $trimmed = trim($cppType);
+        $trimmed = trim($this->canonicalizeType($cppType, $classTypeResolver, $resolutionContext));
         if ($trimmed === '') {
             return false;
         }
@@ -537,7 +597,11 @@ class MethodExposurePolicy
             return true;
         }
 
-        $phpType = $this->typeMapper->map($trimmed, $className);
+        if ($this->isResolvedForeignNestedEnumType($trimmed, $classTypeResolver, $resolutionContext)) {
+            return true;
+        }
+
+        $phpType = $this->typeMapper->map($trimmed, $className, $classTypeResolver, $resolutionContext, $smartPointerAliases);
         if (
             str_contains($trimmed, '::')
             && in_array($phpType, ['int', 'float', 'bool'], true)
@@ -560,7 +624,8 @@ class MethodExposurePolicy
             }
 
             foreach ($this->containerBridge->classRefs($trimmed) as $classRef) {
-                if ($classRef !== $className && !in_array($classRef, $allowedClasses, true)) {
+                $resolvedClassRef = $this->allowedClassLookupKey($classRef, $classTypeResolver, $resolutionContext);
+                if ($resolvedClassRef !== $className && !$this->allowedClassesContainType($allowedClasses, $resolvedClassRef)) {
                     return false;
                 }
             }
@@ -572,12 +637,147 @@ class MethodExposurePolicy
             return false;
         }
 
-        if ($phpType === $className) {
+        if ($phpType === $className || $phpType === '\\' . ($resolutionContext?->module !== null ? \QtBuilder\Support\ModuleNamespace::forQtModule($resolutionContext->module) . '\\' . $className : $className)) {
             return true;
         }
 
         if ($this->typeBridge->isObjectType($phpType)) {
-            return in_array($phpType, $allowedClasses, true);
+            return $this->allowedClassesContainType(
+                $allowedClasses,
+                $this->allowedClassLookupKey(
+                    $this->resolveSmartPointerAliasTargetCppType($trimmed, $smartPointerAliases) ?? $trimmed,
+                    $classTypeResolver,
+                    $resolutionContext,
+                ),
+            );
+        }
+
+        return false;
+    }
+
+    private function allowedClassLookupKey(
+        string $type,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
+    ): string {
+        $trimmed = trim($type);
+        if ($trimmed === '') {
+            return $trimmed;
+        }
+
+        if ($classTypeResolver === null) {
+            return $this->normalizedClassLikeLookupKey($trimmed);
+        }
+
+        return $this->normalizedClassLikeLookupKey(
+            $classTypeResolver->canonicalizeType($trimmed, $resolutionContext ?? TypeResolutionContext::fromNames($trimmed)),
+        );
+    }
+
+    /**
+     * @param list<string> $allowedClasses
+     */
+    private function allowedClassesContainType(array $allowedClasses, string $lookup): bool
+    {
+        if (in_array($lookup, $allowedClasses, true)) {
+            return true;
+        }
+
+        $bareLookup = CppName::unqualify($lookup);
+
+        return $bareLookup !== $lookup && in_array($bareLookup, $allowedClasses, true);
+    }
+
+    private function normalizedClassLikeLookupKey(string $type): string
+    {
+        $trimmed = trim($type);
+        if ($trimmed === '') {
+            return '';
+        }
+
+        if (preg_match('/^(?:const\s+)?(?<base>(?:::)?(?:[A-Za-z_][A-Za-z0-9_]*::)*[A-Za-z_][A-Za-z0-9_]*)(?:\s*[*&]\s*)*$/', $trimmed, $matches) === 1) {
+            return trim((string) ($matches['base'] ?? $trimmed));
+        }
+
+        return $trimmed;
+    }
+
+    /**
+     * @param array<string, string> $smartPointerAliases
+     */
+    private function resolveSmartPointerAliasTargetCppType(string $cppType, array $smartPointerAliases): ?string
+    {
+        if ($smartPointerAliases === []) {
+            return null;
+        }
+
+        if (preg_match('/^(?:const\s+)?(?<alias>[A-Za-z_][A-Za-z0-9_]*)\s*(?:[&*]\s*)?$/', trim($cppType), $matches) !== 1) {
+            return null;
+        }
+
+        $alias = trim((string) ($matches['alias'] ?? ''));
+        if ($alias === '') {
+            return null;
+        }
+
+        return $smartPointerAliases[$alias] ?? null;
+    }
+
+    private function isResolvedForeignNestedEnumType(
+        string $cppType,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
+    ): bool {
+        if ($classTypeResolver === null || $resolutionContext === null || !str_contains($cppType, '::')) {
+            return false;
+        }
+
+        $lastSeparator = (int) strrpos($cppType, '::');
+        if ($lastSeparator <= 0) {
+            return false;
+        }
+
+        $owner = substr($cppType, 0, $lastSeparator);
+        $member = substr($cppType, $lastSeparator + 2);
+        if ($owner === '' || $member === '') {
+            return false;
+        }
+
+        if (!$this->looksLikeForeignNestedEnumName($member)) {
+            return false;
+        }
+
+        return $classTypeResolver->resolvePhpClassIdentity($owner, $resolutionContext) !== null;
+    }
+
+    private function looksLikeForeignNestedEnumName(string $name): bool
+    {
+        if ($this->looksLikeInheritedOrGlobalEnumName($name)) {
+            return true;
+        }
+
+        foreach ([
+            'Type',
+            'Types',
+            'Mode',
+            'Modes',
+            'Flag',
+            'Flags',
+            'Policy',
+            'Format',
+            'Formats',
+            'Function',
+            'Functions',
+            'Face',
+            'Faces',
+            'Target',
+            'Targets',
+            'Filter',
+            'Filters',
+        ] as $suffix) {
+            if (str_ends_with($name, $suffix)) {
+                return true;
+            }
         }
 
         return false;
@@ -623,7 +823,8 @@ class MethodExposurePolicy
 
             if ($prefix === $className) {
                 return isset($flagAliases[$suffix])
-                    || in_array($suffix, $enumNames, true);
+                    || in_array($suffix, $enumNames, true)
+                    || $this->looksLikeInheritedOrGlobalEnumName($suffix);
             }
 
             return isset($flagAliases[$suffix])
@@ -658,12 +859,27 @@ class MethodExposurePolicy
         array $enumNames = [],
         bool $isAbstractClass = false,
         ?EnumHolderRegistry $enumRegistry = null,
+        ?TypeResolutionContext $resolutionContext = null,
     ): array
     {
-        $variant['return_type'] = $this->normalizeEnumType($className, (string) $variant['return_type'], $flagAliases, $enumNames, $enumRegistry);
+        $variant['return_type'] = $this->normalizeEnumType(
+            $className,
+            (string) $variant['return_type'],
+            $flagAliases,
+            $enumNames,
+            $enumRegistry,
+            $resolutionContext,
+        );
         $variant['parameters'] = array_map(
-            function (array $parameter) use ($className, $flagAliases, $enumNames, $enumRegistry): array {
-                $parameter['type'] = $this->normalizeEnumType($className, (string) ($parameter['type'] ?? ''), $flagAliases, $enumNames, $enumRegistry);
+            function (array $parameter) use ($className, $flagAliases, $enumNames, $enumRegistry, $resolutionContext): array {
+                $parameter['type'] = $this->normalizeEnumType(
+                    $className,
+                    (string) ($parameter['type'] ?? ''),
+                    $flagAliases,
+                    $enumNames,
+                    $enumRegistry,
+                    $resolutionContext,
+                );
 
                 return $parameter;
             },
@@ -687,23 +903,29 @@ class MethodExposurePolicy
         array $flagAliases = [],
         array $enumNames = [],
         ?EnumHolderRegistry $enumRegistry = null,
+        ?TypeResolutionContext $resolutionContext = null,
     ): string
     {
         $trimmed = trim($cppType);
+        $ownerQualifiedClass = $resolutionContext?->qualifiedClassName ?? $className;
 
         if ($this->isDisambiguationTagType($trimmed)) {
             return $trimmed;
         }
 
         if (isset($flagAliases[$trimmed])) {
-            return sprintf('QFlags<%s::%s>', $className, $flagAliases[$trimmed]);
+            return sprintf('QFlags<%s::%s>', $ownerQualifiedClass, $flagAliases[$trimmed]);
         }
 
         $qualifiedPrefix = $className . '::';
         if (str_starts_with($trimmed, $qualifiedPrefix)) {
             $nested = substr($trimmed, strlen($qualifiedPrefix));
             if ($nested !== '' && isset($flagAliases[$nested])) {
-                return sprintf('QFlags<%s::%s>', $className, $flagAliases[$nested]);
+                return sprintf('QFlags<%s::%s>', $ownerQualifiedClass, $flagAliases[$nested]);
+            }
+
+            if ($nested !== '') {
+                return sprintf('%s::%s', $ownerQualifiedClass, $nested);
             }
         }
 
@@ -724,6 +946,10 @@ class MethodExposurePolicy
             if ($prefix !== '' && $nested !== '' && isset($flagAliases[$nested])) {
                 return sprintf('QFlags<%s::%s>', $prefix, $flagAliases[$nested]);
             }
+
+            if ($prefix === $className && $nested !== '') {
+                return sprintf('%s::%s', $ownerQualifiedClass, $nested);
+            }
         }
 
         if (!$this->isEnumOrFlagType($trimmed, $className, $flagAliases, $enumNames)) {
@@ -743,7 +969,7 @@ class MethodExposurePolicy
             return $trimmed;
         }
 
-        return $className . '::' . $trimmed;
+        return $ownerQualifiedClass . '::' . $trimmed;
     }
 
     private function looksLikeInheritedOrGlobalEnumName(string $name): bool
@@ -978,7 +1204,11 @@ class MethodExposurePolicy
     /**
      * @param array<string, mixed> $variant
      */
-    private function dispatchSignature(array $variant): string
+    private function dispatchSignature(
+        array $variant,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
+    ): string
     {
         $parts = [
             $variant['name'],
@@ -986,10 +1216,56 @@ class MethodExposurePolicy
         ];
 
         foreach ($variant['parameters'] as $parameter) {
-            $parts[] = $this->typeMapper->map((string) ($parameter['type'] ?? ''), $variant['declaring_class'] ?? null);
+            $parts[] = $this->typeMapper->map(
+                (string) ($parameter['type'] ?? ''),
+                $variant['declaring_class'] ?? null,
+                $classTypeResolver,
+                $resolutionContext,
+            );
             $parts[] = (($parameter['has_default'] ?? false) === true) ? '1' : '0';
         }
 
         return implode('|', $parts);
+    }
+
+    /**
+     * @param array<string, mixed> $variant
+     * @return array<string, mixed>
+     */
+    private function canonicalizeVariantTypes(
+        array $variant,
+        ?CppClassTypeResolver $classTypeResolver,
+        ?TypeResolutionContext $resolutionContext,
+    ): array {
+        $variant['return_type'] = $this->canonicalizeType(
+            (string) ($variant['return_type'] ?? ''),
+            $classTypeResolver,
+            $resolutionContext,
+        );
+        $variant['parameters'] = array_map(
+            fn(array $parameter): array => [
+                ...$parameter,
+                'type' => $this->canonicalizeType(
+                    (string) ($parameter['type'] ?? ''),
+                    $classTypeResolver,
+                    $resolutionContext,
+                ),
+            ],
+            $variant['parameters'] ?? [],
+        );
+
+        return $variant;
+    }
+
+    private function canonicalizeType(
+        string $cppType,
+        ?CppClassTypeResolver $classTypeResolver,
+        ?TypeResolutionContext $resolutionContext,
+    ): string {
+        if ($classTypeResolver === null || $resolutionContext === null) {
+            return $cppType;
+        }
+
+        return $classTypeResolver->canonicalizeType($cppType, $resolutionContext);
     }
 }

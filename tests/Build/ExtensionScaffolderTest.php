@@ -233,6 +233,7 @@ it('includes qstring and qbytearray headers in generated source', function (): v
                     new MethodOverload(
                         declaringClass: 'QStringEmitter',
                         returnType: 'QString',
+                        smartPointerReturnTargetCppType: null,
                         parameters: [],
                         access: 'public',
                         isConst: true,
@@ -278,6 +279,7 @@ it('qualifies cross namespace qt types in generated stubs', function (): void {
                     new MethodOverload(
                         declaringClass: 'QGuiApplication',
                         returnType: 'QObject *',
+                        smartPointerReturnTargetCppType: null,
                         parameters: [],
                         access: 'public',
                         isConst: false,
@@ -325,12 +327,66 @@ it('emits qualified native cpp types for namespaced classes', function (): void 
 
     $generator->generate($phpClass, 'Qt\\Qt3DCore', $outputDir, ['QObject' => 'Qt\\Core']);
 
-    $header = (string) file_get_contents($outputDir . '/qt_qnode.h');
+    $header = (string) file_get_contents($outputDir . '/qt_qnode__qt3dcore.h');
 
     expect($header)->toContain(
         '#include <Qt3DCore/QNode>',
         'Qt3DCore::QNode *native_ptr;',
-        'qt_qnode_wrap_native(zval *return_value, Qt3DCore::QNode *native,',
+        'qt_qnode__qt3dcore_wrap_native(zval *return_value, Qt3DCore::QNode *native,',
+    );
+});
+
+it('emits distinct wrapper artifacts for colliding short names across modules', function (): void {
+    $outputDir = qt_temp_dir('qtbuilder-generator-');
+    $generator = new ExtensionGenerator();
+
+    $guiTransform = new PhpClass(
+        name: 'QTransform',
+        parent: null,
+        isAbstract: false,
+        isCopyConstructible: true,
+        hasPublicConstructor: true,
+        hasPublicDestructor: true,
+        properties: [],
+        methods: [],
+        signals: [],
+        isQObjectDerived: false,
+        nativeIncludes: ['<QtGui/QTransform>'],
+        nativeCppType: 'QTransform',
+    );
+
+    $qt3dTransform = new PhpClass(
+        name: 'QTransform',
+        parent: 'QComponent',
+        isAbstract: false,
+        isCopyConstructible: false,
+        hasPublicConstructor: true,
+        hasPublicDestructor: true,
+        properties: [],
+        methods: [],
+        signals: [],
+        isQObjectDerived: true,
+        nativeIncludes: ['<Qt3DCore/QTransform>'],
+        nativeCppType: 'Qt3DCore::QTransform',
+    );
+
+    $generator->generate($guiTransform, 'Qt\\Gui', $outputDir, []);
+    $generator->generate($qt3dTransform, 'Qt\\Qt3DCore', $outputDir, ['QComponent' => 'Qt\\Qt3DCore']);
+
+    $guiHeader = (string) file_get_contents($outputDir . '/qt_qtransform.h');
+    $qt3dHeader = (string) file_get_contents($outputDir . '/qt_qtransform__qt3dcore.h');
+
+    expect($guiHeader)->toContain(
+        '#include <QtGui/QTransform>',
+        'QTransform *native_ptr;',
+        'qt_ce_qtransform',
+    );
+
+    expect($qt3dHeader)->toContain(
+        '#include <Qt3DCore/QTransform>',
+        'Qt3DCore::QTransform *native_ptr;',
+        'qt_ce_qtransform__qt3dcore',
+        'qt_qtransform__qt3dcore_wrap_native',
     );
 });
 

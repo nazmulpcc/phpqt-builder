@@ -89,7 +89,7 @@ class ParamContext
             $this->cDefault = 'NULL';
             $this->isParsedAsZval = true;
             $this->ceVarName = $this->isObject && !$this->isUnion
-                ? $typeBridge->ceVarName($primaryType)
+                ? $classCtx->ceVarNameForPhpType($primaryType)
                 : null;
             $this->zppMacro = $this->isByRef
                 ? sprintf('Z_PARAM_ZVAL(%s)', $this->cVarName)

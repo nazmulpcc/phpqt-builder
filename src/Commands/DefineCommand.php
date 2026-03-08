@@ -11,6 +11,7 @@ use QtBuilder\Definition\PhpProperty;
 use QtBuilder\Parsing\ClassDefinitionBuilder;
 use QtBuilder\Parsing\ClangArgumentBuilder;
 use QtBuilder\Parsing\QtClassInspector;
+use QtBuilder\Support\CppClassTypeResolver;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
@@ -63,7 +64,13 @@ class DefineCommand extends Command
         }
 
         $builder = new ClassDefinitionBuilder();
-        $phpClass = $builder->build($classData);
+        $phpClass = $builder->build(
+            $classData,
+            CppClassTypeResolver::forSingleClass(
+                $className,
+                is_string($classData['qualified_name'] ?? null) ? (string) $classData['qualified_name'] : null,
+            ),
+        );
 
         if ($format === 'json') {
             $output->writeln($this->renderJson($phpClass));

@@ -8,6 +8,8 @@ use QtBuilder\Definition\MethodOverload;
 use QtBuilder\Definition\OverloadParameter;
 use QtBuilder\Definition\PhpMethod;
 use QtBuilder\Definition\PhpParameter;
+use QtBuilder\Parsing\CppToPhpTypeMapper;
+use QtBuilder\Support\TypeResolutionContext;
 
 /**
  * Prepared template context for a single PHP method.
@@ -19,6 +21,7 @@ class MethodContext
 {
     private readonly TypeBridge $typeBridge;
     private readonly string $className;
+    private readonly ClassContext $classCtx;
 
     /** PHP method name */
     public readonly string $name;
@@ -102,6 +105,7 @@ class MethodContext
     ) {
         $this->typeBridge = $typeBridge;
         $this->className = $classCtx->phpClassName;
+        $this->classCtx = $classCtx;
         $this->name = $method->name;
         $this->cppName = $method->cppName ?? $method->name;
         $this->access = $method->access;
@@ -129,7 +133,10 @@ class MethodContext
         // Return handling
         $primaryReturn = $this->primaryReturnType($method->returnType);
         $primaryCppReturn = $method->overloads[0]->returnType ?? $primaryReturn;
-        $this->returnStrategy = $typeBridge->returnStrategyForCpp($primaryReturn, $primaryCppReturn);
+        $primarySmartPointerTarget = $method->overloads[0]->smartPointerReturnTargetCppType ?? null;
+        $this->returnStrategy = $primarySmartPointerTarget !== null
+            ? 'smart_pointer_alias'
+            : $typeBridge->returnStrategyForCpp($primaryReturn, $primaryCppReturn);
         $this->returnMacro = $typeBridge->returnMacro($primaryReturn);
         $this->returnsObject = $typeBridge->isObjectType($primaryReturn);
 
@@ -302,8 +309,20 @@ class MethodContext
             $sourceIsZval = $mergedParam?->isParsedAsZval ?? false;
             $nullable = $param->hasDefault;
             $pairedCountVarName = null;
+            $effectivePhpType = $param->phpType;
+            if ($param->smartPointerTargetCppType !== null) {
+                $mapper = new CppToPhpTypeMapper();
+                $ownerClass = $overload->declaringClass !== '' ? $overload->declaringClass : $classCtx->nativeCppType;
+                $effectivePhpType = $mapper->map(
+                    $param->smartPointerTargetCppType,
+                    $this->ownerClassName($ownerClass),
+                    $classCtx->classTypeResolver,
+                    TypeResolutionContext::fromNames($this->ownerClassName($ownerClass), $ownerClass),
+                    $classCtx->smartPointerAliases,
+                );
+            }
             $targetCppType = $overload->access === 'protected' && !$this->isConstructor
-                ? $classCtx->typeBridge->accessShimBoundaryType($param->phpType, $param->cppType)
+                ? $classCtx->typeBridge->accessShimBoundaryType($effectivePhpType, $param->cppType)
                 : $param->cppType;
 
             if (
@@ -317,7 +336,7 @@ class MethodContext
             }
 
             $setup = $classCtx->typeBridge->nativeArgumentSetup(
-                phpType: $param->phpType,
+                phpType: $effectivePhpType,
                 cppType: $targetCppType,
                 sourceVarName: $sourceVarName,
                 nativeVarName: sprintf('_qt_arg_%d', $i),
@@ -344,6 +363,15 @@ class MethodContext
             'setup_lines' => $setupLines,
             'args' => $args,
         ];
+    }
+
+    private function ownerClassName(string $ownerClass): string
+    {
+        if (!str_contains($ownerClass, '::')) {
+            return $ownerClass;
+        }
+
+        return (string) substr($ownerClass, (int) strrpos($ownerClass, '::') + 2);
     }
 
     private function constructorNullableObjectFallbackExpr(OverloadContext $overload, int $paramIndex): ?string
@@ -428,8 +456,8 @@ class MethodContext
         if ($classCtx->phpClassName === 'QCoreApplication' && $this->name === 'postEvent') {
             $eventParam = $this->params[1] ?? null;
             if ($eventParam !== null) {
-                $eventStruct = $classCtx->typeBridge->objectStructName('QEvent');
-                $fromObj = $classCtx->typeBridge->fromObjFuncName('QEvent');
+                $eventStruct = $classCtx->objectStructNameForPhpType('QEvent');
+                $fromObj = $classCtx->fromObjFuncNameForPhpType('QEvent');
 
                 return [
                     sprintf('%s *_qt_posted_event = %s(Z_OBJ_P(%s));', $eventStruct, $fromObj, $eventParam->cVarName),
@@ -453,8 +481,8 @@ class MethodContext
                 continue;
             }
 
-            $objectStruct = $classCtx->typeBridge->objectStructName($phpClassName);
-            $fromObj = $classCtx->typeBridge->fromObjFuncName($phpClassName);
+            $objectStruct = $classCtx->objectStructNameForPhpType($phpClassName);
+            $fromObj = $classCtx->fromObjFuncNameForPhpType($phpClassName);
 
             $lines[] = sprintf('%s *_qt_owned_arg_%d = %s(Z_OBJ_P(%s));', $objectStruct, $paramIndex, $fromObj, $ownedParam->cVarName);
             $lines[] = sprintf('_qt_owned_arg_%d->prevent_destroy = true;', $paramIndex);
@@ -477,8 +505,8 @@ class MethodContext
                 continue;
             }
 
-            $objectStruct = $classCtx->typeBridge->objectStructName($phpClassName);
-            $fromObj = $classCtx->typeBridge->fromObjFuncName($phpClassName);
+            $objectStruct = $classCtx->objectStructNameForPhpType($phpClassName);
+            $fromObj = $classCtx->fromObjFuncNameForPhpType($phpClassName);
 
             $lines[] = sprintf('%s *_qt_owned_arg_%d = %s(Z_OBJ_P(%s));', $objectStruct, $paramIndex, $fromObj, $ownedParam->cVarName);
             $lines[] = sprintf('if (%s) {', $probeExpr);
@@ -574,7 +602,7 @@ class MethodContext
                 ? $this->typeBridge->dereferencedZvalExpr($mergedParam->cVarName)
                 : $mergedParam->cVarName;
 
-            return $this->typeBridge->zvalTypeMatchScoreExpr($matchVar, $param->phpType);
+            return $this->overloadObjectAwareMatchScoreExpr($matchVar, $param->phpType);
         }
 
         return $mergedParam->phpType === $param->phpType ? '500' : '-1';
@@ -594,5 +622,34 @@ class MethodContext
         $parts = explode('|', $returnType);
 
         return $parts[0];
+    }
+
+    private function overloadObjectAwareMatchScoreExpr(string $varName, string $phpType): string
+    {
+        if ($this->typeBridge->isUnionType($phpType)) {
+            $parts = array_values(array_filter(explode('|', $phpType), static fn(string $part): bool => $part !== ''));
+            if ($parts === []) {
+                return '-1';
+            }
+
+            $expr = $this->overloadObjectAwareMatchScoreExpr($varName, array_shift($parts));
+            foreach ($parts as $part) {
+                $expr = sprintf('qt_match_score_max(%s, %s)', $expr, $this->overloadObjectAwareMatchScoreExpr($varName, $part));
+            }
+
+            return $expr;
+        }
+
+        return match ($phpType) {
+            'int' => sprintf('((Z_TYPE_P(%s) == IS_LONG) ? 500 : -1)', $varName),
+            'float' => sprintf('((Z_TYPE_P(%s) == IS_DOUBLE) ? 500 : -1)', $varName),
+            'string' => sprintf('((Z_TYPE_P(%s) == IS_STRING) ? 500 : -1)', $varName),
+            'bool' => sprintf('(((Z_TYPE_P(%1$s) == IS_TRUE || Z_TYPE_P(%1$s) == IS_FALSE)) ? 500 : -1)', $varName),
+            'array' => sprintf('((Z_TYPE_P(%s) == IS_ARRAY) ? 500 : -1)', $varName),
+            'null' => sprintf('((Z_TYPE_P(%s) == IS_NULL) ? 500 : -1)', $varName),
+            'void' => '-1',
+            'mixed' => '0',
+            default => sprintf('qt_zval_object_match_score(%s, %s)', $varName, $this->classCtx->ceVarNameForPhpType($phpType)),
+        };
     }
 }

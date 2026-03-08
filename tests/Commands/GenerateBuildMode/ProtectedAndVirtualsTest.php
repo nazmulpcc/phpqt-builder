@@ -74,7 +74,7 @@ it('generates protected virtual methods with native trampolines', function (): v
         Assert::assertStringContainsString('static const char * const _qt_virtual_methods[] = {', $cpp);
         Assert::assertStringContainsString('"value",', $cpp);
         Assert::assertStringContainsString('_qt_has_virtual_override = qt_any_virtual_method_overridden_in_ce(', $cpp);
-        Assert::assertStringContainsString('bool _qt_use_trampoline = (_qt_actual_ce != qt_ce_QProtectedVirtualThing) && _qt_has_virtual_override;', $cpp);
+        Assert::assertStringContainsString('bool _qt_use_trampoline = (_qt_actual_ce != qt_ce_qprotectedvirtualthing) && _qt_has_virtual_override;', $cpp);
         Assert::assertStringContainsString('intern->native_ptr = qt_new_default_native<qt_access_QProtectedVirtualThing>();', $cpp);
         Assert::assertStringContainsString('intern->native_ptr = qt_new_default_native<qt_php_QProtectedVirtualThing>();', $cpp);
         Assert::assertStringContainsString('intern->native_is_virtual_trampoline = true;', $cpp);

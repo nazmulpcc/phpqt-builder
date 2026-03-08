@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace QtBuilder\Parsing;
 
+use QtBuilder\Support\CppClassTypeResolver;
+use QtBuilder\Support\ModuleNamespace;
 use QtBuilder\Support\OpenGLNumericPointerArrayRegistry;
+use QtBuilder\Support\TypeResolutionContext;
 
 /**
  * Maps C++ type strings (as reported by libclang) to PHP type names.
@@ -109,7 +112,13 @@ class CppToPhpTypeMapper
     /**
      * Map a raw C++ type string to a PHP type name.
      */
-    public function map(string $cppType, ?string $ownerClass = null): string
+    public function map(
+        string $cppType,
+        ?string $ownerClass = null,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
+        array $smartPointerAliases = [],
+    ): string
     {
         $trimmed = trim($cppType);
 
@@ -130,6 +139,19 @@ class CppToPhpTypeMapper
         }
 
         $normalized = $this->normalize($cppType);
+
+        $smartPointerTarget = $this->resolveSmartPointerAliasTarget($trimmed, $smartPointerAliases);
+        if ($smartPointerTarget !== null) {
+            return $this->map($smartPointerTarget, $ownerClass, $classTypeResolver, $resolutionContext, []);
+        }
+
+        if ($classTypeResolver !== null) {
+            $ownerPhpNamespace = $this->ownerPhpNamespace($ownerClass, $resolutionContext);
+            $resolvedPhpType = $classTypeResolver->resolvePhpType($trimmed, $resolutionContext, $ownerPhpNamespace);
+            if ($resolvedPhpType !== null) {
+                return $resolvedPhpType;
+            }
+        }
 
         // Direct scalar match
         if (isset(self::SCALAR_MAP[$normalized])) {
@@ -202,6 +224,28 @@ class CppToPhpTypeMapper
         return 'mixed';
     }
 
+    /**
+     * @param array<string, string> $smartPointerAliases
+     */
+    private function resolveSmartPointerAliasTarget(string $cppType, array $smartPointerAliases): ?string
+    {
+        if ($smartPointerAliases === []) {
+            return null;
+        }
+
+        $trimmed = trim($cppType);
+        if (preg_match('/^(?:const\s+)?(?<alias>[A-Za-z_][A-Za-z0-9_]*)\s*(?:[&*]\s*)?$/', $trimmed, $matches) !== 1) {
+            return null;
+        }
+
+        $alias = trim((string) ($matches['alias'] ?? ''));
+        if ($alias === '') {
+            return null;
+        }
+
+        return $smartPointerAliases[$alias] ?? null;
+    }
+
     private function isCharPointerArrayType(string $cppType): bool
     {
         $normalized = preg_replace('/\bconst\b/', '', $cppType) ?? $cppType;
@@ -252,6 +296,26 @@ class CppToPhpTypeMapper
         }
 
         return str_starts_with($ownerClass, 'QOpenGL');
+    }
+
+    private function ownerPhpNamespace(?string $ownerClass, ?TypeResolutionContext $resolutionContext): ?string
+    {
+        if ($resolutionContext?->module !== null) {
+            return ModuleNamespace::forQtModule($resolutionContext->module);
+        }
+
+        if (!is_string($ownerClass) || trim($ownerClass) === '') {
+            return null;
+        }
+
+        if (!str_starts_with($ownerClass, '\\')) {
+            return null;
+        }
+
+        $parts = explode('\\', ltrim($ownerClass, '\\'));
+        array_pop($parts);
+
+        return $parts !== [] ? implode('\\', $parts) : null;
     }
 
     /**

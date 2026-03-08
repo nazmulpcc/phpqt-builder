@@ -455,7 +455,7 @@ it('generates wrappers for supplemental class candidates discovered through incl
     expect($result)->toBeSuccessfulCommandResult()
         ->and($result['display'])->toContain('Supplemental class discovery: queued 1 new candidate(s).')
         ->and(is_file($outputDir . '/classes/qt_qabstractopenglfunctions.cpp'))->toBeTrue()
-        ->and((string) file_get_contents($outputDir . '/classes/qt_qabstractopenglfunctions.h'))->toContain('#include <qopenglversionfunctions.h>')
+        ->and((string) file_get_contents($outputDir . '/classes/qt_qabstractopenglfunctions.h'))->toContain('qopenglversionfunctions.h')
         ->and(is_file($outputDir . '/classes/qt_qopenglfunctions_1_0.cpp'))->toBeTrue()
         ->and(is_file($metadataDir . '/supplemental_candidates.json'))->toBeTrue();
 

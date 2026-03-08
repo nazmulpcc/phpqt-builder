@@ -18,6 +18,7 @@ readonly class GenerateTask
         public string $outputDir,
         public string $extensionName,
         public ?string $qtPath,
+        public ?string $candidateKey = null,
         public array $includePaths = [],
         public ?string $allowedClassesFile = null,
         public ?string $classNamespacesFile = null,

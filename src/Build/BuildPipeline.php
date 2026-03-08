@@ -11,6 +11,7 @@ use QtBuilder\Definition\PhpMethod;
 use QtBuilder\IO\FileWriteStats;
 use QtBuilder\Scanning\HeaderCandidate;
 use QtBuilder\Support\CppName;
+use QtBuilder\Support\GeneratedTypeIdentity;
 use QtBuilder\Support\ModuleNamespace;
 use Symfony\Component\Console\Helper\ProgressBar;
 use Symfony\Component\Console\Helper\Table;
@@ -418,6 +419,7 @@ class BuildPipeline
             $analysis->generatedClasses,
             $analysis->generatedClassParents,
             $analysis->generatedClassDependencies,
+            $this->generatedClassIds($analysis->generatedPhpClasses),
             $analysis->enumHolders,
             $analysis->requiresSignalConnectionSupport || $request->forceSignalConnectionSupport,
         );
@@ -752,12 +754,16 @@ class BuildPipeline
         $generatedClassModules = [];
         /** @var array<string, \QtBuilder\Definition\PhpClass> $generatedPhpClasses */
         $generatedPhpClasses = [];
+        /** @var array<string, string|null> $rawGeneratedClassParents */
+        $rawGeneratedClassParents = [];
+        /** @var array<string, list<string>> $rawGeneratedClassDependencies */
+        $rawGeneratedClassDependencies = [];
         /** @var array<string, int> $moduleGeneratedMethodTotals */
         $moduleGeneratedMethodTotals = [];
         $passes = 0;
         $candidateModules = [];
         foreach ($acceptedCandidates as $candidate) {
-            $candidateModules[$candidate->className] = $candidate->module;
+            $candidateModules[$candidate->identityKey()] = $candidate->module;
         }
 
         do {
@@ -782,9 +788,10 @@ class BuildPipeline
             $generatedPhpClasses = [];
 
             foreach ($currentCandidates as $candidate) {
-                $classData = $preparedClassDataByClass[$candidate->className] ?? null;
+                $candidateKey = $candidate->identityKey();
+                $classData = $preparedClassDataByClass[$candidateKey] ?? null;
                 if (!is_array($classData)) {
-                    $errorsByClass[$candidate->className] = [
+                    $errorsByClass[$candidateKey] = [
                         'module' => $candidate->module,
                         'class' => $candidate->className,
                         'header' => $candidate->parseHeader,
@@ -809,38 +816,38 @@ class BuildPipeline
                     $importedAbi !== null,
                     $enumRegistry,
                 );
-                unset($errorsByClass[$result->className]);
+                unset($errorsByClass[$candidateKey]);
 
                 if ($result->status === 'ok' && $result->phpClass !== null) {
-                    $generatedClasses[] = $result->className;
-                    $generatedPhpClasses[$result->className] = $this->withResolvedNativeIncludes(
+                    $generatedClasses[] = $candidateKey;
+                    $generatedPhpClasses[$candidateKey] = $this->withResolvedNativeIncludes(
                         $result->phpClass,
                         $candidate,
                     );
                     $payload = $result->toArray();
-                    $generatedClassParents[$result->className] = is_string($payload['parent_class'] ?? null)
+                    $rawGeneratedClassParents[$candidateKey] = is_string($payload['parent_class'] ?? null)
                         ? $payload['parent_class']
                         : null;
-                    $generatedClassDependencies[$result->className] = array_values(array_filter(
+                    $rawGeneratedClassDependencies[$candidateKey] = array_values(array_filter(
                         array_map(
                             static fn(mixed $value): string => is_string($value) ? $value : '',
                             $payload['class_dependencies'] ?? [],
                         ),
                         static fn(string $value): bool => $value !== '',
                     ));
-                    $generatedClassHeaders[$result->className] = $candidate->parseHeader;
-                    $generatedClassModules[$result->className] = $candidate->module;
-                    unset($skippedByClass[$result->className]);
+                    $generatedClassHeaders[$candidateKey] = $candidate->parseHeader;
+                    $generatedClassModules[$candidateKey] = $candidate->module;
+                    unset($skippedByClass[$candidateKey]);
                 } elseif ($result->status === 'skipped') {
-                    $skippedByClass[$result->className] = [
-                        'module' => $candidateModules[$result->className] ?? null,
+                    $skippedByClass[$candidateKey] = [
+                        'module' => $candidateModules[$candidateKey] ?? null,
                         'class' => $result->className,
                         'header' => $result->headerPath,
                         'reason_code' => $result->reasonCode,
                         'reason_message' => $result->reasonMessage,
                     ];
                 } else {
-                    $errorsByClass[$candidate->className] = [
+                    $errorsByClass[$candidateKey] = [
                         'module' => $candidate->module,
                         'class' => $candidate->className,
                         'header' => $candidate->parseHeader,
@@ -850,15 +857,15 @@ class BuildPipeline
                 }
 
                 if ($result->status === 'ok') {
-                    $skippedMethodsByClass[$result->className] = [];
+                    $skippedMethodsByClass[$candidateKey] = [];
                     foreach ($result->skippedMethods as $skippedMethod) {
-                        $skippedMethodsByClass[$result->className][] = [
-                            'module' => $candidateModules[$result->className] ?? null,
+                        $skippedMethodsByClass[$candidateKey][] = [
+                            'module' => $candidateModules[$candidateKey] ?? null,
                             'class' => $result->className,
                         ] + $skippedMethod;
                     }
                 } else {
-                    unset($skippedMethodsByClass[$result->className]);
+                    unset($skippedMethodsByClass[$candidateKey]);
                 }
 
                 $progressBar?->advance();
@@ -874,7 +881,7 @@ class BuildPipeline
 
             $nextCandidates = [];
             foreach ($currentCandidates as $candidate) {
-                if (in_array($candidate->className, $generatedClasses, true)) {
+                if (in_array($candidate->identityKey(), $generatedClasses, true)) {
                     $nextCandidates[] = $candidate;
                 }
             }
@@ -890,14 +897,16 @@ class BuildPipeline
         );
         foreach ($syntheticClasses['generated_php_classes'] as $className => $phpClass) {
             $generatedPhpClasses[$className] = $phpClass;
-            $generatedClassParents[$className] = $syntheticClasses['generated_class_parents'][$className] ?? null;
-            $generatedClassDependencies[$className] = $syntheticClasses['generated_class_dependencies'][$className] ?? [];
+            $rawGeneratedClassParents[$className] = $syntheticClasses['generated_class_parents'][$className] ?? null;
+            $rawGeneratedClassDependencies[$className] = $syntheticClasses['generated_class_dependencies'][$className] ?? [];
             $generatedClassHeaders[$className] = $syntheticClasses['generated_class_headers'][$className] ?? '';
             $generatedClassModules[$className] = $syntheticClasses['generated_class_modules'][$className] ?? 'QtCore';
             $generatedClasses[] = $className;
         }
         $generatedClasses = array_values(array_unique($generatedClasses));
         sort($generatedClasses);
+        $generatedClassParents = $this->resolveGeneratedClassParents($rawGeneratedClassParents, $generatedPhpClasses, $generatedClassModules);
+        $generatedClassDependencies = $this->resolveGeneratedClassDependencies($rawGeneratedClassDependencies, $generatedPhpClasses, $generatedClassModules, $generatedClassParents);
         $generatedPhpClasses = $this->normalizeGeneratedPhpClassesAgainstParentContracts($generatedPhpClasses);
 
         $requiresSignalConnectionSupport = false;
@@ -1006,6 +1015,8 @@ class BuildPipeline
                 nativeIncludes: $phpClass->nativeIncludes,
                 nativeAliasOf: $phpClass->nativeAliasOf,
                 nativeCppType: $phpClass->nativeCppType,
+                generationId: $phpClass->generationId,
+                smartPointerAliases: $phpClass->smartPointerAliases,
             );
         }
 
@@ -1028,16 +1039,13 @@ class BuildPipeline
             return $cache[$className] = [];
         }
 
-        $parentClassName = ltrim($phpClass->parent, '\\');
-        $parentShortName = str_contains($parentClassName, '\\')
-            ? (string) substr($parentClassName, (int) strrpos($parentClassName, '\\') + 1)
-            : $parentClassName;
-        $parentPhpClass = $generatedPhpClasses[$parentShortName] ?? null;
+        $parentKey = $this->resolveGeneratedClassKey($phpClass->parent, $generatedPhpClasses);
+        $parentPhpClass = $parentKey !== null ? ($generatedPhpClasses[$parentKey] ?? null) : null;
         if (!$parentPhpClass instanceof PhpClass) {
             return $cache[$className] = [];
         }
 
-        $methods = $this->collectAbstractPublicParentMethods($parentShortName, $generatedPhpClasses, $cache);
+        $methods = $this->collectAbstractPublicParentMethods($parentKey, $generatedPhpClasses, $cache);
         foreach ($parentPhpClass->methods as $method) {
             if ($method->isAbstractMethod && $method->access === 'public') {
                 $methods[$method->name] = $method;
@@ -1045,6 +1053,115 @@ class BuildPipeline
         }
 
         return $cache[$className] = $methods;
+    }
+
+    /**
+     * @param array<string, PhpClass> $generatedPhpClasses
+     * @param array<string, string> $generatedClassModules
+     * @param array<string, string|null> $rawParents
+     * @return array<string, string|null>
+     */
+    private function resolveGeneratedClassParents(array $rawParents, array $generatedPhpClasses, array $generatedClassModules): array
+    {
+        $resolved = [];
+        foreach ($rawParents as $classKey => $parentType) {
+            $resolved[$classKey] = is_string($parentType)
+                ? $this->resolveGeneratedClassKey($parentType, $generatedPhpClasses, $classKey, $generatedClassModules)
+                : null;
+        }
+
+        return $resolved;
+    }
+
+    /**
+     * @param array<string, PhpClass> $generatedPhpClasses
+     * @param array<string, string> $generatedClassModules
+     * @param array<string, list<string>> $rawDependencies
+     * @param array<string, string|null> $resolvedParents
+     * @return array<string, list<string>>
+     */
+    private function resolveGeneratedClassDependencies(array $rawDependencies, array $generatedPhpClasses, array $generatedClassModules, array $resolvedParents): array
+    {
+        $resolved = [];
+
+        foreach ($rawDependencies as $classKey => $dependencyTypes) {
+            $dependencies = [];
+            foreach ($dependencyTypes as $dependencyType) {
+                $resolvedKey = $this->resolveGeneratedClassKey($dependencyType, $generatedPhpClasses, $classKey, $generatedClassModules);
+                if ($resolvedKey === null || $resolvedKey === $classKey || $resolvedKey === ($resolvedParents[$classKey] ?? null)) {
+                    continue;
+                }
+
+                $dependencies[$resolvedKey] = true;
+            }
+
+            $resolved[$classKey] = array_keys($dependencies);
+            sort($resolved[$classKey]);
+        }
+
+        return $resolved;
+    }
+
+    /**
+     * @param array<string, PhpClass> $generatedPhpClasses
+     * @param array<string, string> $generatedClassModules
+     */
+    private function resolveGeneratedClassKey(string $type, array $generatedPhpClasses, ?string $ownerKey = null, array $generatedClassModules = []): ?string
+    {
+        $trimmed = ltrim(trim($type), '\\');
+        if ($trimmed === '') {
+            return null;
+        }
+
+        if (isset($generatedPhpClasses[$trimmed])) {
+            return $trimmed;
+        }
+
+        $ownerPhpClass = $ownerKey !== null ? ($generatedPhpClasses[$ownerKey] ?? null) : null;
+        $ownerNamespace = $ownerKey !== null ? $this->classPhpNamespaceForKey($ownerKey, $generatedClassModules) : null;
+        $matches = [];
+
+        foreach ($generatedPhpClasses as $classKey => $phpClass) {
+            $qualifiedCpp = $phpClass->nativeCppType ?? $phpClass->name;
+            $phpNamespace = $this->classPhpNamespaceForKey($classKey, $generatedClassModules);
+            $phpFqn = $phpNamespace . '\\' . $phpClass->name;
+
+            if ($trimmed === ltrim($phpFqn, '\\') || $trimmed === ($phpClass->nativeCppType ?? '') || $trimmed === $phpClass->name) {
+                $matches[$classKey] = true;
+                continue;
+            }
+
+            if ($ownerPhpClass instanceof PhpClass) {
+                $ownerQualified = $ownerPhpClass->nativeCppType ?? $ownerPhpClass->name;
+                if (
+                    ($phpClass->nativeCppType ?? '') !== ''
+                    && str_contains($ownerQualified, '::')
+                    && str_contains($phpClass->nativeCppType ?? '', '::')
+                    && \QtBuilder\Support\TypeResolutionContext::moduleForQualifiedName($ownerQualified) === \QtBuilder\Support\TypeResolutionContext::moduleForQualifiedName($phpClass->nativeCppType ?? '')
+                    && $trimmed === $phpClass->name
+                ) {
+                    $matches = [$classKey => true];
+                    break;
+                }
+            }
+        }
+
+        $resolvedKeys = array_keys($matches);
+        if (count($resolvedKeys) === 1) {
+            return $resolvedKeys[0];
+        }
+
+        return null;
+    }
+
+    /**
+     * @param array<string, string> $generatedClassModules
+     */
+    private function classPhpNamespaceForKey(string $classKey, array $generatedClassModules): string
+    {
+        $module = $generatedClassModules[$classKey] ?? \QtBuilder\Support\TypeResolutionContext::moduleForQualifiedName($classKey) ?? 'QtCore';
+
+        return $this->namespaceForModule($module);
     }
 
     private function withResolvedNativeIncludes(PhpClass $phpClass, HeaderCandidate $candidate): PhpClass
@@ -1069,6 +1186,8 @@ class BuildPipeline
             nativeIncludes: [$resolvedInclude],
             nativeAliasOf: $phpClass->nativeAliasOf,
             nativeCppType: $phpClass->nativeCppType,
+            generationId: $phpClass->generationId,
+            smartPointerAliases: $phpClass->smartPointerAliases,
         );
     }
 
@@ -1320,7 +1439,7 @@ class BuildPipeline
      * @param array<string, string> $classHeaders
      * @return array{
      *   file_write_stats: FileWriteStats,
-     *   classmap: list<array{class: string, header: string, files: list<string>}>
+     *   classmap: list<array{class: string, qualified_name: string, generation_id: string, header: string, files: list<string>}>
      * }
      */
     public function emitGeneratedClasses(
@@ -1335,6 +1454,19 @@ class BuildPipeline
         $fileWriteStats = new FileWriteStats();
         $classmap = [];
         $outputDir = $context->outputDir . '/classes';
+        $classNativeTypes = [];
+        $classMetadata = [];
+        foreach ($generatedPhpClasses as $name => $phpClass) {
+            if ($phpClass->nativeCppType !== null && $phpClass->nativeCppType !== '') {
+                $classNativeTypes[$name] = $phpClass->nativeCppType;
+            }
+            $classMetadata[$name] = [
+                'name' => $phpClass->name,
+                'namespace' => $classNamespaces[$name] ?? 'Qt\\Core',
+                'generation_id' => $phpClass->resolvedGenerationId(),
+                'qualified_name' => $phpClass->nativeCppType ?? $phpClass->name,
+            ];
+        }
         $this->removeStaleEnumHolderFiles($outputDir, $context->enumHolders);
 
         if ($generatedClasses !== []) {
@@ -1361,11 +1493,15 @@ class BuildPipeline
                     $classNamespaces[$className] ?? 'Qt\\Core',
                     $outputDir,
                     $classNamespaces,
+                    $classNativeTypes,
+                    $classMetadata,
                     false,
                 );
                 $fileWriteStats->merge($generator->lastWriteStats());
                 $classmap[] = [
-                    'class' => $className,
+                    'class' => $phpClass->name,
+                    'qualified_name' => $phpClass->nativeCppType ?? $phpClass->name,
+                    'generation_id' => $phpClass->resolvedGenerationId(),
                     'header' => $classHeaders[$className] ?? '',
                     'files' => $files,
                 ];
@@ -1533,7 +1669,7 @@ class BuildPipeline
         $payload = $importedAbi?->classNamespaces() ?? [];
 
         foreach ($acceptedCandidates as $candidate) {
-            $payload[$candidate->className] = $this->namespaceForModule($candidate->module);
+            $payload[$candidate->identityKey()] = $this->namespaceForModule($candidate->module);
         }
 
         return $payload;
@@ -1550,14 +1686,28 @@ class BuildPipeline
         $namespaces = [];
 
         foreach ($acceptedCandidates as $candidate) {
-            if (!isset($generatedSet[$candidate->className])) {
+            if (!isset($generatedSet[$candidate->identityKey()])) {
                 continue;
             }
 
-            $namespaces[$candidate->className] = $this->namespaceForModule($candidate->module);
+            $namespaces[$candidate->identityKey()] = $this->namespaceForModule($candidate->module);
         }
 
         return $namespaces;
+    }
+
+    /**
+     * @param array<string, PhpClass> $generatedPhpClasses
+     * @return array<string, string>
+     */
+    private function generatedClassIds(array $generatedPhpClasses): array
+    {
+        $ids = [];
+        foreach ($generatedPhpClasses as $classKey => $phpClass) {
+            $ids[$classKey] = $phpClass->resolvedGenerationId();
+        }
+
+        return $ids;
     }
 
     private function createBuildProgressBar(OutputInterface $output, int $total, string $formatName, string $label): ?ProgressBar

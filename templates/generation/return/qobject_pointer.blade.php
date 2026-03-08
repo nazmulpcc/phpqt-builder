@@ -8,13 +8,20 @@
 $overload = $method->overloads[0] ?? null;
 $returnClass = $method->returnType;
 $cppReturnType = $overload?->cppReturnType ?? ($returnClass . ' *');
+$isSmartPointerAlias = ($overload?->smartPointerReturnTargetCppType ?? null) !== null
+    || ($overload?->returnStrategy ?? null) === 'smart_pointer_alias';
+$returnClass = $isSmartPointerAlias
+    ? ($overload?->phpReturnType ?? $returnClass)
+    : $returnClass;
 $resultDeclType = $ctx->typeBridge->objectPointerReturnDeclarationType($cppReturnType, $returnClass);
 $writableResultExpr = $ctx->typeBridge->writableObjectPointerExpr($cppReturnType, $returnClass, '_result');
-$returnCe = $ctx->typeBridge->ceVarName($returnClass);
-$returnFromObj = $ctx->typeBridge->fromObjFuncName($returnClass);
-$returnStruct = $ctx->typeBridge->objectStructName($returnClass);
+$returnCe = $ctx->ceVarNameForPhpType($returnClass);
+$returnFromObj = $ctx->fromObjFuncNameForPhpType($returnClass);
+$returnStruct = $ctx->objectStructNameForPhpType($returnClass);
 $wrapFunc = $ctx->typeBridge->wrapNativeFuncName($returnClass);
-$isValueType = $ctx->typeBridge->isValueType($returnClass);
+$isValueType = $isSmartPointerAlias
+    ? false
+    : $ctx->typeBridge->isValueType($returnClass);
 $callPlan = $method->callPlan($ctx, $overload);
 $writebackLines = $method->writebackLines($ctx, $overload);
 $declaringClass = $overload?->declaringClass !== '' ? $overload->declaringClass : $ctx->nativeCppType;

@@ -16,6 +16,7 @@ readonly class ExtensionBuildContext
      * @param list<string> $generatedClasses
      * @param array<string, string|null> $generatedClassParents
      * @param array<string, list<string>> $generatedClassDependencies
+     * @param array<string, string> $generatedClassIds
      * @param list<EnumHolderDefinition> $enumHolders
      */
     public function __construct(
@@ -28,6 +29,7 @@ readonly class ExtensionBuildContext
         public array $generatedClasses = [],
         public array $generatedClassParents = [],
         public array $generatedClassDependencies = [],
+        public array $generatedClassIds = [],
         public array $enumHolders = [],
         public bool $includeSignalConnectionSupport = false,
         public array $linkModules = [],
@@ -43,6 +45,7 @@ readonly class ExtensionBuildContext
         array $generatedClasses,
         array $generatedClassParents = [],
         array $generatedClassDependencies = [],
+        array $generatedClassIds = [],
         array $enumHolders = [],
         bool $includeSignalConnectionSupport = false,
     ): self
@@ -57,6 +60,7 @@ readonly class ExtensionBuildContext
             $generatedClasses,
             $generatedClassParents,
             $generatedClassDependencies,
+            $generatedClassIds,
             $enumHolders,
             $includeSignalConnectionSupport,
             $this->linkModules,
@@ -104,7 +108,7 @@ readonly class ExtensionBuildContext
 
         return array_values(array_merge(
             array_map(
-                static fn(string $className): string => 'classes/' . $bridge->minitName($className) . '.h',
+                fn(string $className): string => 'classes/' . $bridge->minitNameForId($this->generatedClassId($className)) . '.h',
                 $this->orderedGeneratedClasses(),
             ),
             array_map(
@@ -123,7 +127,7 @@ readonly class ExtensionBuildContext
 
         return array_values(array_merge(
             array_map(
-                static fn(string $className): string => 'classes/' . $bridge->minitName($className) . '.cpp',
+                fn(string $className): string => 'classes/' . $bridge->minitNameForId($this->generatedClassId($className)) . '.cpp',
                 $this->orderedGeneratedClasses(),
             ),
             array_map(
@@ -142,7 +146,7 @@ readonly class ExtensionBuildContext
 
         return array_values(array_merge(
             array_map(
-                static fn(string $className): string => $bridge->minitName($className),
+                fn(string $className): string => $bridge->minitNameForId($this->generatedClassId($className)),
                 $this->orderedGeneratedClasses(),
             ),
             array_map(
@@ -242,6 +246,11 @@ readonly class ExtensionBuildContext
         }
 
         return $ordered;
+    }
+
+    private function generatedClassId(string $classKey): string
+    {
+        return $this->generatedClassIds[$classKey] ?? (new TypeBridge())->generationIdForQualifiedName($classKey);
     }
 
     /**

@@ -11,6 +11,7 @@ use QtBuilder\Parsing\ClassDefinitionBuilder;
 use QtBuilder\Parsing\ClangArgumentBuilder;
 use QtBuilder\Parsing\QtClassInspector;
 use QtBuilder\Qt\QtInstallationResolver;
+use QtBuilder\Support\CppClassTypeResolver;
 use QtBuilder\UnixSystemInformation;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -48,6 +49,7 @@ class GenerateCommand extends Command
             ->addOption('known-classes-file', null, InputOption::VALUE_REQUIRED, 'Path to a JSON file containing known class names for enum worker mode')
             ->addOption('class-namespaces-file', null, InputOption::VALUE_REQUIRED, 'Path to a JSON file containing class-to-namespace mappings')
             ->addOption('class-headers-file', null, InputOption::VALUE_REQUIRED, 'Path to a JSON file containing class-to-header mappings')
+            ->addOption('task-key', null, InputOption::VALUE_REQUIRED, 'Internal worker correlation key')
             ->addOption('worker-mode', null, InputOption::VALUE_REQUIRED, 'Internal worker mode for build pipelines', 'generate')
             ->addOption('build-mode', null, InputOption::VALUE_NONE, 'Emit machine-readable JSON and apply conservative filtering');
     }
@@ -87,7 +89,13 @@ class GenerateCommand extends Command
         }
 
         $builder = new ClassDefinitionBuilder();
-        $phpClass = $builder->build($classData);
+        $phpClass = $builder->build(
+            $classData,
+            CppClassTypeResolver::forSingleClass(
+                $className,
+                is_string($classData['qualified_name'] ?? null) ? (string) $classData['qualified_name'] : null,
+            ),
+        );
 
         $output->writeln(sprintf(
             '  Found %d methods (%d overloaded), %d properties',
@@ -180,8 +188,14 @@ class GenerateCommand extends Command
         }
 
         $service = new ClassGenerationService();
+        $taskKey = $input->getOption('task-key');
+        $taskKey = is_string($taskKey) && $taskKey !== '' ? $taskKey : null;
         if ($workerMode === 'facts') {
-            $output->writeln($this->encodeJson($service->prepareDiscoveryFacts($headerPath, $className, $includePaths)));
+            $payload = $service->prepareDiscoveryFacts($headerPath, $className, $includePaths);
+            if ($taskKey !== null) {
+                $payload['task_key'] = $taskKey;
+            }
+            $output->writeln($this->encodeJson($payload));
 
             return self::SUCCESS;
         }
@@ -224,7 +238,18 @@ class GenerateCommand extends Command
 
         if ($workerMode === 'generate' && $result->status === 'ok' && $result->phpClass !== null) {
             $generator = new ExtensionGenerator();
-            $files = $generator->generate($result->phpClass, $namespace, $outputDir, $classNamespaces);
+            $qualifiedName = is_string($result->phpClass->nativeCppType) && $result->phpClass->nativeCppType !== ''
+                ? $result->phpClass->nativeCppType
+                : $result->phpClass->name;
+            $classMetadata = [
+                $result->phpClass->name => [
+                    'name' => $result->phpClass->name,
+                    'namespace' => $namespace,
+                    'generation_id' => $result->phpClass->resolvedGenerationId(),
+                    'qualified_name' => $qualifiedName,
+                ],
+            ];
+            $files = $generator->generate($result->phpClass, $namespace, $outputDir, $classNamespaces, [], $classMetadata);
             $result = $result->withGeneratedFiles($files);
         }
 

@@ -82,7 +82,7 @@ it('uses nullable unions for optional qobject parameters', function (): void {
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qtree.cpp');
     
         Assert::assertStringContainsString('QNode|null $node = null', $stub);
-        Assert::assertStringContainsString('Z_PARAM_OBJECT_OF_CLASS_OR_NULL(node, qt_ce_QNode)', $cpp);
+        Assert::assertStringContainsString('Z_PARAM_OBJECT_OF_CLASS_OR_NULL(node, qt_ce_qnode)', $cpp);
         Assert::assertStringContainsString('(node != NULL && Z_TYPE_P(node) == IS_OBJECT ? qt_qnode_from_obj(Z_OBJ_P(node))->native_ptr : NULL)', $cpp);
 });
 
@@ -216,7 +216,7 @@ it('adds qobject property apis and handlers', function (): void {
         Assert::assertStringContainsString('ZEND_ACC_PUBLIC | ZEND_ACC_VIRTUAL', $cpp);
         Assert::assertStringContainsString('qt_qobject_handlers.read_property = qt_qobject_read_property;', $cpp);
         Assert::assertStringContainsString('qt_qobject_handlers.get_properties_for = qt_qobject_get_properties_for;', $cpp);
-        Assert::assertStringContainsString('object_init_ex(target, qt_ce_QVariant);', $cpp);
+        Assert::assertStringContainsString('object_init_ex(target, qt_ce_qvariant);', $cpp);
         Assert::assertStringContainsString('value.metaType().flags().testFlag(QMetaType::IsEnumeration)', $cpp);
         Assert::assertStringContainsString('ZVAL_LONG(target, (zend_long) value.toLongLong());', $cpp);
 });

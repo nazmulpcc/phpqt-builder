@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace QtBuilder\Definition;
 
+use QtBuilder\Support\GeneratedTypeIdentity;
+
 /**
  * The top-level PHP class definition produced by the ClassDefinitionBuilder.
  *
@@ -20,6 +22,7 @@ readonly class PhpClass
      * @param list<PhpMethod> $signals
      * @param list<PhpClassConstant> $classConstants
      * @param list<string> $nativeIncludes
+     * @param array<string, string> $smartPointerAliases
      */
     public function __construct(
         public string $name,
@@ -36,7 +39,18 @@ readonly class PhpClass
         public array $nativeIncludes = [],
         public ?string $nativeAliasOf = null,
         public ?string $nativeCppType = null,
+        public ?string $generationId = null,
+        public array $smartPointerAliases = [],
     ) {}
+
+    public function resolvedGenerationId(): string
+    {
+        if (is_string($this->generationId) && $this->generationId !== '') {
+            return $this->generationId;
+        }
+
+        return GeneratedTypeIdentity::fromNames($this->name, $this->nativeCppType)->generationId;
+    }
 
     /**
      * @return list<PhpMethod>
@@ -69,7 +83,7 @@ readonly class PhpClass
     }
 
     /**
-     * @return array{name: string, parent: ?string, is_abstract: bool, is_copy_constructible: bool, has_public_constructor: bool, has_public_destructor: bool, is_qobject_derived: bool, native_includes: list<string>, native_alias_of: ?string, native_cpp_type: ?string, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, signals: list<array<string, mixed>>, class_constants: list<array<string, mixed>>, summary: array{total_methods: int, public_methods: int, protected_methods: int, overloaded_methods: int, total_signals: int, total_properties: int, total_class_constants: int}}
+     * @return array{name: string, parent: ?string, is_abstract: bool, is_copy_constructible: bool, has_public_constructor: bool, has_public_destructor: bool, is_qobject_derived: bool, native_includes: list<string>, native_alias_of: ?string, native_cpp_type: ?string, generation_id: string, smart_pointer_aliases: array<string, string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, signals: list<array<string, mixed>>, class_constants: list<array<string, mixed>>, summary: array{total_methods: int, public_methods: int, protected_methods: int, overloaded_methods: int, total_signals: int, total_properties: int, total_class_constants: int}}
      */
     public function toArray(): array
     {
@@ -84,6 +98,8 @@ readonly class PhpClass
             'native_includes' => $this->nativeIncludes,
             'native_alias_of' => $this->nativeAliasOf,
             'native_cpp_type' => $this->nativeCppType,
+            'generation_id' => $this->resolvedGenerationId(),
+            'smart_pointer_aliases' => $this->smartPointerAliases,
             'properties' => array_map(
                 static fn(PhpProperty $p): array => $p->toArray(),
                 $this->properties,

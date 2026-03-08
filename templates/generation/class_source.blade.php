@@ -40,8 +40,8 @@
 #include <QMetaObject>
 #include <QThread>
 @endif
-@if($ctx->parentCeVarName)
-#include "{!! 'qt_' . strtolower($ctx->parentClassName) !!}.h"
+@if($ctx->parentCeVarName && $ctx->parentFilePrefix)
+#include "{!! $ctx->parentFilePrefix !!}.h"
 @endif
 @foreach($ctx->requiredIncludes as $include)
 #include "{!! $include !!}"
@@ -484,14 +484,14 @@ static void qt_qobject_variant_to_property_zval(zval *target, const QVariant &va
         return;
     }
 
-    object_init_ex(target, qt_ce_QVariant);
+    object_init_ex(target, {!! $ctx->ceVarNameForPhpType('QVariant') !!});
     qt_qvariant_object *_qt_variant_intern = qt_qvariant_from_obj(Z_OBJ_P(target));
     _qt_variant_intern->native_ptr = new QVariant(value);
 }
 
 static bool qt_qobject_zval_to_property_variant(zval *value, QVariant *out)
 {
-    if (Z_TYPE_P(value) == IS_OBJECT && qt_ce_QVariant != NULL && instanceof_function(Z_OBJCE_P(value), qt_ce_QVariant)) {
+    if (Z_TYPE_P(value) == IS_OBJECT && {!! $ctx->ceVarNameForPhpType('QVariant') !!} != NULL && instanceof_function(Z_OBJCE_P(value), {!! $ctx->ceVarNameForPhpType('QVariant') !!})) {
         qt_qvariant_object *_qt_variant_intern = qt_qvariant_from_obj(Z_OBJ_P(value));
         if (_qt_variant_intern->native_ptr == NULL) {
             *out = QVariant();

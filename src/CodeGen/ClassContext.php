@@ -10,6 +10,8 @@ use QtBuilder\Definition\PhpClass;
 use QtBuilder\Definition\PhpMethod;
 use QtBuilder\Definition\PhpParameter;
 use QtBuilder\Definition\PhpProperty;
+use QtBuilder\Support\CppClassTypeResolver;
+use QtBuilder\Support\TypeResolutionContext;
 
 /**
  * Prepares all template variables from a PhpClass IR and a TypeBridge.
@@ -25,6 +27,9 @@ class ClassContext
 
     /** PHP class name (e.g. "QWidget") */
     public readonly string $phpClassName;
+
+    /** Collision-safe internal generation id */
+    public readonly string $generationId;
 
     /** Zend symbol for ZEND_METHOD / ZEND_ME (e.g. "Qt_Widgets_QWidget") */
     public readonly string $zendClassSymbol;
@@ -76,6 +81,9 @@ class ClassContext
 
     /** Parent class name or null */
     public readonly ?string $parentClassName;
+
+    /** Parent generated file prefix or null */
+    public readonly ?string $parentFilePrefix;
 
     /** Whether the struct has a prevent_destroy field */
     public readonly bool $hasPreventDestroy;
@@ -133,6 +141,8 @@ class ClassContext
 
     /** Optional `using` alias that binds the PHP wrapper name to a C++ type */
     public readonly ?string $nativeAliasOf;
+    /** @var array<string, string> */
+    public readonly array $smartPointerAliases;
 
     /** MINIT function name (e.g. "qt_qwidget") */
     public readonly string $minitName;
@@ -176,6 +186,11 @@ class ClassContext
     /** @var array<string, string> */
     public readonly array $classNamespaces;
 
+    /** @var array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string}> */
+    public readonly array $classMetadata;
+
+    public readonly CppClassTypeResolver $classTypeResolver;
+
     /** Fully-qualified parent class name for stub generation or null */
     public readonly ?string $stubParentClassName;
 
@@ -201,11 +216,17 @@ class ClassContext
         string $namespace,
         TypeBridge $typeBridge,
         array $classNamespaces = [],
+        array $classNativeTypes = [],
+        array $classMetadata = [],
     ) {
         $this->typeBridge = $typeBridge;
         $this->phpNamespace = $namespace;
         $this->classNamespaces = $classNamespaces;
+        $this->classMetadata = $classMetadata;
+        $this->smartPointerAliases = $phpClass->smartPointerAliases;
+        $this->typeBridge->setTypeResolutionMetadata($namespace, $classMetadata, $this->smartPointerAliases);
         $this->phpClassName = $phpClass->name;
+        $this->generationId = $phpClass->resolvedGenerationId();
         $this->nativeCppType = $phpClass->nativeCppType ?? $phpClass->name;
         $this->nativeCtorOwnerType = $this->nativeCppType;
         $this->nativeCtorName = str_contains($this->nativeCppType, '::')
@@ -216,13 +237,13 @@ class ClassContext
 
         // Naming
         $this->zendClassSymbol = $typeBridge->zendClassSymbol($namespace, $phpClass->name);
-        $this->ceVarName = $typeBridge->ceVarName($phpClass->name);
-        $this->handlersVarName = $typeBridge->handlersVarName($phpClass->name);
-        $this->objectStructName = $typeBridge->objectStructName($phpClass->name);
-        $this->fromObjFunc = $typeBridge->fromObjFuncName($phpClass->name);
-        $this->zMacro = $typeBridge->zMacroName($phpClass->name);
-        $this->minitName = $typeBridge->minitName($phpClass->name);
-        $this->filePrefix = $typeBridge->minitName($phpClass->name);
+        $this->ceVarName = $typeBridge->ceVarNameForId($this->generationId);
+        $this->handlersVarName = $typeBridge->handlersVarNameForId($this->generationId);
+        $this->objectStructName = $typeBridge->objectStructNameForId($this->generationId);
+        $this->fromObjFunc = $typeBridge->fromObjFuncNameForId($this->generationId);
+        $this->zMacro = $typeBridge->zMacroNameForId($this->generationId);
+        $this->minitName = $typeBridge->minitNameForId($this->generationId);
+        $this->filePrefix = $typeBridge->minitNameForId($this->generationId);
         $this->headerGuard = strtoupper($this->filePrefix) . '_H';
         $nativeIncludes = $phpClass->nativeIncludes !== []
             ? array_values(array_unique($phpClass->nativeIncludes))
@@ -231,6 +252,7 @@ class ClassContext
         $this->qtInclude = $nativeIncludes[0];
         $this->extraQtIncludes = array_slice($nativeIncludes, 1);
         $this->nativeAliasOf = $phpClass->nativeAliasOf;
+        $this->classTypeResolver = $this->buildClassTypeResolver($phpClass, $classNativeTypes, $classMetadata);
 
         // Type classification
         $this->isValueType = $typeBridge->isValueType($phpClass->name);
@@ -242,8 +264,14 @@ class ClassContext
 
         // Parent
         $this->parentClassName = $phpClass->parent;
-        $this->parentCeVarName = $phpClass->parent !== null
-            ? $typeBridge->ceVarName($phpClass->parent)
+        $parentGenerationId = $phpClass->parent !== null
+            ? $this->resolveGenerationIdForPhpType($phpClass->parent)
+            : null;
+        $this->parentCeVarName = $parentGenerationId !== null
+            ? $typeBridge->ceVarNameForId($parentGenerationId)
+            : null;
+        $this->parentFilePrefix = $parentGenerationId !== null
+            ? $typeBridge->minitNameForId($parentGenerationId)
             : null;
         $this->stubParentClassName = $phpClass->parent !== null
             ? $typeBridge->stubType($phpClass->parent, false, $namespace, $classNamespaces)
@@ -251,7 +279,7 @@ class ClassContext
 
         // QObject types get wrap_native
         $this->wrapNativeFunc = !$this->isValueType
-            ? $typeBridge->wrapNativeFuncName($phpClass->name)
+            ? $typeBridge->wrapNativeFuncNameForId($this->generationId)
             : null;
 
         // Namespace for INIT_NS_CLASS_ENTRY
@@ -344,6 +372,142 @@ class ClassContext
 
         // Compute required cross-class includes
         $this->requiredIncludes = $this->computeRequiredIncludes($phpClass, $typeBridge);
+    }
+
+    /**
+     * @param array<string, string> $classNativeTypes
+     * @param array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string}> $classMetadata
+     */
+    private function buildClassTypeResolver(PhpClass $phpClass, array $classNativeTypes, array $classMetadata): CppClassTypeResolver
+    {
+        if ($classMetadata !== []) {
+            $classUniverse = [];
+            foreach ($classMetadata as $metadata) {
+                if (!is_array($metadata)) {
+                    continue;
+                }
+
+                $className = is_string($metadata['name'] ?? null) ? trim($metadata['name']) : '';
+                $qualifiedName = is_string($metadata['qualified_name'] ?? null) ? trim($metadata['qualified_name']) : '';
+                if ($className === '' || $qualifiedName === '') {
+                    continue;
+                }
+
+                $classUniverse[] = [
+                    'name' => $className,
+                    'qualified_name' => $qualifiedName,
+                    'module' => TypeResolutionContext::moduleForQualifiedName($qualifiedName),
+                ];
+            }
+
+            if ($classUniverse !== []) {
+                return new CppClassTypeResolver($classUniverse);
+            }
+        }
+
+        if ($phpClass->nativeCppType !== null && $phpClass->nativeCppType !== '') {
+            $classNativeTypes[$phpClass->name] = $phpClass->nativeCppType;
+        } elseif (!isset($classNativeTypes[$phpClass->name])) {
+            $classNativeTypes[$phpClass->name] = $phpClass->name;
+        }
+
+        $classUniverse = [];
+        foreach ($classNativeTypes as $className => $qualifiedName) {
+            if (!is_string($className) || !is_string($qualifiedName)) {
+                continue;
+            }
+
+            $className = trim($className);
+            $qualifiedName = trim($qualifiedName);
+            if ($className === '' || $qualifiedName === '') {
+                continue;
+            }
+
+            $classUniverse[] = [
+                'name' => $className,
+                'qualified_name' => $qualifiedName,
+                'module' => TypeResolutionContext::moduleForQualifiedName($qualifiedName),
+            ];
+        }
+
+        return new CppClassTypeResolver($classUniverse);
+    }
+
+    public function ceVarNameForPhpType(string $phpType): string
+    {
+        return $this->typeBridge->ceVarNameForId($this->resolveGenerationIdForPhpType($phpType));
+    }
+
+    public function objectStructNameForPhpType(string $phpType): string
+    {
+        return $this->typeBridge->objectStructNameForId($this->resolveGenerationIdForPhpType($phpType));
+    }
+
+    public function fromObjFuncNameForPhpType(string $phpType): string
+    {
+        return $this->typeBridge->fromObjFuncNameForId($this->resolveGenerationIdForPhpType($phpType));
+    }
+
+    public function wrapNativeFuncNameForPhpType(string $phpType): string
+    {
+        return $this->typeBridge->wrapNativeFuncNameForId($this->resolveGenerationIdForPhpType($phpType));
+    }
+
+    public function zMacroNameForPhpType(string $phpType): string
+    {
+        return $this->typeBridge->zMacroNameForId($this->resolveGenerationIdForPhpType($phpType));
+    }
+
+    private function resolveGenerationIdForPhpType(string $phpType): string
+    {
+        $type = ltrim(trim($phpType), '\\');
+        if ($type === '') {
+            return $this->generationId;
+        }
+
+        $candidate = $this->classMetadata[$type] ?? null;
+        if (is_array($candidate) && is_string($candidate['generation_id'] ?? null)) {
+            return $candidate['generation_id'];
+        }
+
+        $fqcn = str_contains($type, '\\') ? $type : $this->phpNamespace . '\\' . $type;
+        foreach ($this->classMetadata as $metadata) {
+            if (!is_array($metadata)) {
+                continue;
+            }
+
+            $namespace = is_string($metadata['namespace'] ?? null) ? $metadata['namespace'] : '';
+            $name = is_string($metadata['name'] ?? null) ? $metadata['name'] : '';
+            $generationId = is_string($metadata['generation_id'] ?? null) ? $metadata['generation_id'] : '';
+            if ($namespace === '' || $name === '' || $generationId === '') {
+                continue;
+            }
+
+            if ($fqcn === ltrim($namespace . '\\' . $name, '\\')) {
+                return $generationId;
+            }
+        }
+
+        $uniqueMatches = [];
+        foreach ($this->classMetadata as $metadata) {
+            if (!is_array($metadata)) {
+                continue;
+            }
+
+            $name = is_string($metadata['name'] ?? null) ? $metadata['name'] : '';
+            $generationId = is_string($metadata['generation_id'] ?? null) ? $metadata['generation_id'] : '';
+            if ($name !== $type || $generationId === '') {
+                continue;
+            }
+
+            $uniqueMatches[$generationId] = true;
+        }
+
+        if (count($uniqueMatches) === 1) {
+            return array_key_first($uniqueMatches);
+        }
+
+        return $this->typeBridge->generationIdForQualifiedName($type);
     }
 
     /**
@@ -452,7 +616,7 @@ class ClassContext
 
         $includes = [];
         foreach (array_keys($classes) as $className) {
-            $includes[] = sprintf('qt_%s.h', $typeBridge->classToLower($className));
+            $includes[] = $typeBridge->minitNameForId($this->resolveGenerationIdForPhpType($className)) . '.h';
         }
 
         sort($includes);

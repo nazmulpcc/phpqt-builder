@@ -15,6 +15,7 @@ readonly class OverloadParameter
         public string $name,
         public string $cppType,
         public bool $hasDefault,
+        public ?string $smartPointerTargetCppType = null,
         public bool $isReference = false,
         public bool $isConstReference = false,
         public bool $isNonConstReference = false,
@@ -26,7 +27,7 @@ readonly class OverloadParameter
     ) {}
 
     /**
-     * @return array{name: string, cpp_type: string, has_default: bool, is_reference: bool, is_const_reference: bool, is_non_const_reference: bool, is_rvalue_reference: bool, pointer_depth: int, is_writable_by_ref: bool, is_writable_by_ref_pointer: bool, is_writable_qt_string: bool}
+     * @return array{name: string, cpp_type: string, has_default: bool, smart_pointer_target_cpp_type: ?string, is_reference: bool, is_const_reference: bool, is_non_const_reference: bool, is_rvalue_reference: bool, pointer_depth: int, is_writable_by_ref: bool, is_writable_by_ref_pointer: bool, is_writable_qt_string: bool}
      */
     public function toArray(): array
     {
@@ -34,6 +35,7 @@ readonly class OverloadParameter
             'name' => $this->name,
             'cpp_type' => $this->cppType,
             'has_default' => $this->hasDefault,
+            'smart_pointer_target_cpp_type' => $this->smartPointerTargetCppType,
             'is_reference' => $this->isReference,
             'is_const_reference' => $this->isConstReference,
             'is_non_const_reference' => $this->isNonConstReference,

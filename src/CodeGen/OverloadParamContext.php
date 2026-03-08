@@ -6,6 +6,8 @@ namespace QtBuilder\CodeGen;
 
 use QtBuilder\Definition\OverloadParameter;
 use QtBuilder\Parsing\CppToPhpTypeMapper;
+use QtBuilder\Support\CppClassTypeResolver;
+use QtBuilder\Support\TypeResolutionContext;
 
 /**
  * Template context for a single C++ overload parameter.
@@ -39,6 +41,8 @@ class OverloadParamContext
     /** Raw pointer depth from the original C++ type */
     public readonly int $pointerDepth;
 
+    public readonly ?string $smartPointerTargetCppType;
+
     /** Whether this parameter uses the char** argv bridge */
     public readonly bool $isCharPointerArray;
 
@@ -55,6 +59,7 @@ class OverloadParamContext
         OverloadParameter $param,
         string $ownerClass,
         TypeBridge $typeBridge,
+        ?CppClassTypeResolver $classTypeResolver = null,
     ) {
         $this->name = $param->name !== '' ? $param->name : 'p' . spl_object_id($param);
         $this->cppType = $param->cppType;
@@ -64,12 +69,38 @@ class OverloadParamContext
         $this->isNonConstReference = $param->isNonConstReference;
         $this->isRvalueReference = $param->isRvalueReference;
         $this->pointerDepth = $param->pointerDepth;
+        $this->smartPointerTargetCppType = $param->smartPointerTargetCppType;
 
         $mapper = new CppToPhpTypeMapper();
-        $this->phpType = $mapper->map($param->cppType, $ownerClass);
+        $resolvedPhpType = $mapper->map(
+            $param->cppType,
+            $ownerClass,
+            $classTypeResolver,
+            TypeResolutionContext::fromNames($this->ownerClassName($ownerClass), $ownerClass),
+            $typeBridge->smartPointerAliases(),
+        );
+        if ($param->smartPointerTargetCppType !== null) {
+            $resolvedPhpType = $mapper->map(
+                $param->smartPointerTargetCppType,
+                $ownerClass,
+                $classTypeResolver,
+                TypeResolutionContext::fromNames($this->ownerClassName($ownerClass), $ownerClass),
+                $typeBridge->smartPointerAliases(),
+            );
+        }
+        $this->phpType = $resolvedPhpType;
         $this->isCharPointerArray = $this->phpType === 'array' && $param->pointerDepth >= 2;
         $this->isWritableByRef = $param->isWritableByRef;
         $this->isWritableByRefPointer = $param->isWritableByRefPointer;
         $this->isWritableQtString = $param->isWritableQtString;
+    }
+
+    private function ownerClassName(string $ownerClass): string
+    {
+        if (!str_contains($ownerClass, '::')) {
+            return $ownerClass;
+        }
+
+        return (string) substr($ownerClass, (int) strrpos($ownerClass, '::') + 2);
     }
 }

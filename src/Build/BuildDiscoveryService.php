@@ -14,7 +14,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class BuildDiscoveryService
 {
-    private const CLASS_CACHE_SCHEMA_VERSION = 4;
+    private const CLASS_CACHE_SCHEMA_VERSION = 5;
 
     public function __construct(
         private readonly GenerateWorkerPool $workerPool = new GenerateWorkerPool(__DIR__ . '/../..'),
@@ -134,6 +134,8 @@ class BuildDiscoveryService
                 static fn(HeaderCandidate $candidate): array => [
                     'module' => $candidate->module,
                     'class' => $candidate->className,
+                    'qualified_name' => $candidate->qualifiedClassName,
+                    'generation_id' => $candidate->resolvedGenerationId(),
                     'public_header' => $candidate->publicHeader,
                     'parse_header' => $candidate->parseHeader,
                 ],
@@ -242,12 +244,14 @@ class BuildDiscoveryService
             $className = is_string($candidate['class'] ?? null) ? $candidate['class'] : null;
             $publicHeader = is_string($candidate['public_header'] ?? null) ? $candidate['public_header'] : null;
             $parseHeader = is_string($candidate['parse_header'] ?? null) ? $candidate['parse_header'] : null;
+            $qualifiedName = is_string($candidate['qualified_name'] ?? null) ? $candidate['qualified_name'] : null;
+            $generationId = is_string($candidate['generation_id'] ?? null) ? $candidate['generation_id'] : null;
 
             if ($module === null || $className === null || $publicHeader === null || $parseHeader === null) {
                 continue;
             }
 
-            $acceptedCandidates[] = new HeaderCandidate($module, $className, $publicHeader, $parseHeader);
+            $acceptedCandidates[] = new HeaderCandidate($module, $className, $publicHeader, $parseHeader, $qualifiedName, $generationId);
         }
 
         $skippedClasses = array_values(array_filter(
@@ -351,7 +355,7 @@ class BuildDiscoveryService
         /** @var array<string, HeaderCandidate> $candidateMap */
         $candidateMap = [];
         foreach ($acceptedCandidates as $candidate) {
-            $candidateMap[$candidate->className] = $candidate;
+            $candidateMap[$candidate->identityKey()] = $candidate;
         }
 
         /** @var array<string, array{module: string|null, class: string, header: string, reason_code: string|null, reason_message: string|null}> $skippedByClass */
@@ -362,12 +366,19 @@ class BuildDiscoveryService
         $supplementalCandidates = [];
 
         do {
-            $knownClasses = array_fill_keys(array_merge(
+            $knownClassNames = array_merge(
                 array_keys($candidateMap),
                 array_keys($preparedClassDataByClass),
                 array_values($importedAvailableClasses),
                 array_keys($supplementalCandidates),
-            ), true);
+            );
+            foreach ($candidateMap as $candidate) {
+                $knownClassNames[] = $candidate->className;
+                if ($candidate->qualifiedClassName !== null) {
+                    $knownClassNames[] = $candidate->qualifiedClassName;
+                }
+            }
+            $knownClasses = array_fill_keys(array_values(array_unique($knownClassNames)), true);
 
             /** @var array<string, SupplementalClassCandidate> $queuedThisPass */
             $queuedThisPass = [];
@@ -408,8 +419,8 @@ class BuildDiscoveryService
                     continue;
                 }
 
-                $queuedThisPass[$supplemental->candidate->className] = $supplemental;
-                $knownClasses[$supplemental->candidate->className] = true;
+                $queuedThisPass[$supplemental->candidate->identityKey()] = $supplemental;
+                $knownClasses[$supplemental->candidate->identityKey()] = true;
             }
 
             if ($queuedThisPass === []) {
@@ -435,7 +446,7 @@ class BuildDiscoveryService
             );
 
             foreach ($prepared['accepted_candidates'] as $candidate) {
-                $candidateMap[$candidate->className] = $candidate;
+                $candidateMap[$candidate->identityKey()] = $candidate;
             }
 
             foreach ($prepared['prepared_class_data'] as $className => $classData) {
@@ -457,7 +468,7 @@ class BuildDiscoveryService
             }
 
             foreach ($queuedThisPass as $className => $candidate) {
-                $supplementalCandidates[$className] = $candidate;
+                $supplementalCandidates[$candidate->identityKey()] = $candidate;
             }
         } while ($errorsByClass === []);
 
@@ -503,7 +514,7 @@ class BuildDiscoveryService
     ): string {
         $payload = [];
         foreach ($acceptedCandidates as $candidate) {
-            $payload[$candidate->className] = $candidate->parseHeader;
+            $payload[$candidate->identityKey()] = $candidate->parseHeader;
         }
 
         $manifestPath = $metadataDir . '/' . $filename;
@@ -577,7 +588,7 @@ class BuildDiscoveryService
             $cachedPayload = $this->readClassStructureCache($metadataDir, $candidate, $includePaths);
             if ($cachedPayload === null) {
                 $cacheMisses[] = $candidate;
-                $cacheMissesByClass[$candidate->className] = $candidate;
+                $cacheMissesByClass[$candidate->identityKey()] = $candidate;
                 continue;
             }
 
@@ -625,7 +636,17 @@ class BuildDiscoveryService
             }
 
             foreach ($results as $result) {
-                $candidate = $cacheMissesByClass[$result->className] ?? null;
+                $candidate = $result->candidateKey !== null
+                    ? ($cacheMissesByClass[$result->candidateKey] ?? null)
+                    : null;
+                if ($candidate === null) {
+                    foreach ($cacheMissesByClass as $cachedCandidate) {
+                        if ($cachedCandidate->className === $result->className && $cachedCandidate->parseHeader === $result->headerPath) {
+                            $candidate = $cachedCandidate;
+                            break;
+                        }
+                    }
+                }
                 if ($candidate === null) {
                     continue;
                 }
@@ -645,6 +666,7 @@ class BuildDiscoveryService
                     'status' => $result->status,
                     'class' => $result->className,
                     'header' => $result->headerPath,
+                    'task_key' => $result->candidateKey,
                     'class_data' => $result->classData,
                     'reason_code' => $result->reasonCode,
                     'reason_message' => $result->reasonMessage,
@@ -703,7 +725,7 @@ class BuildDiscoveryService
 
         $viableCandidates = [];
         foreach ($acceptedCandidates as $candidate) {
-            $viableCandidates[$candidate->className] = $candidate;
+            $viableCandidates[$candidate->identityKey()] = $candidate;
         }
 
         /** @var array<string, array{module: string|null, class: string, header: string, reason_code: string|null, reason_message: string|null}> $skippedByClass */
@@ -852,6 +874,7 @@ class BuildDiscoveryService
                 outputDir: $outputDir,
                 extensionName: $extensionName,
                 qtPath: null,
+                candidateKey: $candidate->identityKey(),
                 includePaths: $includePaths,
                 workerMode: 'facts',
             );
@@ -875,7 +898,7 @@ class BuildDiscoveryService
 
     private function classCachePath(string $metadataDir, HeaderCandidate $candidate): string
     {
-        $safeClassName = preg_replace('/[^A-Za-z0-9_.-]/', '_', $candidate->className) ?? $candidate->className;
+        $safeClassName = preg_replace('/[^A-Za-z0-9_.-]/', '_', $candidate->resolvedGenerationId()) ?? $candidate->resolvedGenerationId();
 
         return $this->classCacheDir($metadataDir) . '/' . $safeClassName . '.json';
     }
@@ -932,6 +955,8 @@ class BuildDiscoveryService
             'schema_version' => self::CLASS_CACHE_SCHEMA_VERSION,
             'cache_key' => $this->classStructureCacheKey($candidate, $includePaths),
             'class' => $candidate->className,
+            'qualified_name' => $candidate->qualifiedClassName,
+            'generation_id' => $candidate->resolvedGenerationId(),
             'module' => $candidate->module,
             'public_header' => $candidate->publicHeader,
             'parse_header' => $candidate->parseHeader,
@@ -951,13 +976,15 @@ class BuildDiscoveryService
         $encoded = json_encode([
             'schema_version' => self::CLASS_CACHE_SCHEMA_VERSION,
             'class' => $candidate->className,
+            'qualified_name' => $candidate->qualifiedClassName,
+            'generation_id' => $candidate->resolvedGenerationId(),
             'module' => $candidate->module,
             'public_header' => $candidate->publicHeader,
             'parse_header' => $candidate->parseHeader,
             'include_paths' => array_values($includePaths),
         ], JSON_UNESCAPED_SLASHES);
 
-        return sha1($encoded !== false ? $encoded : $candidate->className);
+        return sha1($encoded !== false ? $encoded : $candidate->identityKey());
     }
 
     /**
@@ -977,27 +1004,33 @@ class BuildDiscoveryService
     ): void {
         $status = (string) ($payload['status'] ?? 'error');
         if ($status === 'ok' && is_array($payload['class_data'] ?? null)) {
-            $preparedCandidates[$candidate->className] = $candidate;
-            $preparedClassDataByClass[$candidate->className] = $payload['class_data'];
-            unset($skippedByClass[$candidate->className], $errorsByClass[$candidate->className]);
+            $resolvedCandidate = $candidate->withQualifiedClassName(
+                is_string($payload['class_data']['qualified_name'] ?? null)
+                    ? (string) $payload['class_data']['qualified_name']
+                    : null,
+            );
+            $candidateKey = $resolvedCandidate->identityKey();
+            $preparedCandidates[$candidateKey] = $resolvedCandidate;
+            $preparedClassDataByClass[$candidateKey] = $payload['class_data'];
+            unset($skippedByClass[$candidateKey], $errorsByClass[$candidateKey]);
 
             return;
         }
 
         if ($status === 'skipped') {
-            $skippedByClass[$candidate->className] = [
+            $skippedByClass[$candidate->identityKey()] = [
                 'module' => $candidate->module,
                 'class' => $candidate->className,
                 'header' => $candidate->parseHeader,
                 'reason_code' => is_string($payload['reason_code'] ?? null) ? $payload['reason_code'] : null,
                 'reason_message' => is_string($payload['reason_message'] ?? null) ? $payload['reason_message'] : null,
             ];
-            unset($errorsByClass[$candidate->className]);
+            unset($errorsByClass[$candidate->identityKey()]);
 
             return;
         }
 
-        $errorsByClass[$candidate->className] = [
+        $errorsByClass[$candidate->identityKey()] = [
             'module' => $candidate->module,
             'class' => $candidate->className,
             'header' => $candidate->parseHeader,
@@ -1039,7 +1072,7 @@ class BuildDiscoveryService
 
         foreach ($acceptedCandidates as $candidate) {
             $totals[$candidate->module] ??= 0;
-            $classData = $preparedClassDataByClass[$candidate->className] ?? null;
+            $classData = $preparedClassDataByClass[$candidate->identityKey()] ?? null;
             if (!is_array($classData)) {
                 continue;
             }
