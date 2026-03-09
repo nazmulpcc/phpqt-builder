@@ -145,14 +145,6 @@ class CppToPhpTypeMapper
             return $this->map($smartPointerTarget, $ownerClass, $classTypeResolver, $resolutionContext, []);
         }
 
-        if ($classTypeResolver !== null) {
-            $ownerPhpNamespace = $this->ownerPhpNamespace($ownerClass, $resolutionContext);
-            $resolvedPhpType = $classTypeResolver->resolvePhpType($trimmed, $resolutionContext, $ownerPhpNamespace);
-            if ($resolvedPhpType !== null) {
-                return $resolvedPhpType;
-            }
-        }
-
         // Direct scalar match
         if (isset(self::SCALAR_MAP[$normalized])) {
             return self::SCALAR_MAP[$normalized];
@@ -201,6 +193,14 @@ class CppToPhpTypeMapper
 
         if (str_starts_with($normalized, 'std::')) {
             return 'mixed';
+        }
+
+        if ($classTypeResolver !== null) {
+            $ownerPhpNamespace = $this->ownerPhpNamespace($ownerClass, $resolutionContext);
+            $resolvedPhpType = $classTypeResolver->resolvePhpType($trimmed, $resolutionContext, $ownerPhpNamespace);
+            if ($resolvedPhpType !== null) {
+                return $resolvedPhpType;
+            }
         }
 
         // Qualified nested types may be enums or nested classes.
