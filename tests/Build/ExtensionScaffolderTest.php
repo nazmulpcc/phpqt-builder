@@ -275,6 +275,52 @@ it('includes qstring and qbytearray headers in generated source', function (): v
     expect($source)->toContain('#include <QString>', '#include <QByteArray>');
 });
 
+it('includes covariant overload return type headers in generated source', function (): void {
+    $outputDir = qt_temp_dir('qtbuilder-generator-');
+    $generator = new ExtensionGenerator();
+    $phpClass = new PhpClass(
+        name: 'QBarLegendMarker',
+        parent: 'QLegendMarker',
+        isAbstract: false,
+        isCopyConstructible: true,
+        hasPublicConstructor: true,
+        hasPublicDestructor: true,
+        properties: [],
+        methods: [
+            new PhpMethod(
+                name: 'series',
+                access: 'public',
+                isStatic: false,
+                isSignal: false,
+                isSlot: false,
+                isAbstractMethod: false,
+                returnType: 'QAbstractSeries',
+                parameters: [],
+                overloads: [
+                    new MethodOverload(
+                        declaringClass: 'QBarLegendMarker',
+                        returnType: 'QAbstractBarSeries *',
+                        smartPointerReturnTargetCppType: null,
+                        parameters: [],
+                        access: 'public',
+                        isConst: true,
+                        isStatic: false,
+                        isVirtual: true,
+                        isPureVirtual: false,
+                    ),
+                ],
+            ),
+        ],
+        signals: [],
+    );
+
+    $generator->generate($phpClass, 'Qt\\Charts', $outputDir);
+
+    $source = (string) file_get_contents($outputDir . '/qt_qbarlegendmarker.cpp');
+
+    expect($source)->toContain('#include "qt_qabstractbarseries.h"');
+});
+
 it('makes generated qstring wrappers stringable', function (): void {
     $outputDir = qt_temp_dir('qtbuilder-generator-');
     $generator = new ExtensionGenerator();

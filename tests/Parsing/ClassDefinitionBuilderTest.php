@@ -181,6 +181,63 @@ it('canonicalizes foreign nested enum owners for namespaced classes', function (
         ->and($class->methods[1]->overloads[0]->parameters[0]->cppType)->toBe('const Qt3DRender::QTextureWrapMode::WrapMode &');
 });
 
+it('canonicalizes declaring classes for namespaced inherited signals', function (): void {
+    $builder = new ClassDefinitionBuilder();
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'QAbstractAnimation', 'qualified_name' => 'QtCore::QAbstractAnimation', 'module' => 'QtCore'],
+        ['name' => 'QAbstractAnimation', 'qualified_name' => 'Qt3DAnimation::QAbstractAnimation', 'module' => 'Qt3DAnimation'],
+        ['name' => 'QKeyframeAnimation', 'qualified_name' => 'Qt3DAnimation::QKeyframeAnimation', 'module' => 'Qt3DAnimation'],
+    ]);
+
+    $class = $builder->build([
+        'name' => 'QKeyframeAnimation',
+        'qualified_name' => 'Qt3DAnimation::QKeyframeAnimation',
+        'is_abstract' => false,
+        'is_struct' => false,
+        'bases' => ['QAbstractAnimation'],
+        'properties' => [],
+        'methods' => [],
+        'signals' => [
+            [
+                'name' => 'finished',
+                'declaring_class' => 'QAbstractAnimation',
+                'return_type' => 'void',
+                'access' => 'public',
+                'parameters' => [],
+                'is_static' => false,
+                'is_const' => false,
+                'is_virtual' => false,
+                'is_pure_virtual' => false,
+                'is_override' => false,
+                'is_signal' => true,
+                'is_slot' => false,
+            ],
+            [
+                'name' => 'stateChanged',
+                'declaring_class' => 'QAbstractAnimation',
+                'return_type' => 'void',
+                'access' => 'public',
+                'parameters' => [
+                    ['name' => 'newState', 'type' => 'QAbstractAnimation::State', 'has_default' => false],
+                    ['name' => 'oldState', 'type' => 'QAbstractAnimation::State', 'has_default' => false],
+                ],
+                'is_static' => false,
+                'is_const' => false,
+                'is_virtual' => false,
+                'is_pure_virtual' => false,
+                'is_override' => false,
+                'is_signal' => true,
+                'is_slot' => false,
+            ],
+        ],
+    ], $resolver);
+
+    expect($class->signals)->toHaveCount(2)
+        ->and($class->signals[0]->overloads[0]->declaringClass)->toBe('Qt3DAnimation::QAbstractAnimation')
+        ->and($class->signals[1]->overloads[0]->declaringClass)->toBe('Qt3DAnimation::QAbstractAnimation')
+        ->and($class->signals[1]->overloads[0]->parameters[0]->cppType)->toBe('Qt3DAnimation::QAbstractAnimation::State');
+});
+
 it('adds php string unions for qstring-like parameters when class types are available', function (): void {
     $builder = new ClassDefinitionBuilder();
     $resolver = new CppClassTypeResolver([
