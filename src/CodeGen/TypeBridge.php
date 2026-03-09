@@ -1533,13 +1533,14 @@ class TypeBridge
 
     public function signalMemberPointerExpr(string $declaringClass, string $methodName, OverloadContext $overload): string
     {
+        $declaringClass = $this->canonicalizeSignalMemberType($declaringClass);
         $callbackParams = $this->signalCallbackParams($overload->params);
         if (count($callbackParams) !== count($overload->params)) {
             return sprintf('&%s::%s', $declaringClass, $methodName);
         }
 
         $parameterTypes = array_map(
-            static fn(OverloadParamContext $param): string => $param->cppType,
+            fn(OverloadParamContext $param): string => $this->canonicalizeSignalMemberType($param->cppType),
             $overload->params,
         );
         $constQualifier = $overload->isConst ? ' const' : '';
@@ -1552,6 +1553,16 @@ class TypeBridge
             $declaringClass,
             $methodName,
         );
+    }
+
+    private function canonicalizeSignalMemberType(string $cppType): string
+    {
+        $trimmed = trim($cppType);
+        if ($trimmed === '' || $this->currentClassTypeResolver === null || $this->currentTypeResolutionContext === null) {
+            return $trimmed;
+        }
+
+        return $this->currentClassTypeResolver->canonicalizeType($trimmed, $this->currentTypeResolutionContext);
     }
 
     public function signalArgToZvalBlock(string $zvalVar, string $phpType, string $cppType, string $sourceExpr, ?int $paramIndex = null): string

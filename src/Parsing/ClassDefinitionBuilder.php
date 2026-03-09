@@ -318,9 +318,14 @@ class ClassDefinitionBuilder
             $classTypeResolver,
             $resolutionContext,
         );
+        $declaringClass = $this->canonicalizeCppType(
+            (string) ($variant['declaring_class'] ?? ''),
+            $classTypeResolver,
+            $resolutionContext,
+        );
 
         return new MethodOverload(
-            declaringClass: (string) ($variant['declaring_class'] ?? ''),
+            declaringClass: $declaringClass,
             returnType: $returnCppType,
             smartPointerReturnTargetCppType: $this->resolveSmartPointerTargetCppType($returnCppType, $smartPointerAliases),
             parameters: $params,

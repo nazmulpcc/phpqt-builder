@@ -201,6 +201,55 @@
             "dependencies": [
                 "QtCore"
             ]
+        },
+        "QtNetworkAuth": {
+            "extension_name": "qtnetworkauth",
+            "dependencies": [
+                "QtCore",
+                "QtNetwork"
+            ]
+        },
+        "QtHttpServer": {
+            "extension_name": "qthttpserver",
+            "dependencies": [
+                "QtCore",
+                "QtNetwork",
+                "QtWebSockets"
+            ]
+        },
+        "QtPdf": {
+            "extension_name": "qtpdf",
+            "dependencies": [
+                "QtCore",
+                "QtGui"
+            ]
+        },
+        "QtPdfWidgets": {
+            "extension_name": "qtpdfwidgets",
+            "dependencies": [
+                "QtCore",
+                "QtGui",
+                "QtWidgets",
+                "QtPdf"
+            ]
+        },
+        "QtCharts": {
+            "extension_name": "qtcharts",
+            "dependencies": [
+                "QtCore",
+                "QtGui",
+                "QtWidgets"
+            ]
+        },
+        "Qt3DAnimation": {
+            "extension_name": "qt3danimation",
+            "dependencies": [
+                "QtCore",
+                "QtGui",
+                "Qt3DCore",
+                "Qt3DRender",
+                "Qt3DExtras"
+            ]
         }
     }
 }

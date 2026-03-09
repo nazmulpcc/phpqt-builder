@@ -10,6 +10,7 @@ use QtBuilder\Definition\PhpClass;
 use QtBuilder\Definition\PhpMethod;
 use QtBuilder\Definition\PhpParameter;
 use QtBuilder\Definition\PhpProperty;
+use QtBuilder\Parsing\CppToPhpTypeMapper;
 use QtBuilder\Support\CppClassTypeResolver;
 use QtBuilder\Support\TypeResolutionContext;
 
@@ -571,6 +572,7 @@ class ClassContext
     private function computeRequiredIncludes(PhpClass $phpClass, TypeBridge $typeBridge): array
     {
         $classes = [];
+        $typeMapper = new CppToPhpTypeMapper();
 
         foreach ($phpClass->methods as $method) {
             $this->collectClassRefs($method->returnType, $typeBridge, $classes);
@@ -580,6 +582,12 @@ class ClassContext
             }
 
             foreach ($method->overloads as $overload) {
+                $this->collectClassRefs(
+                    $this->mapOverloadCppTypeToPhpType($phpClass, $overload->returnType, $typeMapper),
+                    $typeBridge,
+                    $classes,
+                );
+
                 foreach ($typeBridge->containerClassRefs($overload->returnType) as $classRef) {
                     $classes[$classRef] = true;
                 }
@@ -622,6 +630,17 @@ class ClassContext
         sort($includes);
 
         return $includes;
+    }
+
+    private function mapOverloadCppTypeToPhpType(PhpClass $phpClass, string $cppType, CppToPhpTypeMapper $typeMapper): string
+    {
+        return $typeMapper->map(
+            $cppType,
+            $phpClass->name,
+            $this->classTypeResolver,
+            TypeResolutionContext::fromNames($phpClass->name, $phpClass->nativeCppType ?? $phpClass->name),
+            $this->smartPointerAliases,
+        );
     }
 
     /**

@@ -1085,8 +1085,15 @@ class ClassGenerationService
         }
 
         $className = (string) ($classData['name'] ?? '');
+        $classTypeResolver = CppClassTypeResolver::fromPreparedClassData($preparedClassDataByClass + [$className => $classData]);
+        $resolutionContext = TypeResolutionContext::fromClassData($classData);
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
-        if ($parentClass === null || $parentClass === '' || $parentClass === $className || !in_array($parentClass, $allowedClasses, true)) {
+        if (
+            $parentClass === null
+            || $parentClass === ''
+            || $parentClass === $className
+            || !$this->allowedClassesContain($allowedClasses, $parentClass, $classTypeResolver, $resolutionContext)
+        ) {
             return $signals;
         }
 
@@ -1097,6 +1104,8 @@ class ClassGenerationService
             $allowedClasses,
             $preparedClassDataByClass,
             $visited,
+            $classTypeResolver,
+            $resolutionContext,
         );
 
         return [...$inheritedSignals, ...$signals];
@@ -1167,26 +1176,42 @@ class ClassGenerationService
         array $allowedClasses,
         array $preparedClassDataByClass,
         array &$visited,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
     ): array {
-        if (isset($visited[$className])) {
+        $lookupClass = $this->resolvedTypeLookupKey($className, $classTypeResolver, $resolutionContext);
+        if (isset($visited[$lookupClass])) {
             return [];
         }
 
-        $visited[$className] = true;
-        $classData = $preparedClassDataByClass[$className] ?? null;
+        $visited[$lookupClass] = true;
+        $classData = $this->preparedClassDataForType(
+            $lookupClass,
+            $preparedClassDataByClass,
+            $classTypeResolver,
+            $resolutionContext,
+        );
         if (!is_array($classData)) {
             return [];
         }
 
         $signals = [];
+        $classContext = TypeResolutionContext::fromClassData($classData);
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
-        if ($parentClass !== null && $parentClass !== '' && $parentClass !== $className && in_array($parentClass, $allowedClasses, true)) {
+        if (
+            $parentClass !== null
+            && $parentClass !== ''
+            && $parentClass !== $lookupClass
+            && $this->allowedClassesContain($allowedClasses, $parentClass, $classTypeResolver, $classContext)
+        ) {
             $signals = $this->collectInheritedSignalVariantsFromPrepared(
                 $parentClass,
                 $fallbackHeaderPath,
                 $allowedClasses,
                 $preparedClassDataByClass,
                 $visited,
+                $classTypeResolver,
+                $classContext,
             );
         }
 
@@ -1195,7 +1220,7 @@ class ClassGenerationService
             $allowedClasses,
             false,
             null,
-            CppClassTypeResolver::fromPreparedClassData($preparedClassDataByClass),
+            $classTypeResolver ?? CppClassTypeResolver::fromPreparedClassData($preparedClassDataByClass),
         );
         $signalFilter = $this->filterSignalCallbackMethods(
             $filtered['selected_methods'],
