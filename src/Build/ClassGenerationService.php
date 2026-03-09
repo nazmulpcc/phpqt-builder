@@ -3005,7 +3005,7 @@ class ClassGenerationService
             : ($isStruct ? 'public' : 'private');
         $lifecycleSegments = $classBody !== null
             ? $this->topLevelClassSegments($classBody, $defaultAccess)
-            : $this->lifecycleAccessBlocks($sourceContents);
+            : [];
 
         $hasExplicitConstructor = false;
         $hasPublicConstructor = false;
@@ -3087,7 +3087,7 @@ class ClassGenerationService
             : ($isStruct ? 'public' : 'private');
         $segments = $classBody !== null
             ? $this->topLevelClassSegments($classBody, $defaultAccess)
-            : $this->lifecycleAccessBlocks($resolved['contents']);
+            : [];
         $metadata = $this->constructorVariantMetadata($segments, $className);
         if ($metadata === []) {
             return $methods;
@@ -3218,7 +3218,7 @@ class ClassGenerationService
     private function extractClassBody(string $contents, string $className): ?array
     {
         $pattern = sprintf(
-            '/(?:^|\n)\s*(class|struct)\s+(?:[A-Za-z_][A-Za-z0-9_]*\s+)*%s\b(?:\s*:[^{]+)?\s*\{/s',
+            '/(?:^|\n)\s*(class|struct)\s+(?:[A-Za-z_][A-Za-z0-9_]*(?:\s*\([^)]*\))?\s+)*%s\b(?:\s+final)?(?:\s*:[^{]+)?\s*\{/s',
             preg_quote($className, '/'),
         );
 

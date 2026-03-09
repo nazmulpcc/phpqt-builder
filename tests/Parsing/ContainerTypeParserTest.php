@@ -29,6 +29,18 @@ it('recognizes common qt containers', function (): void {
         ->and($variantMap->keyType)->toBe('int')
         ->and($variantMap->valueType)->toBe('QVariant');
 
+    $multiHash = $parser->parse('QMultiHash<int, QString>');
+    expect($multiHash)->not->toBeNull();
+    expect($multiHash->kind)->toBe('multi_hash')
+        ->and($multiHash->keyType)->toBe('int')
+        ->and($multiHash->valueType)->toBe('QString');
+
+    $multiMap = $parser->parse('QMultiMap<QString, int>');
+    expect($multiMap)->not->toBeNull();
+    expect($multiMap->kind)->toBe('multi_map')
+        ->and($multiMap->keyType)->toBe('QString')
+        ->and($multiMap->valueType)->toBe('int');
+
     $actionList = $parser->parse('const QList<QAction *> &');
     expect($actionList)->not->toBeNull();
     expect($actionList->kind)->toBe('sequence')

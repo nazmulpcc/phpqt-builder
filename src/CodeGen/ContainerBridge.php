@@ -61,6 +61,11 @@ class ContainerBridge
                 && $this->isSupportedMapValue((string) $container->valueType);
         }
 
+        if ($container->isPairSequence()) {
+            return $this->isSupportedMapKey((string) $container->keyType)
+                && $this->isSupportedMapValue((string) $container->valueType);
+        }
+
         return false;
     }
 

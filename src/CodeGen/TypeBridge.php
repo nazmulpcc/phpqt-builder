@@ -1470,6 +1470,10 @@ class TypeBridge
             );
         }
 
+        if ($base === 'qint128' || $base === 'quint128') {
+            return $this->int128ToPhpReturnBlock($base, $varName, $isPointer);
+        }
+
         if ($base === 'char') {
             if ($this->isPointerType($cppType)) {
                 return sprintf('RETURN_STRING(%s)', $varName);
@@ -1643,6 +1647,19 @@ class TypeBridge
                 );
             }
 
+            if ($base === 'qint128' || $base === 'quint128') {
+                $valueExpr = $this->isPointerType($cppType)
+                    ? sprintf('(%s != NULL ? *%s : (%s)0)', $sourceExpr, $sourceExpr, $base)
+                    : $sourceExpr;
+                $decimalVar = $paramIndex === null
+                    ? '_qt_decimal'
+                    : sprintf('_qt_decimal_%d', $paramIndex);
+                $lines = $this->int128ToDecimalBytesLines($valueExpr, $base === 'qint128', $decimalVar);
+                $lines[] = sprintf('ZVAL_STRINGL(%s, %s.constData(), %s.size());', $zvalVar, $decimalVar, $decimalVar);
+
+                return implode("\n    ", $lines);
+            }
+
             if ($base === 'char') {
                 if ($this->isPointerType($cppType)) {
                     return sprintf(
@@ -1814,7 +1831,9 @@ class TypeBridge
 
         return $container->isSequence()
             ? $this->sequenceContainerToPhpBlock($zvalPtrExpr, $container, $sourceExpr, $suffix)
-            : $this->mapContainerToPhpBlock($zvalPtrExpr, $container, $sourceExpr, $suffix);
+            : ($container->isPairSequence()
+                ? $this->pairSequenceContainerToPhpBlock($zvalPtrExpr, $container, $sourceExpr, $suffix)
+                : $this->mapContainerToPhpBlock($zvalPtrExpr, $container, $sourceExpr, $suffix));
     }
 
     // ------------------------------------------------------------------
@@ -2255,6 +2274,10 @@ class TypeBridge
             return sprintf('std::filesystem::path(std::string(ZSTR_VAL(%s), ZSTR_LEN(%s)))', $varName, $varName);
         }
 
+        if ($base === 'qint128' || $base === 'quint128') {
+            return $this->phpStringToInt128Expr($base, $varName);
+        }
+
         if ($base === 'void' || $base === 'GLvoid' || $base === 'GLubyte') {
             return sprintf('(%s)ZSTR_VAL(%s)', trim($cppType), $varName);
         }
@@ -2376,6 +2399,10 @@ class TypeBridge
             return $this->phpArrayToSequenceLines($container, $sourceVarName, $nativeVarName, $sourceIsZval, $failureStatement);
         }
 
+        if ($container->isPairSequence()) {
+            return $this->phpArrayToPairSequenceLines($container, $sourceVarName, $nativeVarName, $sourceIsZval, $failureStatement);
+        }
+
         return $this->phpArrayToMapLines($container, $sourceVarName, $nativeVarName, $sourceIsZval, $failureStatement);
     }
 
@@ -2491,7 +2518,7 @@ class TypeBridge
             return preg_replace('/<.*>$/', '<' . $this->localContainerNativeType($arguments[0]) . '>', $rawType) ?? $rawType;
         }
 
-        if (($container->kind === 'map' || $container->kind === 'hash') && count($arguments) === 2) {
+        if (($container->kind === 'map' || $container->kind === 'hash' || $container->isPairSequence()) && count($arguments) === 2) {
             return preg_replace(
                 '/<.*>$/',
                 '<' . $this->localContainerNativeType($arguments[0]) . ', ' . $this->localContainerNativeType($arguments[1]) . '>',
@@ -2656,6 +2683,108 @@ class TypeBridge
         return $lines;
     }
 
+    /**
+     * @return list<string>
+     */
+    private function phpArrayToPairSequenceLines(ContainerType $container, string $sourceVarName, string $nativeVarName, bool $sourceIsZval, string $failureStatement): array
+    {
+        $containerType = $this->canonicalContainerNativeType($container);
+        $keyType = (string) $container->keyType;
+        $valueType = (string) $container->valueType;
+        $keyPhpType = $this->containerBridge()->elementPhpType($keyType);
+        $valuePhpType = $this->containerBridge()->elementPhpType($valueType);
+        $valueNullable = $this->isPointerType($valueType);
+        $pairVar = $nativeVarName . '_pair';
+        $keyEntryVar = $nativeVarName . '_key_entry';
+        $valueEntryVar = $nativeVarName . '_value_entry';
+        $keyVar = $nativeVarName . '_key';
+        $valueVar = $nativeVarName . '_value';
+        $stringVar = $nativeVarName . '_str';
+
+        $lines = [
+            sprintf('%s %s;', $containerType, $nativeVarName),
+        ];
+        if ($sourceIsZval) {
+            $lines[] = sprintf('    if (Z_TYPE_P(%s) != IS_ARRAY) {', $sourceVarName);
+            $lines[] = '        zend_type_error("Expected PHP array for Qt container conversion.");';
+            $lines[] = '        ' . $failureStatement;
+            $lines[] = '    }';
+        } else {
+            $lines[] = sprintf('if (%s != NULL) {', $sourceVarName);
+        }
+
+        $lines[] = sprintf('    HashTable *%s_ht = Z_ARRVAL_P(%s);', $nativeVarName, $sourceVarName);
+        $lines[] = sprintf('    zval *%s;', $pairVar);
+        $lines[] = sprintf('    ZEND_HASH_FOREACH_VAL(%s_ht, %s) {', $nativeVarName, $pairVar);
+        $lines[] = sprintf('        if (Z_TYPE_P(%s) != IS_ARRAY) {', $pairVar);
+        $lines[] = '            zend_type_error("Expected array entries to be [key, value] pairs.");';
+        $lines[] = '            ' . $failureStatement;
+        $lines[] = '        }';
+        $lines[] = sprintf('        zval *%s = zend_hash_index_find(Z_ARRVAL_P(%s), 0);', $keyEntryVar, $pairVar);
+        $lines[] = sprintf('        zval *%s = zend_hash_index_find(Z_ARRVAL_P(%s), 1);', $valueEntryVar, $pairVar);
+        $lines[] = sprintf('        if (%s == NULL || %s == NULL) {', $keyEntryVar, $valueEntryVar);
+        $lines[] = '            zend_type_error("Each pair entry must contain key at index 0 and value at index 1.");';
+        $lines[] = '            ' . $failureStatement;
+        $lines[] = '        }';
+
+        if ($keyPhpType === 'int') {
+            $lines[] = sprintf('        if (!(%s)) {', $this->zvalTypeMatchExpr($keyEntryVar, 'int'));
+            $lines[] = '            zend_type_error("Expected pair key type int.");';
+            $lines[] = '            ' . $failureStatement;
+            $lines[] = '        }';
+            $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($keyType), $keyVar, $this->zvalToNativeExpr('int', $keyType, $keyEntryVar, false));
+        } else {
+            $lines[] = sprintf('        if (Z_TYPE_P(%s) != IS_STRING) {', $keyEntryVar);
+            $lines[] = '            zend_type_error("Expected pair key type string.");';
+            $lines[] = '            ' . $failureStatement;
+            $lines[] = '        }';
+            $lines[] = sprintf('        zend_string *%s = zval_get_string(%s);', $stringVar, $keyEntryVar);
+            $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($keyType), $keyVar, $this->phpStringToNativeExpr($keyType, $stringVar));
+            $lines[] = sprintf('        zend_string_release(%s);', $stringVar);
+        }
+
+        if ($valueType === 'QVariant') {
+            $lines[] = sprintf('        QVariant %s;', $valueVar);
+            $lines[] = sprintf('        if (!qt_zval_to_variant(%s, &%s)) {', $valueEntryVar, $valueVar);
+            $lines[] = '            ' . $failureStatement;
+            $lines[] = '        }';
+        } elseif ($valuePhpType === 'string') {
+            $lines[] = sprintf('        if (Z_TYPE_P(%s) != IS_STRING) {', $valueEntryVar);
+            $lines[] = '            zend_type_error("Expected pair value type string.");';
+            $lines[] = '            ' . $failureStatement;
+            $lines[] = '        }';
+            $lines[] = sprintf('        zend_string *%s = zval_get_string(%s);', $stringVar, $valueEntryVar);
+            $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($valueType), $valueVar, $this->phpStringToNativeExpr($valueType, $stringVar));
+            $lines[] = sprintf('        zend_string_release(%s);', $stringVar);
+        } elseif (in_array($valuePhpType, ['int', 'float', 'bool'], true)) {
+            $lines[] = sprintf('        if (!(%s)) {', $this->zvalTypeMatchExpr($valueEntryVar, $valuePhpType));
+            $lines[] = sprintf('            zend_type_error("Expected pair value type %s.");', $valuePhpType);
+            $lines[] = '            ' . $failureStatement;
+            $lines[] = '        }';
+            $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($valueType), $valueVar, $this->zvalToNativeExpr($valuePhpType, $valueType, $valueEntryVar, false));
+        } else {
+            $valueCheck = $valueNullable
+                ? sprintf('(Z_TYPE_P(%1$s) == IS_NULL || (Z_TYPE_P(%1$s) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s), %2$s)))', $valueEntryVar, $this->ceVarName($valuePhpType))
+                : sprintf('(Z_TYPE_P(%1$s) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s), %2$s))', $valueEntryVar, $this->ceVarName($valuePhpType));
+            $lines[] = sprintf('        if (!(%s)) {', $valueCheck);
+            $lines[] = sprintf('            zend_type_error("Expected pair value type %s.");', $valuePhpType);
+            $lines[] = '            ' . $failureStatement;
+            $lines[] = '        }';
+            $nativeExpr = $valueNullable
+                ? sprintf('(Z_TYPE_P(%1$s) == IS_NULL ? NULL : %2$s(Z_OBJ_P(%1$s))->native_ptr)', $valueEntryVar, $this->fromObjFuncName($valuePhpType))
+                : $this->phpObjectToNativeExpr($valuePhpType, $valueType, $valueEntryVar, false);
+            $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($valueType), $valueVar, $nativeExpr);
+        }
+
+        $lines[] = sprintf('        %s.insert(%s, %s);', $nativeVarName, $keyVar, $valueVar);
+        $lines[] = '    } ZEND_HASH_FOREACH_END();';
+        if (!$sourceIsZval) {
+            $lines[] = '}';
+        }
+
+        return $lines;
+    }
+
     private function sequenceContainerToPhpBlock(string $zvalPtrExpr, ContainerType $container, string $sourceExpr, ?int $suffix): string
     {
         $itemVar = $suffix === null ? '_qt_item' : sprintf('_qt_item_%d', $suffix);
@@ -2701,6 +2830,37 @@ class TypeBridge
             }
             $lines[] = sprintf('    add_assoc_zval_ex(%s, %s.constData(), %s.size(), &%s);', $zvalPtrExpr, $keyStringVar, $keyStringVar, $valueVar);
         }
+        $lines[] = '}';
+
+        return implode("\n    ", $lines);
+    }
+
+    private function pairSequenceContainerToPhpBlock(string $zvalPtrExpr, ContainerType $container, string $sourceExpr, ?int $suffix): string
+    {
+        $itVar = $suffix === null ? '_qt_it' : sprintf('_qt_it_%d', $suffix);
+        $pairVar = $suffix === null ? '_qt_pair' : sprintf('_qt_pair_%d', $suffix);
+        $keyVar = $suffix === null ? '_qt_key' : sprintf('_qt_key_%d', $suffix);
+        $valueVar = $suffix === null ? '_qt_value' : sprintf('_qt_value_%d', $suffix);
+        $lines = [
+            sprintf('array_init_size(%s, (uint32_t)%s.size());', $zvalPtrExpr, $sourceExpr),
+            sprintf('for (auto %1$s = %2$s.cbegin(); %1$s != %2$s.cend(); ++%1$s) {', $itVar, $sourceExpr),
+            sprintf('    zval %s;', $pairVar),
+            sprintf('    zval %s;', $keyVar),
+            sprintf('    zval %s;', $valueVar),
+            '    ZVAL_NULL(&' . $pairVar . ');',
+            '    ZVAL_NULL(&' . $keyVar . ');',
+            '    ZVAL_NULL(&' . $valueVar . ');',
+            sprintf('    array_init_size(&%s, 2);', $pairVar),
+        ];
+        foreach ($this->nativeElementToZvalLines($container->keyType ?? '', sprintf('%s.key()', $itVar), '&' . $keyVar, $suffix) as $line) {
+            $lines[] = '    ' . $line;
+        }
+        foreach ($this->nativeElementToZvalLines($container->valueType ?? '', sprintf('%s.value()', $itVar), '&' . $valueVar, $suffix) as $line) {
+            $lines[] = '    ' . $line;
+        }
+        $lines[] = sprintf('    add_next_index_zval(&%s, &%s);', $pairVar, $keyVar);
+        $lines[] = sprintf('    add_next_index_zval(&%s, &%s);', $pairVar, $valueVar);
+        $lines[] = sprintf('    add_next_index_zval(%s, &%s);', $zvalPtrExpr, $pairVar);
         $lines[] = '}';
 
         return implode("\n    ", $lines);
@@ -2803,6 +2963,101 @@ class TypeBridge
         return $type;
     }
 
+    private function phpStringToInt128Expr(string $baseType, string $zendStringVar): string
+    {
+        if ($baseType === 'qint128') {
+            return sprintf(
+                '([&]() -> qint128 {'
+                . ' #if defined(QT_SUPPORTS_INT128)'
+                . ' const char *_qt_s = ZSTR_VAL(%1$s); size_t _qt_len = (size_t)ZSTR_LEN(%1$s); size_t _qt_i = 0; bool _qt_neg = false;'
+                . ' if (_qt_len > 0 && (_qt_s[0] == \'+\' || _qt_s[0] == \'-\')) { _qt_neg = (_qt_s[0] == \'-\'); _qt_i = 1; }'
+                . ' quint128 _qt_acc = 0;'
+                . ' for (; _qt_i < _qt_len; ++_qt_i) { const char _qt_c = _qt_s[_qt_i]; if (_qt_c < \'0\' || _qt_c > \'9\') { break; } _qt_acc = (_qt_acc * (quint128)10) + (quint128)(_qt_c - \'0\'); }'
+                . ' return _qt_neg ? -(qint128)_qt_acc : (qint128)_qt_acc;'
+                . ' #else'
+                . ' return (qint128)0;'
+                . ' #endif'
+                . ' })()',
+                $zendStringVar,
+            );
+        }
+
+        return sprintf(
+            '([&]() -> quint128 {'
+            . ' #if defined(QT_SUPPORTS_INT128)'
+            . ' const char *_qt_s = ZSTR_VAL(%1$s); size_t _qt_len = (size_t)ZSTR_LEN(%1$s); size_t _qt_i = 0;'
+            . ' if (_qt_len > 0 && _qt_s[0] == \'+\') { _qt_i = 1; }'
+            . ' quint128 _qt_acc = 0;'
+            . ' for (; _qt_i < _qt_len; ++_qt_i) { const char _qt_c = _qt_s[_qt_i]; if (_qt_c < \'0\' || _qt_c > \'9\') { break; } _qt_acc = (_qt_acc * (quint128)10) + (quint128)(_qt_c - \'0\'); }'
+            . ' return _qt_acc;'
+            . ' #else'
+            . ' quint128 _qt_value = {};'
+            . ' QByteArray _qt_text(ZSTR_VAL(%1$s), ZSTR_LEN(%1$s));'
+            . ' QByteArray _qt_hex = _qt_text.trimmed();'
+            . ' if (_qt_hex.startsWith("0x") || _qt_hex.startsWith("0X")) { _qt_hex = _qt_hex.mid(2); }'
+            . ' if ((_qt_hex.size() %% 2) != 0) { _qt_hex.prepend(\'0\'); }'
+            . ' QByteArray _qt_bin = QByteArray::fromHex(_qt_hex);'
+            . ' if (_qt_bin.size() > 16) { _qt_bin = _qt_bin.right(16); }'
+            . ' if (_qt_bin.size() < 16) { _qt_bin = QByteArray(16 - _qt_bin.size(), \'\\0\') + _qt_bin; }'
+            . ' for (int _qt_i = 0; _qt_i < 16; ++_qt_i) { _qt_value.data[_qt_i] = (quint8)_qt_bin.at(_qt_i); }'
+            . ' return _qt_value;'
+            . ' #endif'
+            . ' })()',
+            $zendStringVar,
+        );
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function int128ToDecimalBytesLines(string $sourceExpr, bool $signed, string $decimalVar): array
+    {
+        $lines = [
+            sprintf('QByteArray %s;', $decimalVar),
+            sprintf('{ %s _qt_raw = %s;', $signed ? 'qint128' : 'quint128', $sourceExpr),
+            '#if defined(QT_SUPPORTS_INT128)',
+        ];
+        if ($signed) {
+            $lines[] = '    bool _qt_neg = (_qt_raw < 0);';
+            $lines[] = '    quint128 _qt_u = _qt_neg ? (quint128)(-_qt_raw) : (quint128)_qt_raw;';
+        } else {
+            $lines[] = '    quint128 _qt_u = (quint128)_qt_raw;';
+        }
+        $lines[] = '    do {';
+        $lines[] = '        quint128 _qt_digit = (_qt_u % (quint128)10);';
+        $lines[] = sprintf('        %s.prepend((char)(\'0\' + (int)_qt_digit));', $decimalVar);
+        $lines[] = '        _qt_u /= (quint128)10;';
+        $lines[] = '    } while (_qt_u != 0);';
+        if ($signed) {
+            $lines[] = '    if (_qt_neg) {';
+            $lines[] = sprintf('        %s.prepend(\'-\');', $decimalVar);
+            $lines[] = '    }';
+        }
+        $lines[] = '#else';
+        if ($signed) {
+            $lines[] = sprintf('    %s = QByteArray::number((qlonglong)_qt_raw);', $decimalVar);
+        } else {
+            $lines[] = sprintf('    QByteArray _qt_bytes(reinterpret_cast<const char *>(_qt_raw.data), 16);');
+            $lines[] = sprintf('    %s = _qt_bytes.toHex();', $decimalVar);
+        }
+        $lines[] = '#endif';
+        $lines[] = '}';
+
+        return $lines;
+    }
+
+    private function int128ToPhpReturnBlock(string $baseType, string $varName, bool $isPointer): string
+    {
+        $decimalVar = '_qt_decimal';
+        $sourceExpr = $isPointer
+            ? sprintf('(%s != NULL ? *%s : (%s)0)', $varName, $varName, $baseType)
+            : $varName;
+        $lines = $this->int128ToDecimalBytesLines($sourceExpr, $baseType === 'qint128', $decimalVar);
+        $lines[] = sprintf('RETURN_STRINGL(%s.constData(), %s.size())', $decimalVar, $decimalVar);
+
+        return implode("\n    ", $lines);
+    }
+
     /**
      * @return list<string>
      */
@@ -2825,6 +3080,14 @@ class TypeBridge
                 sprintf('std::string %s = %s.string();', $pathVar, $sourceExpr),
                 sprintf('ZVAL_STRINGL(%s, %s.data(), %s.size());', $zvalPtrExpr, $pathVar, $pathVar),
             ];
+        }
+
+        if ($base === 'qint128' || $base === 'quint128') {
+            $decimalVar = $suffix === null ? '_qt_decimal' : sprintf('_qt_decimal_%d', $suffix);
+            $lines = $this->int128ToDecimalBytesLines($sourceExpr, $base === 'qint128', $decimalVar);
+            $lines[] = sprintf('ZVAL_STRINGL(%s, %s.constData(), %s.size());', $zvalPtrExpr, $decimalVar, $decimalVar);
+
+            return $lines;
         }
 
         if ($base === 'char') {

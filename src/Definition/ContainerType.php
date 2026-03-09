@@ -24,4 +24,9 @@ readonly class ContainerType
     {
         return $this->kind === 'map' || $this->kind === 'hash';
     }
+
+    public function isPairSequence(): bool
+    {
+        return $this->kind === 'multi_map' || $this->kind === 'multi_hash';
+    }
 }

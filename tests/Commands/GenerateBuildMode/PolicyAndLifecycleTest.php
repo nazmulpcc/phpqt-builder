@@ -132,3 +132,35 @@ it('skips qt disambiguation tag parameters', function (): void {
         ->and($result->stub('QDisambiguationHolder'))->not->toContain('public function count')
         ->and($result->cpp('QDisambiguationHolder'))->not->toContain('ZEND_METHOD(Qt_Core_QDisambiguationHolder, count)');
 });
+
+it('handles lifecycle access for macro-decorated class declarations', function (): void {
+    $fixtureRoot = qt_fixture_path('policy-qt');
+    $outputDir = qt_temp_dir('qtbuilder-macro-lifecycle-');
+    $header = $outputDir . '/qmacrolifecyclething.h';
+    file_put_contents($header, <<<'CPP'
+#define QT6_ONLY(x) x
+#define Q_AUTOTEST_EXPORT
+
+class QT6_ONLY(Q_AUTOTEST_EXPORT) QMacroLifecycleThing {
+public:
+    QMacroLifecycleThing();
+    static int version();
+
+private:
+    ~QMacroLifecycleThing();
+};
+CPP);
+
+    $result = GenerateBuildModeRunner::run('policy-qt', [
+        'header' => $header,
+        'class' => 'QMacroLifecycleThing',
+        '--qt-path' => $fixtureRoot,
+        '--module' => 'QtCore',
+        '--output' => $outputDir,
+        '--allowed-classes' => 'QMacroLifecycleThing',
+    ]);
+
+    expect($result->exitCode)->toBe(Command::SUCCESS)
+        ->and($result->payload['status'])->toBe('ok')
+        ->and($result->cpp('QMacroLifecycleThing'))->not->toContain('delete intern->native_ptr;');
+});

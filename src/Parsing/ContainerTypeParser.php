@@ -44,6 +44,12 @@ class ContainerTypeParser
             'QHash' => count($args) === 2
                 ? new ContainerType($rawType, 'hash', $containerName, keyType: trim($args[0]), valueType: trim($args[1]))
                 : null,
+            'QMultiMap' => count($args) === 2
+                ? new ContainerType($rawType, 'multi_map', $containerName, keyType: trim($args[0]), valueType: trim($args[1]))
+                : null,
+            'QMultiHash' => count($args) === 2
+                ? new ContainerType($rawType, 'multi_hash', $containerName, keyType: trim($args[0]), valueType: trim($args[1]))
+                : null,
             default => null,
         };
     }

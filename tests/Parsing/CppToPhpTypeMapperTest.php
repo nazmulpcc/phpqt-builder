@@ -86,3 +86,12 @@ it('maps qsharedpointer aliases to the underlying php object type when alias met
     expect($mapper->map('QEntityPtr', 'QAspectEngine', $resolver, $context, $aliases))->toBe('\\Qt\\Qt3DCore\\QEntity')
         ->and($mapper->map('const QEntityPtr &', 'QAspectEngine', $resolver, $context, $aliases))->toBe('\\Qt\\Qt3DCore\\QEntity');
 });
+
+it('maps int128 and multimap container types to php-safe types', function (): void {
+    $mapper = new CppToPhpTypeMapper();
+
+    expect($mapper->map('quint128'))->toBe('string')
+        ->and($mapper->map('qint128'))->toBe('string')
+        ->and($mapper->map('QMultiHash<int, QString>'))->toBe('array')
+        ->and($mapper->map('QMultiMap<QString, int>'))->toBe('array');
+});

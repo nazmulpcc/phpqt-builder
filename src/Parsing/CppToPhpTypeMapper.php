@@ -51,10 +51,12 @@ class CppToPhpTypeMapper
         'qint16' => 'int',
         'qint32' => 'int',
         'qint64' => 'int',
+        'qint128' => 'string',
         'quint8' => 'int',
         'quint16' => 'int',
         'quint32' => 'int',
         'quint64' => 'int',
+        'quint128' => 'string',
         'qintptr' => 'int',
         'quintptr' => 'int',
         'qsizetype' => 'int',
@@ -106,6 +108,8 @@ class CppToPhpTypeMapper
         'QModelIndexList',
         'QHash',
         'QMap',
+        'QMultiHash',
+        'QMultiMap',
         'QSet',
     ];
 

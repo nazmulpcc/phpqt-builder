@@ -48,6 +48,9 @@ class ModuleHeaderScanner
             if ($this->smartPointerAliasResolver->resolve($parseHeader, $entry) !== null) {
                 continue;
             }
+            if ($this->isTypeAliasForwarder($parseHeader, $entry)) {
+                continue;
+            }
             $candidates[] = new HeaderCandidate(
                 module: $module,
                 className: $entry,
@@ -78,5 +81,23 @@ class ModuleHeaderScanner
         $parseHeader = dirname($publicHeader) . '/' . $matches[1];
 
         return is_file($parseHeader) ? $parseHeader : $publicHeader;
+    }
+
+    private function isTypeAliasForwarder(string $parseHeader, string $symbol): bool
+    {
+        $content = @file_get_contents($parseHeader);
+        if (!is_string($content) || $content === '') {
+            return false;
+        }
+
+        if (preg_match('/\b(?:class|struct)\s+' . preg_quote($symbol, '/') . '\b/', $content) === 1) {
+            return false;
+        }
+
+        if (preg_match('/\btypedef\b[^;]*\b' . preg_quote($symbol, '/') . '\b\s*;/', $content) === 1) {
+            return true;
+        }
+
+        return preg_match('/\busing\s+' . preg_quote($symbol, '/') . '\s*=\s*[^;]+;/', $content) === 1;
     }
 }
