@@ -15,6 +15,7 @@ use QtBuilder\Build\Dependencies\StaticModuleDependencyResolver;
 use QtBuilder\Build\ExtensionBootstrapper;
 use QtBuilder\Build\ProcessExtensionBootstrapper;
 use QtBuilder\Contracts\SystemInformation;
+use QtBuilder\Prompts\ModuleMultiSearchPrompt;
 use QtBuilder\Qt\QtInstallationResolver;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -26,8 +27,14 @@ use Symfony\Component\Console\Output\OutputInterface;
 #[AsCommand('build', 'Generate a PHP extension source tree from Qt modules.')]
 class BuildCommand extends Command
 {
+    private const ALL_MODULES_OPTION = '__all';
+
     private readonly ExtensionBootstrapper $bootstrapper;
     private readonly ModuleDependencyResolver $dependencyResolver;
+    /** @var array<string, list<string>> */
+    private array $interactiveDependencyMap = [];
+    /** @var callable(string, array<string, string>, array<int, string>): array<int, string> */
+    private $moduleSelector;
 
     public function __construct(
         private readonly SystemInformation $systemInformation,
@@ -35,9 +42,31 @@ class BuildCommand extends Command
         private readonly BuildDiscoveryService $discoveryService = new BuildDiscoveryService(),
         private readonly BuildDirectoryCleaner $buildDirectoryCleaner = new BuildDirectoryCleaner(),
         ?ModuleDependencyResolver $dependencyResolver = null,
+        ?callable $moduleSelector = null,
     ) {
         $this->bootstrapper = $bootstrapper ?? new ProcessExtensionBootstrapper($systemInformation);
         $this->dependencyResolver = $dependencyResolver ?? new StaticModuleDependencyResolver();
+        $this->moduleSelector = $moduleSelector ?? function (string $label, array $options, array $default): array {
+            $prompt = new ModuleMultiSearchPrompt(
+                label: $label,
+                options: static fn (string $search): array => self::filterModuleOptions($options, $search),
+                allOptions: $options,
+                dependencyMap: $this->interactiveDependencyMap,
+                scroll: max(5, min(15, count($options))),
+                allOptionKey: self::ALL_MODULES_OPTION,
+            );
+            foreach ($default as $defaultOption) {
+                if (!isset($options[$defaultOption])) {
+                    continue;
+                }
+                $prompt->values[$defaultOption] = $options[$defaultOption];
+            }
+
+            return array_values(array_map(
+                static fn (mixed $value): string => (string) $value,
+                $prompt->prompt(),
+            ));
+        };
 
         parent::__construct();
     }
@@ -45,7 +74,7 @@ class BuildCommand extends Command
     protected function configure(): void
     {
         $this
-            ->addArgument('modules', InputArgument::OPTIONAL, 'Comma-separated Qt modules to scan', 'QtCore')
+            ->addArgument('modules', InputArgument::OPTIONAL, 'Comma-separated Qt modules to scan')
             ->addOption('qt-path', null, InputOption::VALUE_REQUIRED, 'Path to the Qt installation root')
             ->addOption('name', null, InputOption::VALUE_REQUIRED, 'Extension name', 'qt')
             ->addOption('ext-version', null, InputOption::VALUE_REQUIRED, 'Extension version', '0.1.0')
@@ -57,8 +86,8 @@ class BuildCommand extends Command
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        $requestedModules = $this->parseModules((string) $input->getArgument('modules'));
         try {
+            $requestedModules = $this->resolveRequestedModules($input);
             $resolvedGraph = $this->dependencyResolver->resolve($requestedModules);
         } catch (\InvalidArgumentException|\RuntimeException $e) {
             $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
@@ -120,6 +149,127 @@ class BuildCommand extends Command
         $parts = array_values(array_filter($parts, static fn(string $part): bool => $part !== ''));
 
         return $parts === [] ? ['QtCore'] : $parts;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function resolveRequestedModules(InputInterface $input): array
+    {
+        $modulesArgument = $input->getArgument('modules');
+        if (is_string($modulesArgument) && trim($modulesArgument) !== '') {
+            return $this->parseModules($modulesArgument);
+        }
+
+        $supportedModules = $this->dependencyResolver->supportedModules();
+        if ($supportedModules === []) {
+            throw new \RuntimeException('No Qt modules are available in the dependency manifest.');
+        }
+
+        if (!$input->isInteractive()) {
+            return $supportedModules;
+        }
+
+        $this->interactiveDependencyMap = $this->buildInteractiveDependencyMap($supportedModules);
+
+        $options = [self::ALL_MODULES_OPTION => 'All'];
+        foreach ($supportedModules as $module) {
+            $options[$module] = $module;
+        }
+
+        $selected = ($this->moduleSelector)(
+            'Select Qt modules to build',
+            $options,
+            [self::ALL_MODULES_OPTION],
+        );
+
+        if ($selected === []) {
+            $selected = [self::ALL_MODULES_OPTION];
+        }
+
+        $selected = $this->normalizeAllSelection($selected);
+
+        if ($selected === [self::ALL_MODULES_OPTION]) {
+            return $supportedModules;
+        }
+
+        return $this->expandSelectedModulesWithDependencies($selected, $supportedModules);
+    }
+
+    /**
+     * @param array<string, string> $options
+     * @return array<string, string>
+     */
+    private static function filterModuleOptions(array $options, string $search): array
+    {
+        $search = mb_strtolower(trim($search));
+        if ($search === '') {
+            return $options;
+        }
+
+        return array_filter(
+            $options,
+            static fn (string $label): bool => str_contains(mb_strtolower($label), $search),
+        );
+    }
+
+    /**
+     * @param list<string> $selected
+     * @return list<string>
+     */
+    private function normalizeAllSelection(array $selected): array
+    {
+        if (!in_array(self::ALL_MODULES_OPTION, $selected, true)) {
+            return $selected;
+        }
+
+        $concreteModules = array_values(array_filter(
+            $selected,
+            static fn (string $module): bool => $module !== self::ALL_MODULES_OPTION,
+        ));
+
+        return $concreteModules === [] ? [self::ALL_MODULES_OPTION] : $concreteModules;
+    }
+
+    /**
+     * @param list<string> $selected
+     * @param list<string> $supportedModules
+     * @return list<string>
+     */
+    private function expandSelectedModulesWithDependencies(array $selected, array $supportedModules): array
+    {
+        $expandedSet = [];
+        foreach ($selected as $module) {
+            $expandedSet[$module] = true;
+            foreach ($this->interactiveDependencyMap[$module] ?? [] as $dependencyModule) {
+                $expandedSet[$dependencyModule] = true;
+            }
+        }
+
+        return array_values(array_filter(
+            $supportedModules,
+            static fn (string $module): bool => isset($expandedSet[$module]),
+        ));
+    }
+
+    /**
+     * @param list<string> $supportedModules
+     * @return array<string, list<string>>
+     */
+    private function buildInteractiveDependencyMap(array $supportedModules): array
+    {
+        $supportedSet = array_fill_keys($supportedModules, true);
+        $dependencyMap = [];
+
+        foreach ($supportedModules as $module) {
+            $graph = $this->dependencyResolver->resolve([$module]);
+            $dependencyMap[$module] = array_values(array_filter(
+                $graph->expandedModules(),
+                static fn (string $dependencyModule): bool => $dependencyModule !== $module && isset($supportedSet[$dependencyModule]),
+            ));
+        }
+
+        return $dependencyMap;
     }
 
     private function resolveJobs(mixed $jobsOption): int
