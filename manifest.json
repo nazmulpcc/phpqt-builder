@@ -152,6 +152,55 @@
                 "QtQuick",
                 "QtWebEngineCore"
             ]
+        },
+        "QtXml": {
+            "extension_name": "qtxml",
+            "dependencies": [
+                "QtCore"
+            ]
+        },
+        "QtSvg": {
+            "extension_name": "qtsvg",
+            "dependencies": [
+                "QtCore",
+                "QtGui"
+            ]
+        },
+        "QtSvgWidgets": {
+            "extension_name": "qtsvgwidgets",
+            "dependencies": [
+                "QtCore",
+                "QtGui",
+                "QtWidgets"
+            ]
+        },
+        "QtStateMachine": {
+            "extension_name": "qtstatemachine",
+            "dependencies": [
+                "QtCore",
+                "QtGui"
+            ]
+        },
+        "QtMultimediaWidgets": {
+            "extension_name": "qtmultimediawidgets",
+            "dependencies": [
+                "QtCore",
+                "QtGui",
+                "QtMultimedia",
+                "QtWidgets"
+            ]
+        },
+        "QtSerialPort": {
+            "extension_name": "qtserialport",
+            "dependencies": [
+                "QtCore"
+            ]
+        },
+        "QtTextToSpeech": {
+            "extension_name": "qttexttospeech",
+            "dependencies": [
+                "QtCore"
+            ]
         }
     }
 }
