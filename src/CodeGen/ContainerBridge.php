@@ -62,7 +62,7 @@ class ContainerBridge
         }
 
         if ($container->isPairSequence()) {
-            return $this->isSupportedMapKey((string) $container->keyType)
+            return $this->isSupportedPairElement((string) $container->keyType)
                 && $this->isSupportedMapValue((string) $container->valueType);
         }
 
@@ -141,6 +141,11 @@ class ContainerBridge
         }
 
         return in_array($phpType, ['int', 'string'], true);
+    }
+
+    private function isSupportedPairElement(string $cppType): bool
+    {
+        return $this->isSupportedSequenceElement($cppType);
     }
 
     private function isSupportedMapValue(string $cppType): bool

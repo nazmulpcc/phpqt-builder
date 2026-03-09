@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace QtBuilder\Build;
 
 use QtBuilder\Filtering\ClassExposurePolicy;
+use QtBuilder\Parsing\ContainerTypeParser;
+use QtBuilder\Parsing\CppToPhpTypeMapper;
 use QtBuilder\Qt\QtInstallation;
 use QtBuilder\Scanning\HeaderCandidate;
 use QtBuilder\Scanning\ModuleHeaderScanner;
+use QtBuilder\Support\CppName;
 use QtBuilder\Support\ModuleNamespace;
 use Symfony\Component\Console\Helper\ProgressBar;
 use Symfony\Component\Console\Output\OutputInterface;
@@ -400,6 +403,7 @@ class BuildDiscoveryService
                     $allowedClasses,
                     $preparedClassDataByClass,
                     $importedAvailableClasses !== [],
+                    includePaths: $includePaths,
                 );
 
                 $missingClass = $this->supplementalMissingClass($result->reasonCode, $result->reasonMessage);
@@ -421,6 +425,23 @@ class BuildDiscoveryService
 
                 $queuedThisPass[$supplemental->candidate->identityKey()] = $supplemental;
                 $knownClasses[$supplemental->candidate->identityKey()] = true;
+            }
+
+            if ($queuedThisPass === []) {
+                foreach ($this->discoverTypeDrivenSupplementalCandidates(
+                    $candidateMap,
+                    $preparedClassDataByClass,
+                    $modules,
+                    $includePaths,
+                    $knownClasses,
+                ) as $supplemental) {
+                    $queuedThisPass[$supplemental->candidate->identityKey()] = $supplemental;
+                    $knownClasses[$supplemental->candidate->identityKey()] = true;
+                    $knownClasses[$supplemental->candidate->className] = true;
+                    if ($supplemental->candidate->qualifiedClassName !== null) {
+                        $knownClasses[$supplemental->candidate->qualifiedClassName] = true;
+                    }
+                }
             }
 
             if ($queuedThisPass === []) {
@@ -777,6 +798,7 @@ class BuildDiscoveryService
                     $allowedClasses,
                     $preparedClassDataByClass,
                     $preferExternalDependencyReasons,
+                    includePaths: [],
                 );
 
                 if ($result->status === 'ok') {
@@ -829,6 +851,176 @@ class BuildDiscoveryService
         }
 
         return $matches[1];
+    }
+
+    /**
+     * Discover supplemental candidates by scanning class signatures for
+     * referenced class-like dependency types (container element/key/value
+     * types and owner-qualified nested types).
+     *
+     * @param array<string, HeaderCandidate> $candidateMap
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @param list<string> $requestedModules
+     * @param list<string> $includePaths
+     * @param array<string, bool> $knownClasses
+     * @return list<SupplementalClassCandidate>
+     */
+    private function discoverTypeDrivenSupplementalCandidates(
+        array $candidateMap,
+        array $preparedClassDataByClass,
+        array $requestedModules,
+        array $includePaths,
+        array $knownClasses,
+    ): array {
+        /** @var array<string, SupplementalClassCandidate> $queued */
+        $queued = [];
+        $known = $knownClasses;
+
+        foreach ($candidateMap as $candidateKey => $candidate) {
+            $classData = $preparedClassDataByClass[$candidateKey] ?? null;
+            if (!is_array($classData)) {
+                continue;
+            }
+
+            foreach ($this->candidateDependencyTypesFromClassData($classData, $candidate->className) as $dependencyType) {
+                if (isset($known[$dependencyType]) || isset($known[CppName::unqualify($dependencyType)])) {
+                    continue;
+                }
+
+                $supplemental = $this->supplementalResolver->resolve(
+                    $dependencyType,
+                    $candidate,
+                    $requestedModules,
+                    $includePaths,
+                    $known,
+                    'unsupported_signature_dependency',
+                );
+                if ($supplemental === null) {
+                    continue;
+                }
+
+                $identity = $supplemental->candidate->identityKey();
+                $queued[$identity] = $supplemental;
+                $known[$identity] = true;
+                $known[$supplemental->candidate->className] = true;
+                if ($supplemental->candidate->qualifiedClassName !== null) {
+                    $known[$supplemental->candidate->qualifiedClassName] = true;
+                }
+            }
+        }
+
+        return array_values($queued);
+    }
+
+    /**
+     * @param array<string, mixed> $classData
+     * @return list<string>
+     */
+    private function candidateDependencyTypesFromClassData(array $classData, string $ownerClass): array
+    {
+        $types = [];
+        foreach (['methods', 'signals'] as $bucket) {
+            $methods = $classData[$bucket] ?? [];
+            if (!is_array($methods)) {
+                continue;
+            }
+
+            foreach ($methods as $method) {
+                if (!is_array($method)) {
+                    continue;
+                }
+
+                if (is_string($method['return_type'] ?? null)) {
+                    foreach ($this->extractTypeDependencies((string) $method['return_type'], $ownerClass) as $dependency) {
+                        $types[$dependency] = true;
+                    }
+                }
+
+                $parameters = $method['parameters'] ?? [];
+                if (!is_array($parameters)) {
+                    continue;
+                }
+
+                foreach ($parameters as $parameter) {
+                    if (!is_array($parameter) || !is_string($parameter['type'] ?? null)) {
+                        continue;
+                    }
+
+                    foreach ($this->extractTypeDependencies((string) $parameter['type'], $ownerClass) as $dependency) {
+                        $types[$dependency] = true;
+                    }
+                }
+            }
+        }
+
+        return array_keys($types);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function extractTypeDependencies(string $cppType, string $ownerClass): array
+    {
+        static $parser;
+        static $mapper;
+        if (!$parser instanceof ContainerTypeParser) {
+            $parser = new ContainerTypeParser();
+        }
+        if (!$mapper instanceof CppToPhpTypeMapper) {
+            $mapper = new CppToPhpTypeMapper();
+        }
+
+        $normalized = $this->normalizeDependencyType($cppType);
+        if ($normalized === '') {
+            return [];
+        }
+
+        $container = $parser->parse($normalized);
+        if ($container !== null) {
+            $deps = [];
+            foreach (array_filter([$container->elementType, $container->keyType, $container->valueType]) as $memberType) {
+                foreach ($this->extractTypeDependencies((string) $memberType, $ownerClass) as $dependency) {
+                    $deps[$dependency] = true;
+                }
+            }
+
+            return array_keys($deps);
+        }
+
+        if (str_contains($normalized, '<') || str_starts_with($normalized, 'std::') || str_starts_with($normalized, 'QFlags<')) {
+            return [];
+        }
+
+        $phpType = $mapper->map($normalized);
+        if (in_array($phpType, ['int', 'float', 'bool', 'string', 'array', 'mixed', 'void'], true)) {
+            return [];
+        }
+
+        $candidates = [$normalized];
+        if (!str_contains($normalized, '::') && $ownerClass !== '') {
+            $candidates[] = $ownerClass . '::' . $normalized;
+        }
+
+        return array_values(array_unique($candidates));
+    }
+
+    private function normalizeDependencyType(string $cppType): string
+    {
+        $type = trim($cppType);
+        if ($type === '') {
+            return '';
+        }
+
+        $type = preg_replace('/\bconst\b/', '', $type) ?? $type;
+        $type = trim(preg_replace('/\s+/', ' ', $type) ?? $type);
+        $type = rtrim($type, '& ');
+        if (!str_contains($type, '<')) {
+            while (str_ends_with($type, '*')) {
+                $type = rtrim(substr($type, 0, -1));
+            }
+        }
+
+        return trim($type);
     }
 
     private function createProgressBar(OutputInterface $output, int $total, string $formatName, string $label): ?ProgressBar

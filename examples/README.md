@@ -5,7 +5,7 @@ These examples are fuller, more product-like applications than the low-level `ma
 ## Recommended build
 
 ```sh
-php qtb build QtCore,QtGui,QtWidgets,QtQml,QtQuick,QtOpenGL,QtOpenGLWidgets,Qt3DCore,Qt3DRender,Qt3DExtras,Qt3DInput
+php qtb build QtCore,QtGui,QtWidgets,QtNetwork,QtBluetooth,QtQml,QtQuick,QtOpenGL,QtOpenGLWidgets,Qt3DCore,Qt3DRender,Qt3DExtras,Qt3DInput
 ```
 
 ## Run
@@ -40,6 +40,8 @@ php -dextension=$PWD/build/ext/.libs/qt.so examples/<example>/run.php
   A low-level Qt3D window that loads a scene with `QSceneLoader`, builds a manual frame graph, and supports orbit + zoom camera controls.
 - `qt3d-modules-showcase`
   A focused Qt3D integration baseline that wires Qt3DCore + Qt3DRender + Qt3DExtras + Qt3DInput in one scene graph.
+- `bluetooth-scanner`
+  A runtime QtBluetooth scanner that lists local adapters, starts discovery, and prints discovered devices via signal callbacks.
 - `true-3d`
   A native QtQuick3D scene rendered from PHP via inline QML, with animated meshes, camera, and lighting.
 - `gpu-stress`

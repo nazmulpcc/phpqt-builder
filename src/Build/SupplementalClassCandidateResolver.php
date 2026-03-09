@@ -7,6 +7,7 @@ namespace QtBuilder\Build;
 use QtBuilder\Parsing\ClangArgumentBuilder;
 use QtBuilder\Parsing\QtClassInspector;
 use QtBuilder\Scanning\HeaderCandidate;
+use QtBuilder\Support\CppName;
 
 class SupplementalClassCandidateResolver
 {
@@ -27,11 +28,12 @@ class SupplementalClassCandidateResolver
         string $triggerReason,
     ): ?SupplementalClassCandidate {
         $missingClass = trim($missingClass);
-        if (preg_match('/^Q[A-Z][A-Za-z0-9_]*$/', $missingClass) !== 1) {
+        if (!$this->looksLikeClassName($missingClass)) {
             return null;
         }
 
-        if (isset($knownClasses[$missingClass])) {
+        $shortName = CppName::unqualify($missingClass);
+        if (isset($knownClasses[$missingClass]) || isset($knownClasses[$shortName])) {
             return null;
         }
 
@@ -51,9 +53,10 @@ class SupplementalClassCandidateResolver
             return new SupplementalClassCandidate(
                 candidate: new HeaderCandidate(
                     module: $module,
-                    className: $missingClass,
+                    className: $shortName,
                     publicHeader: $definitionHeader,
                     parseHeader: $definitionHeader,
+                    qualifiedClassName: str_contains($missingClass, '::') ? $missingClass : null,
                 ),
                 discoveredFromClass: $fromCandidate->className,
                 discoveredFromHeader: $fromCandidate->parseHeader,
@@ -62,6 +65,11 @@ class SupplementalClassCandidateResolver
         }
 
         return null;
+    }
+
+    private function looksLikeClassName(string $name): bool
+    {
+        return preg_match('/^(?:::)?(?:[A-Za-z_][A-Za-z0-9_]*::)*[A-Za-z_][A-Za-z0-9_]*$/', $name) === 1;
     }
 
     /**

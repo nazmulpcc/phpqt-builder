@@ -2704,13 +2704,15 @@ class TypeBridge
         $valueType = (string) $container->valueType;
         $keyPhpType = $this->containerBridge()->elementPhpType($keyType);
         $valuePhpType = $this->containerBridge()->elementPhpType($valueType);
+        $keyNullable = $this->isPointerType($keyType);
         $valueNullable = $this->isPointerType($valueType);
         $pairVar = $nativeVarName . '_pair';
         $keyEntryVar = $nativeVarName . '_key_entry';
         $valueEntryVar = $nativeVarName . '_value_entry';
         $keyVar = $nativeVarName . '_key';
         $valueVar = $nativeVarName . '_value';
-        $stringVar = $nativeVarName . '_str';
+        $keyStringVar = $nativeVarName . '_key_str';
+        $valueStringVar = $nativeVarName . '_value_str';
 
         $lines = [
             sprintf('%s %s;', $containerType, $nativeVarName),
@@ -2738,54 +2740,30 @@ class TypeBridge
         $lines[] = '            ' . $failureStatement;
         $lines[] = '        }';
 
-        if ($keyPhpType === 'int') {
-            $lines[] = sprintf('        if (!(%s)) {', $this->zvalTypeMatchExpr($keyEntryVar, 'int'));
-            $lines[] = '            zend_type_error("Expected pair key type int.");';
-            $lines[] = '            ' . $failureStatement;
-            $lines[] = '        }';
-            $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($keyType), $keyVar, $this->zvalToNativeExpr('int', $keyType, $keyEntryVar, false));
-        } else {
-            $lines[] = sprintf('        if (Z_TYPE_P(%s) != IS_STRING) {', $keyEntryVar);
-            $lines[] = '            zend_type_error("Expected pair key type string.");';
-            $lines[] = '            ' . $failureStatement;
-            $lines[] = '        }';
-            $lines[] = sprintf('        zend_string *%s = zval_get_string(%s);', $stringVar, $keyEntryVar);
-            $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($keyType), $keyVar, $this->phpStringToNativeExpr($keyType, $stringVar));
-            $lines[] = sprintf('        zend_string_release(%s);', $stringVar);
-        }
-
-        if ($valueType === 'QVariant') {
-            $lines[] = sprintf('        QVariant %s;', $valueVar);
-            $lines[] = sprintf('        if (!qt_zval_to_variant(%s, &%s)) {', $valueEntryVar, $valueVar);
-            $lines[] = '            ' . $failureStatement;
-            $lines[] = '        }';
-        } elseif ($valuePhpType === 'string') {
-            $lines[] = sprintf('        if (Z_TYPE_P(%s) != IS_STRING) {', $valueEntryVar);
-            $lines[] = '            zend_type_error("Expected pair value type string.");';
-            $lines[] = '            ' . $failureStatement;
-            $lines[] = '        }';
-            $lines[] = sprintf('        zend_string *%s = zval_get_string(%s);', $stringVar, $valueEntryVar);
-            $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($valueType), $valueVar, $this->phpStringToNativeExpr($valueType, $stringVar));
-            $lines[] = sprintf('        zend_string_release(%s);', $stringVar);
-        } elseif (in_array($valuePhpType, ['int', 'float', 'bool'], true)) {
-            $lines[] = sprintf('        if (!(%s)) {', $this->zvalTypeMatchExpr($valueEntryVar, $valuePhpType));
-            $lines[] = sprintf('            zend_type_error("Expected pair value type %s.");', $valuePhpType);
-            $lines[] = '            ' . $failureStatement;
-            $lines[] = '        }';
-            $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($valueType), $valueVar, $this->zvalToNativeExpr($valuePhpType, $valueType, $valueEntryVar, false));
-        } else {
-            $valueCheck = $valueNullable
-                ? sprintf('(Z_TYPE_P(%1$s) == IS_NULL || (Z_TYPE_P(%1$s) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s), %2$s)))', $valueEntryVar, $this->ceVarName($valuePhpType))
-                : sprintf('(Z_TYPE_P(%1$s) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s), %2$s))', $valueEntryVar, $this->ceVarName($valuePhpType));
-            $lines[] = sprintf('        if (!(%s)) {', $valueCheck);
-            $lines[] = sprintf('            zend_type_error("Expected pair value type %s.");', $valuePhpType);
-            $lines[] = '            ' . $failureStatement;
-            $lines[] = '        }';
-            $nativeExpr = $valueNullable
-                ? sprintf('(Z_TYPE_P(%1$s) == IS_NULL ? NULL : %2$s(Z_OBJ_P(%1$s))->native_ptr)', $valueEntryVar, $this->fromObjFuncName($valuePhpType))
-                : $this->phpObjectToNativeExpr($valuePhpType, $valueType, $valueEntryVar, false);
-            $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($valueType), $valueVar, $nativeExpr);
-        }
+        $lines = array_merge(
+            $lines,
+            $this->sequenceInputValueLines(
+                $keyType,
+                $keyPhpType,
+                $keyEntryVar,
+                $keyVar,
+                $keyStringVar,
+                $keyNullable,
+                $failureStatement,
+            ),
+        );
+        $lines = array_merge(
+            $lines,
+            $this->sequenceInputValueLines(
+                $valueType,
+                $valuePhpType,
+                $valueEntryVar,
+                $valueVar,
+                $valueStringVar,
+                $valueNullable,
+                $failureStatement,
+            ),
+        );
 
         $lines[] = sprintf('        %s.insert(%s, %s);', $nativeVarName, $keyVar, $valueVar);
         $lines[] = '    } ZEND_HASH_FOREACH_END();';

@@ -25,6 +25,13 @@
                 "QtCore"
             ]
         },
+	"QtBluetooth": {
+            "extension_name": "qtbluetooth",
+            "dependencies": [
+                "QtCore",
+                "QtNetwork"
+            ]
+        },
         "QtSql": {
             "extension_name": "qtsql",
             "dependencies": [

@@ -13,6 +13,7 @@ it('loads supported modules from the static manifest', function (): void {
         'QtGui',
         'QtWidgets',
         'QtNetwork',
+        'QtBluetooth',
         'QtSql',
         'QtPrintSupport',
         'QtMultimedia',
@@ -30,6 +31,20 @@ it('loads supported modules from the static manifest', function (): void {
         'QtWebEngineCore',
         'QtWebEngineQuick',
     ]);
+});
+
+it('expands qtbluetooth dependencies in topological order', function (): void {
+    $resolver = new StaticModuleDependencyResolver();
+
+    $graph = $resolver->resolve(['QtBluetooth']);
+
+    expect($graph)->toBeInstanceOf(ResolvedModuleGraph::class)
+        ->and($graph->requestedModules)->toBe(['QtBluetooth'])
+        ->and($graph->expandedModules())->toBe(['QtCore', 'QtNetwork', 'QtBluetooth'])
+        ->and($graph->autoAddedModules())->toBe(['QtCore', 'QtNetwork'])
+        ->and($graph->dependenciesFor('QtBluetooth'))->toBe(['QtCore', 'QtNetwork'])
+        ->and($graph->extensionNameFor('QtBluetooth'))->toBe('qtbluetooth')
+        ->and($graph->dependencySource)->toBe('static_manifest');
 });
 
 it('expands transitive dependencies with a stable topological order', function (): void {

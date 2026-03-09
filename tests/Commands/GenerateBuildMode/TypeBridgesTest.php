@@ -134,6 +134,35 @@ it('qualifies nested enum class names for native casts', function (): void {
         Assert::assertStringContainsString('intern->native_ptr->setPair((QNestedEnumHolder::Attribute::Semantic)((int)(semantic)), (QNestedEnumHolder::Attribute::ComponentType)((int)(componentType)));', $cpp);
 });
 
+it('lowers nested container wrapper types to php arrays', function (): void {
+        $fixtureRoot = qt_fixture_path('policy-qt');
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qcontainerwrapperholder.h',
+            'class' => 'QContainerWrapperHolder',
+            '--qt-path' => $fixtureRoot,
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QContainerWrapperHolder',
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        Assert::assertSame('ok', $payload['status']);
+        Assert::assertNotContains('unsupported_parameter_type', array_column($payload['skipped_methods'], 'reason_code'));
+        Assert::assertNotContains('unsupported_return_type', array_column($payload['skipped_methods'], 'reason_code'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qcontainerwrapperholder.stub.php');
+        Assert::assertStringContainsString('public function setSequence(array $value): void {}', $stub);
+        Assert::assertStringContainsString('public function sequence(): array {}', $stub);
+});
+
 it('handles const char pointer string returns', function (): void {
         $fixtureRoot = qt_fixture_path('policy-qt');
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));

@@ -16,6 +16,11 @@ it('converts multimap containers through pair-array semantics', function (): voi
     expect($fromPhp['expr'])->toBe('_qt_ret')
         ->and(implode("\n", $fromPhp['lines']))->toContain('Expected array entries to be [key, value] pairs.')
         ->toContain('_qt_ret.insert(_qt_ret_key, _qt_ret_value);');
+
+    $objectKey = $bridge->nativeReturnFromZvalSetup('array', 'QMultiHash<QBluetoothUuid, QByteArray>', '_zv');
+    expect(implode("\n", $objectKey['lines']))
+        ->toContain('instanceof_function(Z_OBJCE_P(_qt_ret_key_entry), qt_ce_qbluetoothuuid)')
+        ->toContain('_qt_ret.insert(_qt_ret_key, _qt_ret_value);');
 });
 
 it('converts int128 values through decimal strings', function (): void {

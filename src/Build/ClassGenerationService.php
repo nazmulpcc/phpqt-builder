@@ -99,6 +99,7 @@ class ClassGenerationService
         $sourceClassData = $classData;
         $allowedClasses = $this->augmentAllowedClassesWithSyntheticParents($classData, $allowedClasses, $headerPath, $className);
         $classData = $this->normalizeSupportedListBases($classData, $headerPath, $className);
+        $classData = $this->normalizeContainerWrapperTypes($classData, $headerPath, $className, $includePaths);
 
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
         if ($parentClass !== null && !$this->allowedClassesContain($allowedClasses, $parentClass, $classTypeResolver, $resolutionContext)) {
@@ -673,6 +674,7 @@ class ClassGenerationService
         array $preparedClassDataByClass = [],
         bool $preferExternalDependencyReasons = false,
         ?EnumHolderRegistry $enumRegistry = null,
+        array $includePaths = [],
     ): ClassGenerationResult {
         $className = (string) ($classData['name'] ?? '');
         if ($className === '') {
@@ -707,6 +709,7 @@ class ClassGenerationService
         $sourceClassData = $classData;
         $allowedClasses = $this->augmentAllowedClassesWithSyntheticParents($classData, $allowedClasses, $headerPath, $className);
         $classData = $this->normalizeSupportedListBases($classData, $headerPath, $className);
+        $classData = $this->normalizeContainerWrapperTypes($classData, $headerPath, $className, $includePaths);
 
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
         if ($parentClass !== null && !$this->allowedClassesContain($allowedClasses, $parentClass, $classTypeResolver, $resolutionContext)) {
@@ -3847,6 +3850,220 @@ class ClassGenerationService
         ));
 
         return $classData;
+    }
+
+    /**
+     * @param array<string, mixed> $classData
+     * @param list<string> $includePaths
+     * @return array<string, mixed>
+     */
+    private function normalizeContainerWrapperTypes(array $classData, string $headerPath, string $className, array $includePaths): array
+    {
+        $normalizeMethod = function (mixed $method) use ($headerPath, $className, $includePaths): mixed {
+            if (!is_array($method)) {
+                return $method;
+            }
+
+            if (is_string($method['return_type'] ?? null)) {
+                $method['return_type'] = $this->normalizeContainerWrapperType(
+                    (string) $method['return_type'],
+                    $headerPath,
+                    $className,
+                    $includePaths,
+                );
+            }
+
+            if (!is_array($method['parameters'] ?? null)) {
+                return $method;
+            }
+
+            foreach ($method['parameters'] as $index => $parameter) {
+                if (!is_array($parameter) || !is_string($parameter['type'] ?? null)) {
+                    continue;
+                }
+
+                $method['parameters'][$index]['type'] = $this->normalizeContainerWrapperType(
+                    (string) $parameter['type'],
+                    $headerPath,
+                    $className,
+                    $includePaths,
+                );
+            }
+
+            return $method;
+        };
+
+        if (is_array($classData['methods'] ?? null)) {
+            $classData['methods'] = array_values(array_map($normalizeMethod, $classData['methods']));
+        }
+
+        if (is_array($classData['signals'] ?? null)) {
+            $classData['signals'] = array_values(array_map($normalizeMethod, $classData['signals']));
+        }
+
+        return $classData;
+    }
+
+    /**
+     * Lower nested wrapper classes (e.g. Owner::Sequence over QList<QVariant>)
+     * to their underlying container type so existing container conversion logic applies.
+     *
+     * @param list<string> $includePaths
+     */
+    private function normalizeContainerWrapperType(string $cppType, string $headerPath, string $className, array $includePaths): string
+    {
+        $trimmed = trim($cppType);
+        if ($trimmed === '' || str_contains($trimmed, '<')) {
+            return $cppType;
+        }
+
+        if (preg_match(
+            '/^(?<prefix>\s*const\s+)?(?<base>(?:::)?(?:[A-Za-z_][A-Za-z0-9_]*::)*[A-Za-z_][A-Za-z0-9_]*)(?<suffix>(?:\s*[*&]\s*)*)$/',
+            $trimmed,
+            $matches,
+        ) !== 1) {
+            return $cppType;
+        }
+
+        $base = trim((string) ($matches['base'] ?? ''));
+        if ($base === '') {
+            return $cppType;
+        }
+
+        $replacementBase = $this->containerWrapperBaseType($base, $headerPath, $className, $includePaths);
+        if ($replacementBase === null || $replacementBase === '') {
+            return $cppType;
+        }
+
+        $prefix = (string) ($matches['prefix'] ?? '');
+        $suffix = (string) ($matches['suffix'] ?? '');
+
+        return trim(preg_replace('/\s+/', ' ', trim($prefix . $replacementBase . $suffix)) ?? trim($prefix . $replacementBase . $suffix));
+    }
+
+    /**
+     * @param list<string> $includePaths
+     */
+    private function containerWrapperBaseType(string $baseType, string $headerPath, string $className, array $includePaths): ?string
+    {
+        static $cache = [];
+
+        $cacheKey = implode('|', [$headerPath, $className, $baseType]);
+        if (array_key_exists($cacheKey, $cache)) {
+            return $cache[$cacheKey];
+        }
+
+        $lookupCandidates = [$baseType];
+        if (!str_contains($baseType, '::') && $className !== '') {
+            $lookupCandidates[] = $className . '::' . $baseType;
+        }
+
+        foreach (array_values(array_unique($lookupCandidates)) as $lookup) {
+            $nestedClassData = $this->inspectClassDataForType($headerPath, $lookup, $includePaths);
+            if (!is_array($nestedClassData)) {
+                continue;
+            }
+
+            $containerBase = $this->containerBaseFromClassData($nestedClassData, CppName::unqualify($lookup));
+            if ($containerBase === null || !$this->typeBridge->isSupportedContainerType($containerBase)) {
+                $containerBase = $this->containerBaseFromSource($headerPath, CppName::unqualify($lookup));
+                if ($containerBase === null || !$this->typeBridge->isSupportedContainerType($containerBase)) {
+                    continue;
+                }
+            }
+
+            $cache[$cacheKey] = $containerBase;
+
+            return $containerBase;
+        }
+
+        $cache[$cacheKey] = null;
+
+        return null;
+    }
+
+    private function containerBaseFromSource(string $headerPath, string $constructorName): ?string
+    {
+        $contents = @file_get_contents($headerPath);
+        if (!is_string($contents) || $contents === '') {
+            return null;
+        }
+
+        $matchCount = preg_match_all(
+            '/\b' . preg_quote($constructorName, '/') . '\s*\(\s*const\s+([^()]+?)\s*&(?:\s*[A-Za-z_][A-Za-z0-9_]*)?\s*\)/',
+            $contents,
+            $matches,
+        );
+        if (!is_int($matchCount) || $matchCount === 0) {
+            return null;
+        }
+
+        foreach ($matches[1] as $rawType) {
+            if (!is_string($rawType)) {
+                continue;
+            }
+
+            $candidate = trim(preg_replace('/\s+/', ' ', trim($rawType)) ?? trim($rawType));
+            if ($candidate !== '') {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param list<string> $includePaths
+     * @return array<string, mixed>|null
+     */
+    private function inspectClassDataForType(string $headerPath, string $classLookup, array $includePaths): ?array
+    {
+        static $cache = [];
+
+        $cacheKey = implode('|', [$headerPath, $classLookup, sha1(json_encode(array_values($includePaths)) ?: '')]);
+        if (array_key_exists($cacheKey, $cache)) {
+            return $cache[$cacheKey];
+        }
+
+        $inspector = new QtClassInspector(new ClangArgumentBuilder($includePaths));
+        $classData = $inspector->inspect($headerPath, $classLookup);
+
+        $cache[$cacheKey] = is_array($classData) ? $classData : null;
+
+        return $cache[$cacheKey];
+    }
+
+    /**
+     * @param array<string, mixed> $classData
+     */
+    private function containerBaseFromClassData(array $classData, string $constructorName): ?string
+    {
+        foreach ((array) ($classData['methods'] ?? []) as $method) {
+            if (!is_array($method) || ($method['name'] ?? null) !== $constructorName) {
+                continue;
+            }
+
+            $parameters = is_array($method['parameters'] ?? null) ? $method['parameters'] : [];
+            if (count($parameters) !== 1 || !is_array($parameters[0])) {
+                continue;
+            }
+
+            $parameterType = is_string($parameters[0]['type'] ?? null) ? trim((string) $parameters[0]['type']) : '';
+            if ($parameterType === '') {
+                continue;
+            }
+
+            $parameterType = preg_replace('/^\s*const\b\s*/', '', $parameterType) ?? $parameterType;
+            $parameterType = rtrim(trim($parameterType), '& ');
+            $parameterType = trim($parameterType);
+            if ($parameterType === '') {
+                continue;
+            }
+
+            return $parameterType;
+        }
+
+        return null;
     }
 
     /**
