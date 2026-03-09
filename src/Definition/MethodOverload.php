@@ -19,6 +19,7 @@ readonly class MethodOverload
     public function __construct(
         public string $declaringClass,
         public string $returnType,
+        public ?string $smartPointerReturnTargetCppType,
         public array $parameters,
         public string $access,
         public bool $isConst,
@@ -47,13 +48,14 @@ readonly class MethodOverload
     }
 
     /**
-     * @return array{declaring_class: string, return_type: string, parameters: list<array<string, mixed>>, access: string, is_const: bool, is_static: bool, is_virtual: bool, is_pure_virtual: bool}
+     * @return array{declaring_class: string, return_type: string, smart_pointer_return_target_cpp_type: ?string, parameters: list<array<string, mixed>>, access: string, is_const: bool, is_static: bool, is_virtual: bool, is_pure_virtual: bool}
      */
     public function toArray(): array
     {
         return [
             'declaring_class' => $this->declaringClass,
             'return_type' => $this->returnType,
+            'smart_pointer_return_target_cpp_type' => $this->smartPointerReturnTargetCppType,
             'parameters' => array_map(
                 static fn(OverloadParameter $p): array => $p->toArray(),
                 $this->parameters,

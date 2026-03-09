@@ -67,7 +67,7 @@ it('casts const object pointer returns for wrapping', function (): void {
     
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qnodeconstholder.cpp');
         Assert::assertStringContainsString('const QNode * _result = intern->native_ptr->node();', $cpp);
-        Assert::assertStringContainsString('qt_qnode_wrap_native(return_value, const_cast<QNode *>(_result), qt_ce_QNode, true);', $cpp);
+        Assert::assertStringContainsString('qt_qnode_wrap_native(return_value, const_cast<QNode *>(_result), qt_ce_qnode, true);', $cpp);
         Assert::assertStringContainsString('if (UNEXPECTED(Z_TYPE_P(return_value) != IS_OBJECT)) {', $cpp);
         Assert::assertStringContainsString('Failed to instantiate PHP wrapper for QNodeConstHolder', $cpp);
 });
@@ -979,7 +979,7 @@ it('copies pointer returns for value types', function (): void {
     
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qvariantpointerholder.cpp');
         Assert::assertStringContainsString('QVariant * _result = intern->native_ptr->current();', $cpp);
-        Assert::assertStringContainsString('object_init_ex(return_value, qt_ce_QVariant);', $cpp);
+        Assert::assertStringContainsString('object_init_ex(return_value, qt_ce_qvariant);', $cpp);
         Assert::assertStringContainsString('_ret_intern->native_ptr = new QVariant(*_result);', $cpp);
         Assert::assertStringNotContainsString('qt_qvariant_wrap_native', $cpp);
 });
@@ -1077,4 +1077,44 @@ it('uses a move aware bridge for rvalue reference object parameters', function (
         Assert::assertStringContainsString('new QJSValue(std::move(_qt_arg_0));', $cpp);
         Assert::assertStringContainsString('QJSManagedValue _qt_arg_0 = QJSManagedValue(qt_qjsmanagedvalue_from_obj(Z_OBJ_P(value))->native_ptr->toJSValue(), qt_qjsmanagedvalue_from_obj(Z_OBJ_P(value))->native_ptr->engine());', $cpp);
         Assert::assertStringContainsString('new QJSValue(std::move(_qt_arg_0));', $cpp);
+});
+
+it('uses canonical qualified native types for namespaced value object returns', function (): void {
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));
+        mkdir($outputDir, 0777, true);
+
+        $header = $outputDir . '/qnodeid.h';
+        file_put_contents($header, <<<'CPP'
+namespace Qt3DCore {
+class QNodeId {
+public:
+    QNodeId();
+    static QNodeId createId();
+    bool equals(const QNodeId &other) const;
+};
+}
+CPP);
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $header,
+            'class' => 'QNodeId',
+            '--include' => [$outputDir],
+            '--module' => 'Qt3DCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QNodeId',
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        Assert::assertSame('ok', $payload['status']);
+
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qnodeid__qt3dcore.cpp');
+        Assert::assertStringContainsString('Qt3DCore::QNodeId _result = Qt3DCore::QNodeId::createId();', $cpp);
+        Assert::assertStringContainsString('_ret_intern->native_ptr = new Qt3DCore::QNodeId(std::move(_result));', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr->equals(*qt_qnodeid__qt3dcore_from_obj(Z_OBJ_P(other))->native_ptr);', $cpp);
 });

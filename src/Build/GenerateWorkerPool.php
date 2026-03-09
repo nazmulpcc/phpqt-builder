@@ -108,6 +108,10 @@ class GenerateWorkerPool
             $command[] = '--qt-path=' . $task->qtPath;
         }
 
+        if ($task->candidateKey !== null && $task->candidateKey !== '') {
+            $command[] = '--task-key=' . $task->candidateKey;
+        }
+
         foreach ($task->includePaths as $includePath) {
             $command[] = '--include=' . $includePath;
         }

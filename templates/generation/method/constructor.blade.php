@@ -101,6 +101,9 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
 @endif
 @if($ctx->hasPreventDestroy)
     qt_track_native_instance(intern->native_ptr);
+@if($ctx->isQObjectDerived)
+    qt_runtime_try_hook_about_to_quit();
+@endif
 @endif
 @elseif($method->isOverloaded)
 @include('generation.method.constructor_dispatch', ['ctx' => $ctx, 'method' => $method])
@@ -141,6 +144,9 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
 @endif
 @if($ctx->hasPreventDestroy)
     qt_track_native_instance(intern->native_ptr);
+@if($ctx->isQObjectDerived)
+    qt_runtime_try_hook_about_to_quit();
+@endif
 @foreach($method->params as $param)
 @if($param->isObject && !$param->isUnion)
 

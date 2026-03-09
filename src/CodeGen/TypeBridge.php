@@ -5,7 +5,11 @@ declare(strict_types=1);
 namespace QtBuilder\CodeGen;
 
 use QtBuilder\Definition\ContainerType;
+use QtBuilder\Support\CppClassTypeResolver;
+use QtBuilder\Support\CppName;
+use QtBuilder\Support\GeneratedTypeIdentity;
 use QtBuilder\Support\OpenGLNumericPointerArrayRegistry;
+use QtBuilder\Support\TypeResolutionContext;
 
 /**
  * Maps PHP type names (from the IR) to Zend C API constructs needed
@@ -21,6 +25,13 @@ use QtBuilder\Support\OpenGLNumericPointerArrayRegistry;
 class TypeBridge
 {
     private ?ContainerBridge $containerBridge = null;
+    /** @var array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string}> */
+    private array $currentClassMetadata = [];
+    /** @var array<string, string> */
+    private array $currentSmartPointerAliases = [];
+    private ?string $currentPhpNamespace = null;
+    private ?CppClassTypeResolver $currentClassTypeResolver = null;
+    private ?TypeResolutionContext $currentTypeResolutionContext = null;
 
     /**
      * PHP scalar types -> Zend IS_* constants (for arginfo declarations).
@@ -157,6 +168,66 @@ class TypeBridge
         'QXmlStreamAttributes',
     ];
 
+    /**
+     * @param array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string}> $classMetadata
+     */
+    public function setTypeResolutionMetadata(?string $phpNamespace, array $classMetadata, array $smartPointerAliases = []): void
+    {
+        $this->currentPhpNamespace = $phpNamespace !== null ? ltrim(trim($phpNamespace), '\\') : null;
+        $this->currentClassMetadata = $classMetadata;
+        $this->currentSmartPointerAliases = $smartPointerAliases;
+        $classUniverse = [];
+        foreach ($classMetadata as $metadata) {
+            if (!is_array($metadata)) {
+                continue;
+            }
+
+            $name = is_string($metadata['name'] ?? null) ? $metadata['name'] : '';
+            $qualifiedName = is_string($metadata['qualified_name'] ?? null) ? $metadata['qualified_name'] : '';
+            if ($name === '') {
+                continue;
+            }
+
+            $classUniverse[] = [
+                'name' => $name,
+                'qualified_name' => $qualifiedName !== '' ? $qualifiedName : null,
+                'module' => TypeResolutionContext::moduleForQualifiedName($qualifiedName),
+            ];
+        }
+        $this->currentClassTypeResolver = $classUniverse !== [] ? new CppClassTypeResolver($classUniverse) : null;
+
+        $module = null;
+        if ($this->currentPhpNamespace !== null && $this->currentPhpNamespace !== '') {
+            $parts = array_values(array_filter(explode('\\', $this->currentPhpNamespace), static fn(string $part): bool => $part !== ''));
+            $last = $parts !== [] ? $parts[array_key_last($parts)] : null;
+            if (is_string($last) && str_starts_with($last, 'Qt')) {
+                $module = $last;
+            }
+        }
+        $namespace = $module !== null && $module !== 'Qt' ? $module : null;
+        $this->currentTypeResolutionContext = new TypeResolutionContext(
+            className: '',
+            qualifiedClassName: null,
+            module: $module,
+            namespace: $namespace,
+        );
+        if ($this->containerBridge !== null) {
+            $this->containerBridge->setTypeResolutionMetadata(
+                $this->currentClassTypeResolver,
+                $this->currentTypeResolutionContext,
+                $this->currentSmartPointerAliases,
+            );
+        }
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function smartPointerAliases(): array
+    {
+        return $this->currentSmartPointerAliases;
+    }
+
     // ------------------------------------------------------------------
     // Query: Is this a scalar PHP type?
     // ------------------------------------------------------------------
@@ -182,8 +253,10 @@ class TypeBridge
      */
     public function isValueType(string $className): bool
     {
-        return \in_array($className, self::KNOWN_VALUE_TYPES, true)
-            || str_starts_with($className, 'QListOf');
+        $normalized = $this->phpTypeBaseName($className);
+
+        return \in_array($normalized, self::KNOWN_VALUE_TYPES, true)
+            || str_starts_with($normalized, 'QListOf');
     }
 
     /**
@@ -542,6 +615,10 @@ class TypeBridge
             return 'scalar';
         }
 
+        if ($this->resolveSmartPointerAliasTargetCppType($cppType) !== null) {
+            return 'smart_pointer_alias';
+        }
+
         // Object type — use the original C++ signature to distinguish value
         // returns from pointer returns. Unknown Qt value classes would
         // otherwise be misclassified as pointer-wrapped objects.
@@ -559,9 +636,13 @@ class TypeBridge
      */
     public function objectPointerReturnDeclarationType(string $cppType, string $phpClass): string
     {
+        if ($this->resolveSmartPointerAliasTargetCppType($cppType) !== null) {
+            return $this->canonicalSmartPointerAliasType($cppType);
+        }
+
         $normalized = trim(preg_replace('/\s+/', ' ', $cppType) ?? $cppType);
         if ($normalized === '' || !str_contains($normalized, '*')) {
-            return sprintf('%s *', $phpClass);
+            return sprintf('%s *', $this->nativeCppClassNameForPhpAndCppType($phpClass, $cppType));
         }
 
         return $normalized;
@@ -573,11 +654,81 @@ class TypeBridge
      */
     public function writableObjectPointerExpr(string $cppType, string $phpClass, string $expr): string
     {
+        if ($this->resolveSmartPointerAliasTargetCppType($cppType) !== null) {
+            return sprintf('%s.data()', $expr);
+        }
+
         if (preg_match('/\bconst\b/', $cppType) === 1) {
-            return sprintf('const_cast<%s *>(%s)', $phpClass, $expr);
+            return sprintf('const_cast<%s *>(%s)', $this->nativeCppClassNameForPhpAndCppType($phpClass, $cppType), $expr);
         }
 
         return $expr;
+    }
+
+    private function nativeCppClassNameForPhpAndCppType(string $phpType, string $cppType): string
+    {
+        $smartPointerTargetCppType = $this->resolveSmartPointerAliasTargetCppType($cppType);
+        if ($smartPointerTargetCppType !== null) {
+            return $this->nativeCppClassNameForPhpAndCppType($phpType, $smartPointerTargetCppType);
+        }
+
+        $normalized = $this->normalizeCppType($cppType);
+        if ($normalized !== '' && $normalized !== 'QObject' && $normalized !== 'QWidget') {
+            if (str_contains($normalized, '::')) {
+                return $normalized;
+            }
+
+            $generationId = $this->generationIdForPhpAndCppType($phpType, $normalized);
+            foreach ($this->currentClassMetadata as $metadata) {
+                if (($metadata['generation_id'] ?? null) !== $generationId) {
+                    continue;
+                }
+
+                $qualifiedName = is_string($metadata['qualified_name'] ?? null)
+                    ? trim((string) $metadata['qualified_name'])
+                    : '';
+                if ($qualifiedName !== '') {
+                    return $qualifiedName;
+                }
+            }
+
+            return $normalized;
+        }
+
+        return $this->phpTypeBaseName($phpType);
+    }
+
+    private function resolveSmartPointerAliasTargetCppType(string $cppType): ?string
+    {
+        if ($this->currentSmartPointerAliases === []) {
+            return null;
+        }
+
+        if (preg_match('/^(?:const\s+)?(?<alias>[A-Za-z_][A-Za-z0-9_]*)\s*(?:[&*]\s*)?$/', trim($cppType), $matches) !== 1) {
+            return null;
+        }
+
+        $alias = trim((string) ($matches['alias'] ?? ''));
+        if ($alias === '') {
+            return null;
+        }
+
+        return $this->currentSmartPointerAliases[$alias] ?? null;
+    }
+
+    private function canonicalSmartPointerAliasType(string $cppType): string
+    {
+        $normalized = $this->normalizeCppType($cppType);
+        if ($normalized === '' || str_contains($normalized, '::')) {
+            return $normalized;
+        }
+
+        $namespace = $this->currentTypeResolutionContext?->namespace ?? $this->currentTypeResolutionContext?->module;
+        if (is_string($namespace) && $namespace !== '' && $namespace !== 'Qt') {
+            return $namespace . '::' . $normalized;
+        }
+
+        return $normalized;
     }
 
     /**
@@ -625,6 +776,16 @@ class TypeBridge
         bool $isWritableQtString = false,
         ?string $nullableObjectFallbackExpr = null,
     ): array {
+        if ($this->resolveSmartPointerAliasTargetCppType($cppType) !== null && $this->isObjectType($phpType)) {
+            return [
+                'lines' => [],
+                'expr' => $sourceIsZval
+                    ? $this->zvalToNativeExpr($phpType, $cppType, $sourceVarName, $nullable, $nullableObjectFallbackExpr)
+                    : $this->directPhpToNativeExpr($phpType, $cppType, $sourceVarName, $nullable, $nullableObjectFallbackExpr),
+                'local_var' => null,
+            ];
+        }
+
         if (
             $persistentStorageVar !== null
             && $phpType === 'int'
@@ -906,6 +1067,30 @@ class TypeBridge
         ?string $nullableObjectFallbackExpr = null,
     ): string
     {
+        if ($this->isUnionType($phpType)) {
+            $parts = array_values(array_filter(
+                explode('|', $phpType),
+                static fn(string $part): bool => $part !== '' && $part !== 'null',
+            ));
+            if ($parts === []) {
+                return $varName;
+            }
+
+            $fallbackExpr = $this->zvalToNativeExpr($parts[0], $cppType, $varName, true, $nullableObjectFallbackExpr);
+            $expr = $fallbackExpr;
+            for ($i = count($parts) - 1; $i >= 0; --$i) {
+                $part = $parts[$i];
+                $expr = sprintf(
+                    '(%s ? %s : %s)',
+                    $this->zvalTypeMatchExpr($varName, $part),
+                    $this->zvalToNativeExpr($part, $cppType, $varName, $nullable, $nullableObjectFallbackExpr),
+                    $expr,
+                );
+            }
+
+            return $expr;
+        }
+
         if ($nullable) {
             return match ($phpType) {
                 'int' => sprintf(
@@ -954,6 +1139,30 @@ class TypeBridge
         ?string $nullableObjectFallbackExpr = null,
     ): string
     {
+        if ($this->isUnionType($phpType)) {
+            $parts = array_values(array_filter(
+                explode('|', $phpType),
+                static fn(string $part): bool => $part !== '' && $part !== 'null',
+            ));
+            if ($parts === []) {
+                return $varName;
+            }
+
+            $fallbackExpr = $this->zvalToNativeRvalueExpr($parts[0], $cppType, $varName, true, $nullableObjectFallbackExpr);
+            $expr = $fallbackExpr;
+            for ($i = count($parts) - 1; $i >= 0; --$i) {
+                $part = $parts[$i];
+                $expr = sprintf(
+                    '(%s ? %s : %s)',
+                    $this->zvalTypeMatchExpr($varName, $part),
+                    $this->zvalToNativeRvalueExpr($part, $cppType, $varName, $nullable, $nullableObjectFallbackExpr),
+                    $expr,
+                );
+            }
+
+            return $expr;
+        }
+
         if ($nullable) {
             return match ($phpType) {
                 'int' => sprintf(
@@ -1049,6 +1258,31 @@ class TypeBridge
         ?string $nullableFallbackExpr = null,
     ): string
     {
+        $smartPointerTargetCppType = $this->resolveSmartPointerAliasTargetCppType($cppType);
+        if ($smartPointerTargetCppType !== null) {
+            $fromObj = $this->fromObjFuncName($phpType);
+            $baseExpr = sprintf('%s(Z_OBJ_P(%s))->native_ptr', $fromObj, $varName);
+            $nativeTargetCppType = $this->nativeCppClassNameForPhpAndCppType($phpType, $smartPointerTargetCppType);
+            $aliasCppType = $this->canonicalSmartPointerAliasType($cppType);
+            $sharedExpr = sprintf(
+                '%s(%s, [](%s *) {})',
+                $aliasCppType,
+                $baseExpr,
+                $nativeTargetCppType,
+            );
+
+            if ($nullable) {
+                return sprintf(
+                    '(%1$s ? %2$s : %3$s())',
+                    $this->zvalIsExpectedObjectExpr($varName, $phpType),
+                    $sharedExpr,
+                    $aliasCppType,
+                );
+            }
+
+            return $sharedExpr;
+        }
+
         $fromObj = $this->fromObjFuncName($phpType);
         $baseExpr = sprintf('%s(Z_OBJ_P(%s))->native_ptr', $fromObj, $varName);
 
@@ -1056,8 +1290,8 @@ class TypeBridge
         if (str_contains($cppType, '*') && !str_contains($cppType, '&')) {
             if ($nullable) {
                 return sprintf(
-                    '(%1$s != NULL && Z_TYPE_P(%1$s) == IS_OBJECT ? %2$s : %3$s)',
-                    $varName,
+                    '(%1$s ? %2$s : %3$s)',
+                    $this->zvalIsExpectedObjectExpr($varName, $phpType),
                     $baseExpr,
                     $nullableFallbackExpr ?? 'NULL',
                 );
@@ -1069,8 +1303,8 @@ class TypeBridge
         // Otherwise (const ref, value), dereference
         if ($nullable) {
             return sprintf(
-                '(%1$s != NULL && Z_TYPE_P(%1$s) == IS_OBJECT ? *%2$s : %3$s())',
-                $varName,
+                '(%1$s ? *%2$s : %3$s())',
+                $this->zvalIsExpectedObjectExpr($varName, $phpType),
                 $baseExpr,
                 $nullableFallbackExpr ?? $this->normalizeCppType($cppType),
             );
@@ -1093,8 +1327,8 @@ class TypeBridge
 
         if ($nullable) {
             return sprintf(
-                '(%1$s != NULL && Z_TYPE_P(%1$s) == IS_OBJECT ? %2$s : %3$s())',
-                $varName,
+                '(%1$s ? %2$s : %3$s())',
+                $this->zvalIsExpectedObjectExpr($varName, $phpType),
                 $this->nonNullableObjectRvalueExpr($normalizedType, $baseExpr),
                 $nullableFallbackExpr ?? $normalizedType,
             );
@@ -1438,19 +1672,23 @@ class TypeBridge
         }
 
         if ($strategy === 'value_object') {
+            $nativeCppType = $this->nativeValueObjectType($cppType);
+
             return sprintf(
                 "object_init_ex(%s, %s);\n    %s(%s)->native_ptr = new %s(%s);",
                 $zvalVar,
                 $this->ceVarName($phpType),
                 $this->zMacroName($phpType),
                 $zvalVar,
-                $phpType,
+                $nativeCppType,
                 $sourceExpr,
             );
         }
 
         if ($strategy === 'qobject_pointer') {
             if ($this->isValueType($phpType)) {
+                $nativeCppType = $this->nativeValueObjectType($cppType);
+
                 return sprintf(
                     "if (%s != NULL) {\n    object_init_ex(%s, %s);\n    %s(%s)->native_ptr = new %s(*%s);\n} else {\n    ZVAL_NULL(%s);\n}",
                     $sourceExpr,
@@ -1458,7 +1696,7 @@ class TypeBridge
                     $this->ceVarName($phpType),
                     $this->zMacroName($phpType),
                     $zvalVar,
-                    $phpType,
+                    $nativeCppType,
                     $sourceExpr,
                     $zvalVar,
                 );
@@ -1523,6 +1761,16 @@ class TypeBridge
     }
 
     /**
+     * Return the concrete native C++ type used for value-object locals and
+     * wrapper allocation. This strips const/reference/pointer qualifiers while
+     * preserving namespaces.
+     */
+    public function nativeValueObjectType(string $cppType): string
+    {
+        return $this->normalizeCppType($cppType);
+    }
+
+    /**
      * @return array{lines: list<string>, expr: string, cleanup_lines: list<string>}
      */
     public function nativeReturnFromZvalSetup(string $phpType, string $cppType, string $zvalPtrExpr, string $tempPrefix = '_qt_ret'): array
@@ -1583,6 +1831,21 @@ class TypeBridge
         return strtolower($className);
     }
 
+    public function generationIdForQualifiedName(string $qualifiedName): string
+    {
+        return GeneratedTypeIdentity::fromNames(CppName::unqualify($qualifiedName), $qualifiedName)->generationId;
+    }
+
+    public function generationIdForPhpAndCppType(string $phpType, string $cppType): string
+    {
+        $normalizedCppType = $this->normalizeCppType($cppType);
+        if (str_contains($normalizedCppType, '::')) {
+            return $this->generationIdForQualifiedName($normalizedCppType);
+        }
+
+        return $this->generationIdForTypeName($phpType);
+    }
+
     /**
      * Convert a PHP class name to an UPPER_CASE C identifier component.
      *
@@ -1600,7 +1863,12 @@ class TypeBridge
      */
     public function ceVarName(string $className): string
     {
-        return sprintf('qt_ce_%s', $className);
+        return $this->ceVarNameForId($this->generationIdForTypeName($className));
+    }
+
+    public function ceVarNameForId(string $generationId): string
+    {
+        return sprintf('qt_ce_%s', $generationId);
     }
 
     /**
@@ -1610,7 +1878,12 @@ class TypeBridge
      */
     public function handlersVarName(string $className): string
     {
-        return sprintf('qt_%s_handlers', $this->classToLower($className));
+        return $this->handlersVarNameForId($this->generationIdForTypeName($className));
+    }
+
+    public function handlersVarNameForId(string $generationId): string
+    {
+        return sprintf('qt_%s_handlers', strtolower($generationId));
     }
 
     /**
@@ -1620,7 +1893,12 @@ class TypeBridge
      */
     public function objectStructName(string $className): string
     {
-        return sprintf('qt_%s_object', $this->classToLower($className));
+        return $this->objectStructNameForId($this->generationIdForTypeName($className));
+    }
+
+    public function objectStructNameForId(string $generationId): string
+    {
+        return sprintf('qt_%s_object', strtolower($generationId));
     }
 
     /**
@@ -1630,7 +1908,12 @@ class TypeBridge
      */
     public function fromObjFuncName(string $className): string
     {
-        return sprintf('qt_%s_from_obj', $this->classToLower($className));
+        return $this->fromObjFuncNameForId($this->generationIdForTypeName($className));
+    }
+
+    public function fromObjFuncNameForId(string $generationId): string
+    {
+        return sprintf('qt_%s_from_obj', strtolower($generationId));
     }
 
     /**
@@ -1640,7 +1923,12 @@ class TypeBridge
      */
     public function zMacroName(string $className): string
     {
-        return sprintf('Z_%s_P', $this->classToUpper($className));
+        return $this->zMacroNameForId($this->generationIdForTypeName($className));
+    }
+
+    public function zMacroNameForId(string $generationId): string
+    {
+        return sprintf('Z_%s_P', strtoupper($generationId));
     }
 
     /**
@@ -1650,7 +1938,12 @@ class TypeBridge
      */
     public function wrapNativeFuncName(string $className): string
     {
-        return sprintf('qt_%s_wrap_native', $this->classToLower($className));
+        return $this->wrapNativeFuncNameForId($this->generationIdForTypeName($className));
+    }
+
+    public function wrapNativeFuncNameForId(string $generationId): string
+    {
+        return sprintf('qt_%s_wrap_native', strtolower($generationId));
     }
 
     /**
@@ -1688,7 +1981,12 @@ class TypeBridge
      */
     public function minitName(string $className): string
     {
-        return sprintf('qt_%s', $this->classToLower($className));
+        return $this->minitNameForId($this->generationIdForTypeName($className));
+    }
+
+    public function minitNameForId(string $generationId): string
+    {
+        return sprintf('qt_%s', strtolower($generationId));
     }
 
     /**
@@ -1699,6 +1997,108 @@ class TypeBridge
     public function qtInclude(string $className): string
     {
         return sprintf('<%s>', $className);
+    }
+
+    private function generationIdForTypeName(string $typeName): string
+    {
+        $trimmed = ltrim(trim($this->runtimeSymbolTypeName($typeName)), '\\');
+        if ($trimmed === '') {
+            return '';
+        }
+
+        $metadata = $this->currentClassMetadata[$trimmed] ?? null;
+        if (is_array($metadata) && is_string($metadata['generation_id'] ?? null) && $metadata['generation_id'] !== '') {
+            return $metadata['generation_id'];
+        }
+
+        if (str_contains($trimmed, '\\')) {
+            $parts = array_values(array_filter(explode('\\', $trimmed), static fn(string $part): bool => $part !== ''));
+            $bareName = array_pop($parts) ?: $trimmed;
+            $moduleSegment = $parts[1] ?? null;
+
+            if (is_string($moduleSegment) && str_starts_with($moduleSegment, 'Qt')) {
+                return GeneratedTypeIdentity::fromNames($bareName, $moduleSegment . '::' . $bareName)->generationId;
+            }
+
+            return GeneratedTypeIdentity::fromNames($bareName, null)->generationId;
+        }
+
+        if ($this->currentPhpNamespace !== null && $this->currentPhpNamespace !== '') {
+            $fqcn = $this->currentPhpNamespace . '\\' . $trimmed;
+            foreach ($this->currentClassMetadata as $candidate) {
+                if (!is_array($candidate)) {
+                    continue;
+                }
+
+                $namespace = is_string($candidate['namespace'] ?? null) ? ltrim($candidate['namespace'], '\\') : '';
+                $name = is_string($candidate['name'] ?? null) ? $candidate['name'] : '';
+                $generationId = is_string($candidate['generation_id'] ?? null) ? $candidate['generation_id'] : '';
+                if ($generationId === '') {
+                    continue;
+                }
+
+                if ($fqcn === ltrim($namespace . '\\' . $name, '\\')) {
+                    return $generationId;
+                }
+            }
+        }
+
+        $uniqueMatches = [];
+        foreach ($this->currentClassMetadata as $candidate) {
+            if (!is_array($candidate)) {
+                continue;
+            }
+
+            $name = is_string($candidate['name'] ?? null) ? $candidate['name'] : '';
+            $generationId = is_string($candidate['generation_id'] ?? null) ? $candidate['generation_id'] : '';
+            if ($name !== $trimmed || $generationId === '') {
+                continue;
+            }
+
+            $uniqueMatches[$generationId] = true;
+        }
+
+        if (count($uniqueMatches) === 1) {
+            return array_key_first($uniqueMatches);
+        }
+
+        return GeneratedTypeIdentity::fromNames(CppName::unqualify($trimmed), str_contains($trimmed, '::') ? $trimmed : null)->generationId;
+    }
+
+    private function runtimeSymbolTypeName(string $typeName): string
+    {
+        if (!str_contains($typeName, '|')) {
+            return $typeName;
+        }
+
+        $parts = array_values(array_filter(
+            array_map(static fn(string $part): string => trim($part), explode('|', $typeName)),
+            static fn(string $part): bool => $part !== '' && $part !== 'null',
+        ));
+
+        foreach ($parts as $part) {
+            if ($this->isObjectType($part)) {
+                return $part;
+            }
+        }
+
+        return $parts[0] ?? $typeName;
+    }
+
+    private function phpTypeBaseName(string $type): string
+    {
+        $trimmed = ltrim(trim($type), '\\');
+        if ($trimmed === '') {
+            return '';
+        }
+
+        if (str_contains($trimmed, '\\')) {
+            $segments = explode('\\', $trimmed);
+
+            return end($segments) ?: $trimmed;
+        }
+
+        return CppName::unqualify($trimmed);
     }
 
     // ------------------------------------------------------------------
@@ -1785,6 +2185,15 @@ class TypeBridge
     private function zvalDerefExpr(string $varName): string
     {
         return sprintf('((Z_TYPE_P(%1$s) == IS_REFERENCE) ? Z_REFVAL_P(%1$s) : (%1$s))', $varName);
+    }
+
+    private function zvalIsExpectedObjectExpr(string $varName, string $phpType): string
+    {
+        return sprintf(
+            '(%1$s != NULL && Z_TYPE_P(%1$s) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s), %2$s))',
+            $varName,
+            $this->ceVarName($phpType),
+        );
     }
 
     private function typeIncludes(string $phpType, string $needle): bool
@@ -1893,7 +2302,17 @@ class TypeBridge
 
     private function containerBridge(): ContainerBridge
     {
-        return $this->containerBridge ??= new ContainerBridge();
+        if ($this->containerBridge === null) {
+            $this->containerBridge = new ContainerBridge();
+        }
+
+        $this->containerBridge->setTypeResolutionMetadata(
+            $this->currentClassTypeResolver,
+            $this->currentTypeResolutionContext,
+            $this->currentSmartPointerAliases,
+        );
+
+        return $this->containerBridge;
     }
 
     private function containerSpec(string $cppType): ?ContainerType
@@ -1965,12 +2384,13 @@ class TypeBridge
      */
     private function phpArrayToSequenceLines(ContainerType $container, string $sourceVarName, string $nativeVarName, bool $sourceIsZval, string $failureStatement): array
     {
-        $containerType = $this->normalizeCppType($container->rawType);
+        $containerType = $this->canonicalContainerNativeType($container);
         $entryVar = $nativeVarName . '_entry';
         $stringVar = $nativeVarName . '_str';
         $valueVar = $nativeVarName . '_value';
-        $phpType = $this->containerBridge()->elementPhpType((string) $container->elementType);
-        $nullable = $this->isPointerType((string) $container->elementType);
+        $elementCppType = $this->sequenceElementCppType($container);
+        $phpType = $this->containerBridge()->elementPhpType($elementCppType);
+        $nullable = $this->isPointerType($elementCppType);
 
         $lines = [
             sprintf('%s %s;', $containerType, $nativeVarName),
@@ -1987,7 +2407,7 @@ class TypeBridge
         $lines[] = sprintf('    zval *%s;', $entryVar);
         $lines[] = sprintf('    ZEND_HASH_FOREACH_VAL(%s_ht, %s) {', $nativeVarName, $entryVar);
 
-        $lines = array_merge($lines, $this->sequenceInputValueLines($container, $phpType, $entryVar, $valueVar, $stringVar, $nullable, $failureStatement));
+        $lines = array_merge($lines, $this->sequenceInputValueLines($elementCppType, $phpType, $entryVar, $valueVar, $stringVar, $nullable, $failureStatement));
         $lines[] = sprintf('        %s.append(%s);', $nativeVarName, $valueVar);
         $lines[] = '    } ZEND_HASH_FOREACH_END();';
         if (!$sourceIsZval) {
@@ -2001,7 +2421,7 @@ class TypeBridge
      * @return list<string>
      */
     private function sequenceInputValueLines(
-        ContainerType $container,
+        string $elementType,
         string $phpType,
         string $entryVar,
         string $valueVar,
@@ -2009,7 +2429,6 @@ class TypeBridge
         bool $nullable,
         string $failureStatement,
     ): array {
-        $elementType = (string) $container->elementType;
         $lines = [];
 
         if ($elementType === 'QVariant') {
@@ -2058,6 +2477,89 @@ class TypeBridge
         $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($elementType), $valueVar, $nativeExpr);
 
         return $lines;
+    }
+
+    private function canonicalContainerNativeType(ContainerType $container): string
+    {
+        $rawType = $this->normalizeCppType($container->rawType);
+        $arguments = $this->topLevelTemplateArguments($rawType);
+        if ($arguments === []) {
+            return $rawType;
+        }
+
+        if ($container->kind === 'sequence' && count($arguments) === 1) {
+            return preg_replace('/<.*>$/', '<' . $this->localContainerNativeType($arguments[0]) . '>', $rawType) ?? $rawType;
+        }
+
+        if (($container->kind === 'map' || $container->kind === 'hash') && count($arguments) === 2) {
+            return preg_replace(
+                '/<.*>$/',
+                '<' . $this->localContainerNativeType($arguments[0]) . ', ' . $this->localContainerNativeType($arguments[1]) . '>',
+                $rawType,
+            ) ?? $rawType;
+        }
+
+        return $rawType;
+    }
+
+    private function sequenceElementCppType(ContainerType $container): string
+    {
+        $rawType = $this->normalizeCppType($container->rawType);
+        $arguments = $this->topLevelTemplateArguments($rawType);
+        if (count($arguments) === 1) {
+            return $arguments[0];
+        }
+
+        return (string) $container->elementType;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function topLevelTemplateArguments(string $cppType): array
+    {
+        $start = strpos($cppType, '<');
+        $end = strrpos($cppType, '>');
+        if ($start === false || $end === false || $end <= $start) {
+            return [];
+        }
+
+        $inner = substr($cppType, $start + 1, $end - $start - 1);
+        $parts = [];
+        $depth = 0;
+        $buffer = '';
+        $length = strlen($inner);
+
+        for ($i = 0; $i < $length; $i++) {
+            $char = $inner[$i];
+            if ($char === '<') {
+                $depth++;
+                $buffer .= $char;
+                continue;
+            }
+            if ($char === '>') {
+                $depth--;
+                $buffer .= $char;
+                continue;
+            }
+            if ($char === ',' && $depth === 0) {
+                $part = trim($buffer);
+                if ($part !== '') {
+                    $parts[] = $part;
+                }
+                $buffer = '';
+                continue;
+            }
+
+            $buffer .= $char;
+        }
+
+        $tail = trim($buffer);
+        if ($tail !== '') {
+            $parts[] = $tail;
+        }
+
+        return $parts;
     }
 
     /**
@@ -2230,25 +2732,27 @@ class TypeBridge
         }
 
         if ($strategy === 'value_object') {
+            $generationId = $this->generationIdForPhpAndCppType($phpType, $cppType);
             return [
-                sprintf('object_init_ex(%s, %s);', $zvalPtrExpr, $this->ceVarName($phpType)),
-                sprintf('%s(%s)->native_ptr = new %s(%s);', $this->zMacroName($phpType), $zvalPtrExpr, $phpType, $sourceExpr),
+                sprintf('object_init_ex(%s, %s);', $zvalPtrExpr, $this->ceVarNameForId($generationId)),
+                sprintf('%s(%s)->native_ptr = new %s(%s);', $this->zMacroNameForId($generationId), $zvalPtrExpr, $this->normalizeCppType($cppType), $sourceExpr),
             ];
         }
 
         if ($strategy === 'qobject_pointer') {
+            $generationId = $this->generationIdForPhpAndCppType($phpType, $cppType);
             if ($this->isValueType($phpType)) {
                 return [
                     sprintf('if (%s != NULL) {', $sourceExpr),
-                    sprintf('    object_init_ex(%s, %s);', $zvalPtrExpr, $this->ceVarName($phpType)),
-                    sprintf('    %s(%s)->native_ptr = new %s(*%s);', $this->zMacroName($phpType), $zvalPtrExpr, $phpType, $sourceExpr),
+                    sprintf('    object_init_ex(%s, %s);', $zvalPtrExpr, $this->ceVarNameForId($generationId)),
+                    sprintf('    %s(%s)->native_ptr = new %s(*%s);', $this->zMacroNameForId($generationId), $zvalPtrExpr, $this->normalizeCppType($cppType), $sourceExpr),
                     '} else {',
                     sprintf('    ZVAL_NULL(%s);', $zvalPtrExpr),
                     '}',
                 ];
             }
 
-            return [sprintf('%s(%s, %s, %s, true);', $this->wrapNativeFuncName($phpType), $zvalPtrExpr, $this->writableObjectPointerExpr($cppType, $phpType, $sourceExpr), $this->ceVarName($phpType))];
+            return [sprintf('%s(%s, %s, %s, true);', $this->wrapNativeFuncNameForId($generationId), $zvalPtrExpr, $this->writableObjectPointerExpr($cppType, $phpType, $sourceExpr), $this->ceVarNameForId($generationId))];
         }
 
         return [sprintf('ZVAL_NULL(%s);', $zvalPtrExpr)];
@@ -2270,8 +2774,33 @@ class TypeBridge
         $type = preg_replace('/\bconst\b/', '', $type) ?? $type;
         $type = trim(preg_replace('/\s+/', ' ', $type) ?? $type);
         $type = rtrim($type, '& ');
+        $type = trim($type);
 
-        return trim($type);
+        if ($this->currentClassTypeResolver !== null && $this->currentTypeResolutionContext !== null) {
+            return $this->currentClassTypeResolver->canonicalizeType($type, $this->currentTypeResolutionContext);
+        }
+
+        if (preg_match('/^(?<base>(?:::)?(?:[A-Za-z_][A-Za-z0-9_]*::)*[A-Za-z_][A-Za-z0-9_]*)(?<suffix>(?:\s*[*]\s*)*)$/', $type, $matches) === 1) {
+            $base = trim((string) ($matches['base'] ?? ''));
+            $suffix = (string) ($matches['suffix'] ?? '');
+            $generationId = $this->generationIdForTypeName($base);
+            if ($generationId !== null) {
+                foreach ($this->currentClassMetadata as $metadata) {
+                    if (($metadata['generation_id'] ?? null) !== $generationId) {
+                        continue;
+                    }
+
+                    $qualifiedName = is_string($metadata['qualified_name'] ?? null)
+                        ? trim((string) $metadata['qualified_name'])
+                        : '';
+                    if ($qualifiedName !== '') {
+                        return $qualifiedName . $suffix;
+                    }
+                }
+            }
+        }
+
+        return $type;
     }
 
     /**

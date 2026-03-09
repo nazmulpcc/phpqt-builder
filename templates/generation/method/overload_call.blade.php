@@ -67,33 +67,40 @@ if (!$overload->isPureVirtual) {
 {!! $indent !!}{!! $ctx->typeBridge->nativeStringToPhpReturn($overload->cppReturnType, '_result') !!};
 @elseif($overload->returnStrategy === 'value_object')
 @php
-    $returnClass = trim(str_replace(['const ', '&', '*'], '', $overload->cppReturnType));
-    $returnCe = $ctx->typeBridge->ceVarName($returnClass);
-    $returnFromObj = $ctx->typeBridge->fromObjFuncName($returnClass);
-    $returnStruct = $ctx->typeBridge->objectStructName($returnClass);
+    $returnPhpClass = trim(str_replace(['const ', '&', '*'], '', $overload->phpReturnType));
+    $returnCppClass = $ctx->typeBridge->nativeValueObjectType($overload->cppReturnType);
+    $returnCe = $ctx->ceVarNameForPhpType($returnPhpClass);
+    $returnFromObj = $ctx->fromObjFuncNameForPhpType($returnPhpClass);
+    $returnStruct = $ctx->objectStructNameForPhpType($returnPhpClass);
 @endphp
-{!! $indent !!}{!! $returnClass !!} _result = {!! $callExpr !!};
+{!! $indent !!}{!! $returnCppClass !!} _result = {!! $callExpr !!};
 @foreach($writebackLines as $line)
 {!! $indent !!}{!! $line !!}
 @endforeach
 {!! $indent !!}object_init_ex(return_value, {!! $returnCe !!});
 {!! $indent !!}if (UNEXPECTED(Z_TYPE_P(return_value) != IS_OBJECT)) {
 {!! $indent !!}    if (!EG(exception)) {
-{!! $indent !!}        zend_throw_error(NULL, "Failed to instantiate PHP wrapper for {!! $returnClass !!}");
+ {!! $indent !!}        zend_throw_error(NULL, "Failed to instantiate PHP wrapper for {!! $returnPhpClass !!}");
 {!! $indent !!}    }
 {!! $indent !!}    RETURN_THROWS();
 {!! $indent !!}}
 {!! $indent !!}{!! $returnStruct !!} *_ret_intern = {!! $returnFromObj !!}(Z_OBJ_P(return_value));
-{!! $indent !!}_ret_intern->native_ptr = new {!! $returnClass !!}(std::move(_result));
-@elseif($overload->returnStrategy === 'qobject_pointer')
+{!! $indent !!}_ret_intern->native_ptr = new {!! $returnCppClass !!}(std::move(_result));
+@elseif($overload->returnStrategy === 'qobject_pointer' || $overload->returnStrategy === 'smart_pointer_alias')
 @php
-    $returnClass = trim(str_replace(['const ', '&', '*'], '', $overload->cppReturnType));
+    $isSmartPointerAlias = $overload->smartPointerReturnTargetCppType !== null
+        || $overload->returnStrategy === 'smart_pointer_alias';
+    $returnClass = $isSmartPointerAlias
+        ? trim($overload->phpReturnType)
+        : trim(str_replace(['const ', '&', '*'], '', $overload->cppReturnType));
     $resultDeclType = $ctx->typeBridge->objectPointerReturnDeclarationType($overload->cppReturnType, $returnClass);
-    $returnCe = $ctx->typeBridge->ceVarName($returnClass);
-    $returnFromObj = $ctx->typeBridge->fromObjFuncName($returnClass);
-    $returnStruct = $ctx->typeBridge->objectStructName($returnClass);
+    $returnCe = $ctx->ceVarNameForPhpType($returnClass);
+    $returnFromObj = $ctx->fromObjFuncNameForPhpType($returnClass);
+    $returnStruct = $ctx->objectStructNameForPhpType($returnClass);
     $wrapFunc = $ctx->typeBridge->wrapNativeFuncName($returnClass);
-    $isValueType = $ctx->typeBridge->isValueType($returnClass);
+    $isValueType = $isSmartPointerAlias
+        ? false
+        : $ctx->typeBridge->isValueType($returnClass);
     $writableResultExpr = $ctx->typeBridge->writableObjectPointerExpr($overload->cppReturnType, $returnClass, '_result');
 @endphp
 {!! $indent !!}{!! $resultDeclType !!} _result = {!! $callExpr !!};

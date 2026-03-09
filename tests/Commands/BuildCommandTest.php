@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use QtBuilder\Commands\BuildCommand;
+use QtBuilder\Build\Dependencies\StaticModuleDependencyResolver;
 use QtBuilder\Tests\Support\FakeExtensionBootstrapper;
 use QtBuilder\Tests\Support\FakeSystemInformation;
 use Symfony\Component\Console\Command\Command;
@@ -455,7 +456,7 @@ it('generates wrappers for supplemental class candidates discovered through incl
     expect($result)->toBeSuccessfulCommandResult()
         ->and($result['display'])->toContain('Supplemental class discovery: queued 1 new candidate(s).')
         ->and(is_file($outputDir . '/classes/qt_qabstractopenglfunctions.cpp'))->toBeTrue()
-        ->and((string) file_get_contents($outputDir . '/classes/qt_qabstractopenglfunctions.h'))->toContain('#include <qopenglversionfunctions.h>')
+        ->and((string) file_get_contents($outputDir . '/classes/qt_qabstractopenglfunctions.h'))->toContain('qopenglversionfunctions.h')
         ->and(is_file($outputDir . '/classes/qt_qopenglfunctions_1_0.cpp'))->toBeTrue()
         ->and(is_file($metadataDir . '/supplemental_candidates.json'))->toBeTrue();
 
@@ -499,6 +500,251 @@ it('auto-adds static manifest dependencies for monolithic builds', function (): 
         ->and($runtimeManifest['expanded_modules'] ?? null)->toBe(['QtCore', 'QtGui', 'QtWidgets'])
         ->and($runtimeManifest['built_modules'] ?? null)->toBe(['QtCore', 'QtGui', 'QtWidgets'])
         ->and($runtimeManifest['modules']['QtWidgets']['dependencies'] ?? null)->toBe(['QtCore', 'QtGui']);
+});
+
+it('uses all supported modules when modules argument is omitted in non-interactive mode', function (): void {
+    $fixtureRoot = qt_fixture_path('module-split-qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-all-non-interactive-' . bin2hex(random_bytes(4));
+    mkdir($buildRoot, 0777, true);
+    $manifestPath = $buildRoot . '/manifest.json';
+    $manifest = [
+        'schema_version' => 1,
+        'qt_major' => 6,
+        'modules' => [
+            'QtCore' => ['extension_name' => 'qtcore', 'dependencies' => []],
+            'QtGui' => ['extension_name' => 'qtgui', 'dependencies' => ['QtCore']],
+            'QtWidgets' => ['extension_name' => 'qtwidgets', 'dependencies' => ['QtGui']],
+        ],
+    ];
+    file_put_contents($manifestPath, json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+    $promptCalls = 0;
+    $command = new BuildCommand(
+        FakeSystemInformation::passing(),
+        new FakeExtensionBootstrapper(),
+        dependencyResolver: new StaticModuleDependencyResolver($manifestPath),
+        moduleSelector: static function (string $label, array $options, array $default) use (&$promptCalls): array {
+            $promptCalls++;
+            return ['QtCore'];
+        },
+    );
+
+    $tester = new CommandTester($command);
+    $exitCode = $tester->execute([
+        '--qt-path' => $fixtureRoot,
+        '--output' => $buildRoot,
+        '--jobs' => '2',
+        '--no-build' => true,
+    ], ['interactive' => false]);
+
+    expect($exitCode)->toBe(Command::SUCCESS)
+        ->and($promptCalls)->toBe(0)
+        ->and($tester->getDisplay())->toContain(
+            'Requested modules: QtCore, QtGui, QtWidgets',
+            'Expanded modules: QtCore, QtGui, QtWidgets',
+        );
+});
+
+it('uses all supported modules when prompt selects All for omitted modules argument', function (): void {
+    $fixtureRoot = qt_fixture_path('module-split-qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-all-interactive-' . bin2hex(random_bytes(4));
+    mkdir($buildRoot, 0777, true);
+    $manifestPath = $buildRoot . '/manifest.json';
+    $manifest = [
+        'schema_version' => 1,
+        'qt_major' => 6,
+        'modules' => [
+            'QtCore' => ['extension_name' => 'qtcore', 'dependencies' => []],
+            'QtGui' => ['extension_name' => 'qtgui', 'dependencies' => ['QtCore']],
+            'QtWidgets' => ['extension_name' => 'qtwidgets', 'dependencies' => ['QtGui']],
+        ],
+    ];
+    file_put_contents($manifestPath, json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+    $promptCalls = 0;
+    $command = new BuildCommand(
+        FakeSystemInformation::passing(),
+        new FakeExtensionBootstrapper(),
+        dependencyResolver: new StaticModuleDependencyResolver($manifestPath),
+        moduleSelector: static function (string $label, array $options, array $default) use (&$promptCalls): array {
+            $promptCalls++;
+            expect($default)->toBe(['__all'])
+                ->and($options)->toHaveKeys(['__all', 'QtCore', 'QtGui', 'QtWidgets']);
+            return ['__all'];
+        },
+    );
+
+    $result = qt_command_result($command, [
+        '--qt-path' => $fixtureRoot,
+        '--output' => $buildRoot,
+        '--jobs' => '2',
+        '--no-build' => true,
+    ]);
+
+    expect($result)->toBeSuccessfulCommandResult()
+        ->and($promptCalls)->toBe(1)
+        ->and($result['display'])->toContain(
+            'Requested modules: QtCore, QtGui, QtWidgets',
+            'Expanded modules: QtCore, QtGui, QtWidgets',
+        );
+});
+
+it('uses prompt-selected subset when modules argument is omitted in interactive mode', function (): void {
+    $fixtureRoot = qt_fixture_path('module-split-qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-subset-interactive-' . bin2hex(random_bytes(4));
+    mkdir($buildRoot, 0777, true);
+    $manifestPath = $buildRoot . '/manifest.json';
+    $manifest = [
+        'schema_version' => 1,
+        'qt_major' => 6,
+        'modules' => [
+            'QtCore' => ['extension_name' => 'qtcore', 'dependencies' => []],
+            'QtGui' => ['extension_name' => 'qtgui', 'dependencies' => ['QtCore']],
+            'QtWidgets' => ['extension_name' => 'qtwidgets', 'dependencies' => ['QtGui']],
+        ],
+    ];
+    file_put_contents($manifestPath, json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+    $promptCalls = 0;
+    $command = new BuildCommand(
+        FakeSystemInformation::passing(),
+        new FakeExtensionBootstrapper(),
+        dependencyResolver: new StaticModuleDependencyResolver($manifestPath),
+        moduleSelector: static function (string $label, array $options, array $default) use (&$promptCalls): array {
+            $promptCalls++;
+            return ['QtWidgets'];
+        },
+    );
+
+    $result = qt_command_result($command, [
+        '--qt-path' => $fixtureRoot,
+        '--output' => $buildRoot,
+        '--jobs' => '2',
+        '--no-build' => true,
+    ]);
+
+    expect($result)->toBeSuccessfulCommandResult()
+        ->and($promptCalls)->toBe(1)
+        ->and($result['display'])->toContain(
+            'Requested modules: QtCore, QtGui, QtWidgets',
+            'Expanded modules: QtCore, QtGui, QtWidgets',
+        )->not->toContain('Auto-added dependency modules:');
+});
+
+it('bypasses prompt when modules argument is explicitly provided', function (): void {
+    $fixtureRoot = qt_fixture_path('module-split-qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-explicit-modules-' . bin2hex(random_bytes(4));
+    mkdir($buildRoot, 0777, true);
+    $manifestPath = $buildRoot . '/manifest.json';
+    $manifest = [
+        'schema_version' => 1,
+        'qt_major' => 6,
+        'modules' => [
+            'QtCore' => ['extension_name' => 'qtcore', 'dependencies' => []],
+            'QtGui' => ['extension_name' => 'qtgui', 'dependencies' => ['QtCore']],
+            'QtWidgets' => ['extension_name' => 'qtwidgets', 'dependencies' => ['QtGui']],
+        ],
+    ];
+    file_put_contents($manifestPath, json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+    $promptCalls = 0;
+    $command = new BuildCommand(
+        FakeSystemInformation::passing(),
+        new FakeExtensionBootstrapper(),
+        dependencyResolver: new StaticModuleDependencyResolver($manifestPath),
+        moduleSelector: static function (string $label, array $options, array $default) use (&$promptCalls): array {
+            $promptCalls++;
+            return ['__all'];
+        },
+    );
+
+    $result = qt_command_result($command, [
+        '--qt-path' => $fixtureRoot,
+        'modules' => 'QtCore',
+        '--output' => $buildRoot,
+        '--jobs' => '2',
+        '--no-build' => true,
+    ]);
+
+    expect($result)->toBeSuccessfulCommandResult()
+        ->and($promptCalls)->toBe(0)
+        ->and($result['display'])->toContain(
+            'Requested modules: QtCore',
+            'Expanded modules: QtCore',
+        );
+});
+
+it('treats empty interactive module selection as All', function (): void {
+    $fixtureRoot = qt_fixture_path('module-split-qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-empty-selection-' . bin2hex(random_bytes(4));
+    mkdir($buildRoot, 0777, true);
+    $manifestPath = $buildRoot . '/manifest.json';
+    $manifest = [
+        'schema_version' => 1,
+        'qt_major' => 6,
+        'modules' => [
+            'QtCore' => ['extension_name' => 'qtcore', 'dependencies' => []],
+            'QtGui' => ['extension_name' => 'qtgui', 'dependencies' => ['QtCore']],
+        ],
+    ];
+    file_put_contents($manifestPath, json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+    $command = new BuildCommand(
+        FakeSystemInformation::passing(),
+        new FakeExtensionBootstrapper(),
+        dependencyResolver: new StaticModuleDependencyResolver($manifestPath),
+        moduleSelector: static fn (string $label, array $options, array $default): array => [],
+    );
+
+    $result = qt_command_result($command, [
+        '--qt-path' => $fixtureRoot,
+        '--output' => $buildRoot,
+        '--jobs' => '2',
+        '--no-build' => true,
+    ]);
+
+    expect($result)->toBeSuccessfulCommandResult()
+        ->and($result['display'])->toContain(
+            'Requested modules: QtCore, QtGui',
+            'Expanded modules: QtCore, QtGui',
+        );
+});
+
+it('uses concrete modules when both All and module subset are selected', function (): void {
+    $fixtureRoot = qt_fixture_path('module-split-qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-mixed-selection-' . bin2hex(random_bytes(4));
+    mkdir($buildRoot, 0777, true);
+    $manifestPath = $buildRoot . '/manifest.json';
+    $manifest = [
+        'schema_version' => 1,
+        'qt_major' => 6,
+        'modules' => [
+            'QtCore' => ['extension_name' => 'qtcore', 'dependencies' => []],
+            'QtGui' => ['extension_name' => 'qtgui', 'dependencies' => ['QtCore']],
+            'QtWidgets' => ['extension_name' => 'qtwidgets', 'dependencies' => ['QtGui']],
+        ],
+    ];
+    file_put_contents($manifestPath, json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+    $command = new BuildCommand(
+        FakeSystemInformation::passing(),
+        new FakeExtensionBootstrapper(),
+        dependencyResolver: new StaticModuleDependencyResolver($manifestPath),
+        moduleSelector: static fn (string $label, array $options, array $default): array => ['__all', 'QtWidgets'],
+    );
+
+    $result = qt_command_result($command, [
+        '--qt-path' => $fixtureRoot,
+        '--output' => $buildRoot,
+        '--jobs' => '2',
+        '--no-build' => true,
+    ]);
+
+    expect($result)->toBeSuccessfulCommandResult()
+        ->and($result['display'])->toContain(
+            'Requested modules: QtCore, QtGui, QtWidgets',
+            'Expanded modules: QtCore, QtGui, QtWidgets',
+        )->not->toContain('Auto-added dependency modules:');
 });
 
 it('fails when a bootstrap step fails', function (): void {

@@ -57,6 +57,8 @@ class ExtensionGenerator
      * @param string   $namespace PHP namespace (e.g. "Qt\Core")
      * @param string   $outputDir Directory to write generated files
      * @param array<string, string> $classNamespaces Class-to-namespace map used for stub generation
+     * @param array<string, string> $classNativeTypes Class-to-native-C++-type map used for namespaced type resolution
+     * @param array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string}> $classMetadata
      * @return list<string> List of files written (absolute paths)
      */
     public function generate(
@@ -64,11 +66,13 @@ class ExtensionGenerator
         string $namespace,
         string $outputDir,
         array $classNamespaces = [],
+        array $classNativeTypes = [],
+        array $classMetadata = [],
         bool $emitSignalConnectionSupport = true,
     ): array
     {
         $this->lastWriteStats = new FileWriteStats();
-        $ctx = new ClassContext($phpClass, $namespace, $this->typeBridge, $classNamespaces);
+        $ctx = new ClassContext($phpClass, $namespace, $this->typeBridge, $classNamespaces, $classNativeTypes, $classMetadata);
         $files = [];
 
         // Ensure output directory exists
@@ -116,9 +120,15 @@ class ExtensionGenerator
     /**
      * Get the ClassContext for a given PhpClass (useful for inspection/debugging).
      */
-    public function buildContext(PhpClass $phpClass, string $namespace, array $classNamespaces = []): ClassContext
+    public function buildContext(
+        PhpClass $phpClass,
+        string $namespace,
+        array $classNamespaces = [],
+        array $classNativeTypes = [],
+        array $classMetadata = [],
+    ): ClassContext
     {
-        return new ClassContext($phpClass, $namespace, $this->typeBridge, $classNamespaces);
+        return new ClassContext($phpClass, $namespace, $this->typeBridge, $classNamespaces, $classNativeTypes, $classMetadata);
     }
 
     public function lastWriteStats(): FileWriteStats

@@ -31,7 +31,8 @@ it('uses nullable unions for optional value object parameters', function (): voi
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qabstractitemmodel.cpp');
     
         Assert::assertStringContainsString('QModelIndex|null $parent = null', $stub);
-        Assert::assertStringContainsString('(parent != NULL && Z_TYPE_P(parent) == IS_OBJECT ? *qt_qmodelindex_from_obj(Z_OBJ_P(parent))->native_ptr : QModelIndex())', $cpp);
+        Assert::assertStringContainsString('instanceof_function(Z_OBJCE_P(parent), qt_ce_qmodelindex)', $cpp);
+        Assert::assertStringContainsString('*qt_qmodelindex_from_obj(Z_OBJ_P(parent))->native_ptr', $cpp);
 });
 
 it('skips methods with value object dependencies outside the allow list', function (): void {
@@ -82,8 +83,9 @@ it('uses nullable unions for optional qobject parameters', function (): void {
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qtree.cpp');
     
         Assert::assertStringContainsString('QNode|null $node = null', $stub);
-        Assert::assertStringContainsString('Z_PARAM_OBJECT_OF_CLASS_OR_NULL(node, qt_ce_QNode)', $cpp);
-        Assert::assertStringContainsString('(node != NULL && Z_TYPE_P(node) == IS_OBJECT ? qt_qnode_from_obj(Z_OBJ_P(node))->native_ptr : NULL)', $cpp);
+        Assert::assertStringContainsString('Z_PARAM_OBJECT_OF_CLASS_OR_NULL(node, qt_ce_qnode)', $cpp);
+        Assert::assertStringContainsString('instanceof_function(Z_OBJCE_P(node), qt_ce_qnode)', $cpp);
+        Assert::assertStringContainsString('qt_qnode_from_obj(Z_OBJ_P(node))->native_ptr', $cpp);
 });
 
 it('transfers ownership for layout attachment methods', function (): void {
@@ -171,6 +173,67 @@ it('uses the automatic qobject ownership probe', function (): void {
         Assert::assertStringContainsString('static zend_always_inline bool qt_native_has_qobject_parent(T *ptr)', $cpp);
         Assert::assertStringContainsString('if (qt_native_has_qobject_parent(_qt_owned_arg_0->native_ptr)) {', $cpp);
         Assert::assertStringContainsString('_qt_owned_arg_0->prevent_destroy = true;', $cpp);
+        Assert::assertStringContainsString('if (QCoreApplication::closingDown()) {', $cpp);
+        Assert::assertStringContainsString('if ((EG(flags) & EG_FLAGS_IN_SHUTDOWN) != 0) {', $cpp);
+        Assert::assertStringContainsString('if (qt_runtime_is_shutdown_in_progress()) {', $cpp);
+        Assert::assertStringContainsString('qt_runtime_try_hook_about_to_quit();', $cpp);
+});
+
+it('pins qt3d retained objects after setter calls', function (): void {
+        $fixtureRoot = qt_fixture_path('ownership-qt');
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-qt3d-ownership-' . bin2hex(random_bytes(4));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/Qt3DCore/qaspectengine.h',
+            'class' => 'QAspectEngine',
+            '--qt-path' => '/definitely/not/a/qt/root',
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+                $fixtureRoot . '/include/Qt3DCore',
+            ],
+            '--module' => 'Qt3DCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QObject,QEntity,QAspectEngine',
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $aspectEngineCpp = (string) file_get_contents($outputDir . '/classes/qt_qaspectengine.cpp');
+        Assert::assertStringContainsString('intern->native_ptr->setRootEntity(QEntityPtr(qt_qentity_from_obj(Z_OBJ_P(root))->native_ptr, [](QEntity *) {}));', $aspectEngineCpp);
+        Assert::assertStringContainsString('qt_qentity_object *_qt_owned_arg_0 = qt_qentity_from_obj(Z_OBJ_P(root));', $aspectEngineCpp);
+        Assert::assertStringContainsString('_qt_owned_arg_0->prevent_destroy = true;', $aspectEngineCpp);
+        Assert::assertStringNotContainsString('if (qt_native_has_qobject_parent(_qt_owned_arg_0->native_ptr)) {', $aspectEngineCpp);
+
+        $tester = new CommandTester(new GenerateCommand(FakeSystemInformation::passing()));
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/Qt3DRender/qrendersurfaceselector.h',
+            'class' => 'QRenderSurfaceSelector',
+            '--qt-path' => '/definitely/not/a/qt/root',
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+                $fixtureRoot . '/include/Qt3DRender',
+            ],
+            '--module' => 'Qt3DRender',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QObject,QRenderSurfaceSelector',
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $surfaceSelectorCpp = (string) file_get_contents($outputDir . '/classes/qt_qrendersurfaceselector.cpp');
+        Assert::assertStringContainsString('intern->native_ptr->setSurface(qt_qobject_from_obj(Z_OBJ_P(surfaceObject))->native_ptr);', $surfaceSelectorCpp);
+        Assert::assertStringContainsString('qt_qobject_object *_qt_owned_arg_0 = qt_qobject_from_obj(Z_OBJ_P(surfaceObject));', $surfaceSelectorCpp);
+        Assert::assertStringContainsString('_qt_owned_arg_0->prevent_destroy = true;', $surfaceSelectorCpp);
+        Assert::assertStringNotContainsString('if (qt_native_has_qobject_parent(_qt_owned_arg_0->native_ptr)) {', $surfaceSelectorCpp);
 });
 
 it('adds qobject property apis and handlers', function (): void {
@@ -216,7 +279,7 @@ it('adds qobject property apis and handlers', function (): void {
         Assert::assertStringContainsString('ZEND_ACC_PUBLIC | ZEND_ACC_VIRTUAL', $cpp);
         Assert::assertStringContainsString('qt_qobject_handlers.read_property = qt_qobject_read_property;', $cpp);
         Assert::assertStringContainsString('qt_qobject_handlers.get_properties_for = qt_qobject_get_properties_for;', $cpp);
-        Assert::assertStringContainsString('object_init_ex(target, qt_ce_QVariant);', $cpp);
+        Assert::assertStringContainsString('object_init_ex(target, qt_ce_qvariant);', $cpp);
         Assert::assertStringContainsString('value.metaType().flags().testFlag(QMetaType::IsEnumeration)', $cpp);
         Assert::assertStringContainsString('ZVAL_LONG(target, (zend_long) value.toLongLong());', $cpp);
 });
@@ -341,7 +404,6 @@ it('transfers qevent ownership for post event', function (): void {
         Assert::assertSame('ok', $payload['status']);
     
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qcoreapplication.cpp');
-    
         Assert::assertStringContainsString('QCoreApplication::postEvent(qt_qobject_from_obj(Z_OBJ_P(receiver))->native_ptr, qt_qevent_from_obj(Z_OBJ_P(event))->native_ptr, (int)priority);', $cpp);
         Assert::assertStringContainsString('qt_qevent_object *_qt_posted_event = qt_qevent_from_obj(Z_OBJ_P(event));', $cpp);
         Assert::assertStringContainsString('_qt_posted_event->prevent_destroy = true;', $cpp);

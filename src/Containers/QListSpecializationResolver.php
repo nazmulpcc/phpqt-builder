@@ -196,6 +196,7 @@ class QListSpecializationResolver
                 new MethodOverload(
                     declaringClass: '',
                     returnType: $cppReturnType,
+                    smartPointerReturnTargetCppType: null,
                     parameters: [],
                     access: 'public',
                     isConst: true,
@@ -223,6 +224,7 @@ class QListSpecializationResolver
                 new MethodOverload(
                     declaringClass: '',
                     returnType: 'void',
+                    smartPointerReturnTargetCppType: null,
                     parameters: [],
                     access: 'public',
                     isConst: false,
@@ -269,6 +271,7 @@ class QListSpecializationResolver
                 new MethodOverload(
                     declaringClass: '',
                     returnType: 'void',
+                    smartPointerReturnTargetCppType: null,
                     parameters: [$overloadParameter],
                     access: 'public',
                     isConst: false,
@@ -303,6 +306,7 @@ class QListSpecializationResolver
                 new MethodOverload(
                     declaringClass: '',
                     returnType: $this->atReturnCppType($specialization->elementCppType),
+                    smartPointerReturnTargetCppType: null,
                     parameters: [
                         new OverloadParameter(
                             name: 'index',

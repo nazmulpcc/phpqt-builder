@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\Assert;
 use QtBuilder\Filtering\MethodExposurePolicy;
+use QtBuilder\Support\CppClassTypeResolver;
 
 it('filters macro-like and helper methods by name', function (): void {
     $policy = new MethodExposurePolicy();
@@ -154,4 +155,141 @@ it('supports opengl const void input buffers only for opengl classes', function 
     Assert::assertSame(['allocate'], array_column($openGlResult['selected_methods'], 'name'));
     Assert::assertSame([], $genericResult['selected_methods']);
     Assert::assertContains('unsupported_parameter_type', array_column($genericResult['skipped_methods'], 'reason_code'));
+});
+
+it('accepts qualified namespaced object parameter and return types when resolver data is available', function (): void {
+    $policy = new MethodExposurePolicy();
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'QNodeId', 'qualified_name' => 'Qt3DCore::QNodeId', 'module' => 'Qt3DCore'],
+        ['name' => 'QRayCasterHit', 'qualified_name' => 'Qt3DRender::QRayCasterHit', 'module' => 'Qt3DRender'],
+    ]);
+
+    $classData = [
+        'name' => 'QRayCasterHit',
+        'qualified_name' => 'Qt3DRender::QRayCasterHit',
+        'methods' => [
+            [
+                'name' => 'entityId',
+                'return_type' => 'Qt3DCore::QNodeId',
+                'access' => 'public',
+                'parameters' => [],
+                'is_static' => false,
+            ],
+            [
+                'name' => 'setEntityId',
+                'return_type' => 'void',
+                'access' => 'public',
+                'parameters' => [
+                    ['name' => 'id', 'type' => 'Qt3DCore::QNodeId', 'has_default' => false],
+                ],
+                'is_static' => false,
+            ],
+        ],
+    ];
+
+    $result = $policy->filter($classData, ['QRayCasterHit', 'QNodeId'], false, null, $resolver);
+
+    Assert::assertSame(['entityId', 'setEntityId'], array_column($result['selected_methods'], 'name'));
+    Assert::assertSame([], $result['skipped_methods']);
+});
+
+it('accepts foreign nested enum types when the owner class resolves cleanly', function (): void {
+    $policy = new MethodExposurePolicy();
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'QTextureData', 'qualified_name' => 'Qt3DRender::QTextureData', 'module' => 'Qt3DRender'],
+        ['name' => 'QAbstractTexture', 'qualified_name' => 'Qt3DRender::QAbstractTexture', 'module' => 'Qt3DRender'],
+        ['name' => 'QTextureWrapMode', 'qualified_name' => 'Qt3DRender::QTextureWrapMode', 'module' => 'Qt3DRender'],
+    ]);
+
+    $classData = [
+        'name' => 'QTextureData',
+        'qualified_name' => 'Qt3DRender::QTextureData',
+        'methods' => [
+            [
+                'name' => 'target',
+                'return_type' => 'QAbstractTexture::Target',
+                'access' => 'public',
+                'parameters' => [],
+                'is_static' => false,
+            ],
+            [
+                'name' => 'setWrapModeX',
+                'return_type' => 'void',
+                'access' => 'public',
+                'parameters' => [
+                    ['name' => 'mode', 'type' => 'QTextureWrapMode::WrapMode', 'has_default' => false],
+                ],
+                'is_static' => false,
+            ],
+        ],
+    ];
+
+    $result = $policy->filter($classData, ['QTextureData', 'QAbstractTexture', 'QTextureWrapMode'], false, null, $resolver);
+
+    Assert::assertSame(['target', 'setWrapModeX'], array_column($result['selected_methods'], 'name'));
+    Assert::assertSame([], $result['skipped_methods']);
+});
+
+it('accepts qsharedpointer alias parameter and return types through their pointee class', function (): void {
+    $policy = new MethodExposurePolicy();
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'QAspectEngine', 'qualified_name' => 'Qt3DCore::QAspectEngine', 'module' => 'Qt3DCore'],
+        ['name' => 'QEntity', 'qualified_name' => 'Qt3DCore::QEntity', 'module' => 'Qt3DCore'],
+    ]);
+
+    $classData = [
+        'name' => 'QAspectEngine',
+        'qualified_name' => 'Qt3DCore::QAspectEngine',
+        'smart_pointer_aliases' => ['QEntityPtr' => 'Qt3DCore::QEntity'],
+        'methods' => [
+            [
+                'name' => 'setRootEntity',
+                'return_type' => 'void',
+                'access' => 'public',
+                'parameters' => [
+                    ['name' => 'root', 'type' => 'QEntityPtr', 'has_default' => false],
+                ],
+                'is_static' => false,
+            ],
+            [
+                'name' => 'rootEntity',
+                'return_type' => 'QEntityPtr',
+                'access' => 'public',
+                'parameters' => [],
+                'is_static' => false,
+            ],
+        ],
+    ];
+
+    $result = $policy->filter($classData, ['QAspectEngine', 'QEntity'], false, null, $resolver);
+
+    Assert::assertSame(['setRootEntity', 'rootEntity'], array_column($result['selected_methods'], 'name'));
+    Assert::assertSame([], $result['skipped_methods']);
+});
+
+it('filters canonicalized namespaced copy constructors for noncopyable classes', function (): void {
+    $policy = new MethodExposurePolicy();
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'QBackendNode', 'qualified_name' => 'Qt3DCore::QBackendNode', 'module' => 'Qt3DCore'],
+    ]);
+
+    $classData = [
+        'name' => 'QBackendNode',
+        'qualified_name' => 'Qt3DCore::QBackendNode',
+        'is_copy_constructible' => false,
+        'methods' => [[
+            'name' => 'QBackendNode',
+            'return_type' => 'void',
+            'access' => 'public',
+            'parameters' => [
+                ['name' => 'other', 'type' => 'const Qt3DCore::QBackendNode &', 'has_default' => false],
+            ],
+            'is_static' => false,
+        ]],
+    ];
+
+    $result = $policy->filter($classData, ['QBackendNode'], false, null, $resolver);
+
+    Assert::assertSame([], $result['selected_methods']);
+    Assert::assertContains('copy_constructor_filtered', array_column($result['skipped_methods'], 'reason_code'));
 });

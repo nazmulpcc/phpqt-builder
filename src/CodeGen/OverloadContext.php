@@ -7,6 +7,8 @@ namespace QtBuilder\CodeGen;
 use QtBuilder\Definition\MethodOverload;
 use QtBuilder\Definition\OverloadParameter;
 use QtBuilder\Parsing\CppToPhpTypeMapper;
+use QtBuilder\Support\CppClassTypeResolver;
+use QtBuilder\Support\TypeResolutionContext;
 
 /**
  * Template context for a single C++ overload variant.
@@ -17,9 +19,13 @@ use QtBuilder\Parsing\CppToPhpTypeMapper;
 class OverloadContext
 {
     private CppToPhpTypeMapper $typeMapper;
+    private CppClassTypeResolver $classTypeResolver;
+    /** @var array<string, string> */
+    private array $smartPointerAliases = [];
 
     /** C++ return type (raw) */
     public readonly string $cppReturnType;
+    public readonly ?string $smartPointerReturnTargetCppType;
 
     /** Declaring C++ class for member pointer expressions */
     public readonly string $declaringClass;
@@ -60,8 +66,11 @@ class OverloadContext
         TypeBridge $typeBridge,
     ) {
         $this->typeMapper = new CppToPhpTypeMapper();
+        $this->classTypeResolver = $classCtx->classTypeResolver;
+        $this->smartPointerAliases = $classCtx->smartPointerAliases;
         $this->declaringClass = $overload->declaringClass;
         $this->cppReturnType = $overload->returnType;
+        $this->smartPointerReturnTargetCppType = $overload->smartPointerReturnTargetCppType;
         $this->paramCount = $overload->parameterCount();
         $this->requiredParamCount = $overload->requiredParameterCount();
         $this->access = $overload->access;
@@ -72,12 +81,16 @@ class OverloadContext
 
         // Map the C++ return type through the type mapper to get strategy
         $ownerClass = $overload->declaringClass !== '' ? $overload->declaringClass : $classCtx->nativeCppType;
-        $this->phpReturnType = $this->cppReturnToPhp($overload->returnType, $ownerClass);
-        $this->returnStrategy = $typeBridge->returnStrategyForCpp($this->phpReturnType, $overload->returnType);
+        $this->phpReturnType = $overload->smartPointerReturnTargetCppType !== null
+            ? $this->cppReturnToPhp($overload->smartPointerReturnTargetCppType, $ownerClass)
+            : $this->cppReturnToPhp($overload->returnType, $ownerClass);
+        $this->returnStrategy = $overload->smartPointerReturnTargetCppType !== null
+            ? 'smart_pointer_alias'
+            : $typeBridge->returnStrategyForCpp($this->phpReturnType, $overload->returnType);
 
         $params = [];
         foreach ($overload->parameters as $param) {
-            $params[] = new OverloadParamContext($param, $ownerClass, $typeBridge);
+            $params[] = new OverloadParamContext($param, $ownerClass, $typeBridge, $this->classTypeResolver);
         }
         $this->params = $params;
     }
@@ -87,6 +100,26 @@ class OverloadContext
      */
     private function cppReturnToPhp(string $cppType, string $ownerClass): string
     {
-        return $this->typeMapper->map($cppType, $ownerClass);
+        return $this->typeMapper->map(
+            $cppType,
+            $ownerClass,
+            $this->classTypeResolver(),
+            TypeResolutionContext::fromNames($this->classNameForContext($ownerClass), $ownerClass),
+            $this->smartPointerAliases,
+        );
+    }
+
+    private function classTypeResolver(): CppClassTypeResolver
+    {
+        return $this->classTypeResolver;
+    }
+
+    private function classNameForContext(string $ownerClass): string
+    {
+        if (!str_contains($ownerClass, '::')) {
+            return $ownerClass;
+        }
+
+        return (string) substr($ownerClass, (int) strrpos($ownerClass, '::') + 2);
     }
 }

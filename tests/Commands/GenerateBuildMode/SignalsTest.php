@@ -57,6 +57,7 @@ it('generates signal apis and retains protected slots', function (): void {
         Assert::assertStringContainsString('qt_track_native_instance(intern->native_ptr);', $cpp);
         Assert::assertStringContainsString('qt_should_delete_native', $cpp);
         Assert::assertStringContainsString('if (qt_should_delete_native(intern->native_ptr, intern->prevent_destroy)) {', $cpp);
+        Assert::assertStringContainsString('if (qt_runtime_is_shutdown_in_progress()) {', $cpp);
         Assert::assertStringContainsString('zend_string_equals_literal(signalSignature, "triggered()")', $cpp);
         Assert::assertStringContainsString('static_cast<void (QSignalFixture::*)(int)>(&QSignalFixture::valueChanged)', $cpp);
         Assert::assertStringContainsString('ZEND_ME(Qt_Core_QSignalFixture, onTriggered,', $cpp);

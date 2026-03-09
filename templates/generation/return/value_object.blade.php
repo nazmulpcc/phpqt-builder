@@ -6,10 +6,11 @@
  * @var \QtBuilder\CodeGen\MethodContext $method
  */
 $overload = $method->overloads[0] ?? null;
-$returnClass = $method->returnType;
-$returnCe = $ctx->typeBridge->ceVarName($returnClass);
-$returnFromObj = $ctx->typeBridge->fromObjFuncName($returnClass);
-$returnStruct = $ctx->typeBridge->objectStructName($returnClass);
+$returnPhpClass = $method->returnType;
+$returnCppClass = $ctx->typeBridge->nativeValueObjectType($overload?->cppReturnType ?? $returnPhpClass);
+$returnCe = $ctx->ceVarNameForPhpType($returnPhpClass);
+$returnFromObj = $ctx->fromObjFuncNameForPhpType($returnPhpClass);
+$returnStruct = $ctx->objectStructNameForPhpType($returnPhpClass);
 $callPlan = $method->callPlan($ctx, $overload);
 $writebackLines = $method->writebackLines($ctx, $overload);
 $declaringClass = $overload?->declaringClass !== '' ? $overload->declaringClass : $ctx->nativeCppType;
@@ -44,17 +45,17 @@ if ($overload?->isPureVirtual) {
     {!! $line !!}
 @endforeach
 @endif
-    {!! $returnClass !!} _result = {!! $callExpr !!};
+    {!! $returnCppClass !!} _result = {!! $callExpr !!};
 @foreach($writebackLines as $line)
     {!! $line !!}
 @endforeach
     object_init_ex(return_value, {!! $returnCe !!});
     if (UNEXPECTED(Z_TYPE_P(return_value) != IS_OBJECT)) {
         if (!EG(exception)) {
-            zend_throw_error(NULL, "Failed to instantiate PHP wrapper for {!! $returnClass !!}");
+            zend_throw_error(NULL, "Failed to instantiate PHP wrapper for {!! $returnPhpClass !!}");
         }
         RETURN_THROWS();
     }
     {!! $returnStruct !!} *_ret_intern = {!! $returnFromObj !!}(Z_OBJ_P(return_value));
-    _ret_intern->native_ptr = new {!! $returnClass !!}(std::move(_result));
+    _ret_intern->native_ptr = new {!! $returnCppClass !!}(std::move(_result));
 @endif

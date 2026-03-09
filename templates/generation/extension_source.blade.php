@@ -12,6 +12,9 @@ $buildInfoDependencies = $buildInfoModule !== null && $buildInfoModule->dependen
 
 #include "php.h"
 #include "ext/standard/info.h"
+#include <QtCore/QCoreApplication>
+#include <QtCore/QObject>
+#include <atomic>
 #include "{!! $ctx->phpHeaderFilename() !!}"
 @foreach($ctx->classHeaders() as $header)
 #include "{!! $header !!}"
@@ -19,6 +22,60 @@ $buildInfoDependencies = $buildInfoModule !== null && $buildInfoModule->dependen
 @if($ctx->requiresBuildInfoRegistration())
 #include "qt_buildinfo.h"
 @endif
+
+static std::atomic_bool qt_shutdown_in_progress{false};
+static std::atomic_bool qt_about_to_quit_hooked{false};
+
+bool qt_runtime_is_shutdown_in_progress(void)
+{
+    return qt_shutdown_in_progress.load(std::memory_order_acquire);
+}
+
+void qt_runtime_mark_shutdown_in_progress(void)
+{
+    qt_shutdown_in_progress.store(true, std::memory_order_release);
+}
+
+void qt_runtime_try_hook_about_to_quit(void)
+{
+    if (qt_runtime_is_shutdown_in_progress()) {
+        return;
+    }
+
+    QCoreApplication *app = QCoreApplication::instance();
+    if (app == NULL) {
+        return;
+    }
+
+    bool expected = false;
+    if (!qt_about_to_quit_hooked.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        return;
+    }
+
+    QObject::connect(
+        app,
+        &QCoreApplication::aboutToQuit,
+        app,
+        []() {
+            qt_runtime_mark_shutdown_in_progress();
+        }
+    );
+}
+
+static inline void qt_runtime_shutdown_qcoreapplication(void)
+{
+    QCoreApplication *app = QCoreApplication::instance();
+    if (app == NULL) {
+        return;
+    }
+
+    qt_runtime_mark_shutdown_in_progress();
+
+    QCoreApplication::sendPostedEvents(NULL, 0);
+    QCoreApplication::processEvents();
+    delete app;
+    qt_about_to_quit_hooked.store(false, std::memory_order_release);
+}
 
 PHP_MINFO_FUNCTION({!! $ctx->extensionName !!})
 {
@@ -63,14 +120,33 @@ PHP_MINIT_FUNCTION({!! $ctx->extensionName !!})
     return SUCCESS;
 }
 
+PHP_RINIT_FUNCTION({!! $ctx->extensionName !!})
+{
+#if defined(ZTS) && defined(COMPILE_DL_{!! strtoupper($ctx->extensionName) !!})
+    ZEND_TSRMLS_CACHE_UPDATE();
+#endif
+    qt_shutdown_in_progress.store(false, std::memory_order_release);
+    qt_about_to_quit_hooked.store(false, std::memory_order_release);
+
+    return SUCCESS;
+}
+
+PHP_RSHUTDOWN_FUNCTION({!! $ctx->extensionName !!})
+{
+    qt_runtime_shutdown_qcoreapplication();
+    qt_runtime_mark_shutdown_in_progress();
+
+    return SUCCESS;
+}
+
 zend_module_entry {!! $ctx->extensionName !!}_module_entry = {
     STANDARD_MODULE_HEADER,
     "{!! $ctx->extensionName !!}",
     NULL,
     PHP_MINIT({!! $ctx->extensionName !!}),
     NULL,
-    NULL,
-    NULL,
+    PHP_RINIT({!! $ctx->extensionName !!}),
+    PHP_RSHUTDOWN({!! $ctx->extensionName !!}),
     PHP_MINFO({!! $ctx->extensionName !!}),
     PHP_{!! strtoupper($ctx->extensionName) !!}_VERSION,
     STANDARD_MODULE_PROPERTIES

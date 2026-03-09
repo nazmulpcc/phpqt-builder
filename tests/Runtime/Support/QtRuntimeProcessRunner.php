@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace QtBuilder\Tests\Runtime\Support;
 
+use Symfony\Component\Process\Exception\ProcessSignaledException;
 use Symfony\Component\Process\Process;
 
 final class QtRuntimeProcessRunner
@@ -245,13 +246,12 @@ final class QtRuntimeProcessRunner
         }
         $command[] = $scriptPath;
 
-        $process = new Process(
+        $process = self::runProcessWithRetry(
             $command,
             dirname(__DIR__, 3),
             $runtimeEnv,
+            $timeout,
         );
-        $process->setTimeout($timeout);
-        $process->run();
 
         return new QtRuntimeProcessResult(
             $process->getExitCode() ?? 1,
@@ -279,13 +279,12 @@ final class QtRuntimeProcessRunner
         }
         array_push($command, ...$args);
 
-        $process = new Process(
+        $process = self::runProcessWithRetry(
             $command,
             dirname(__DIR__, 3),
             $runtimeEnv,
+            $timeout,
         );
-        $process->setTimeout($timeout);
-        $process->run();
 
         return new QtRuntimeProcessResult(
             $process->getExitCode() ?? 1,
@@ -293,5 +292,37 @@ final class QtRuntimeProcessRunner
             $process->getErrorOutput(),
             self::parsePayload($process->getOutput()),
         );
+    }
+
+    /**
+     * @param list<string> $command
+     * @param array<string, string> $runtimeEnv
+     */
+    private static function runProcessWithRetry(array $command, string $cwd, array $runtimeEnv, int $timeout): Process
+    {
+        $attempt = 0;
+
+        while (true) {
+            $attempt++;
+            $process = new Process($command, $cwd, $runtimeEnv);
+            $process->setTimeout($timeout);
+
+            try {
+                $process->run();
+            } catch (ProcessSignaledException $exception) {
+                if ($attempt >= 2) {
+                    throw $exception;
+                }
+
+                continue;
+            }
+
+            $exitCode = $process->getExitCode();
+            if (($exitCode === 139 || $exitCode === 134) && $attempt < 2) {
+                continue;
+            }
+
+            return $process;
+        }
     }
 }

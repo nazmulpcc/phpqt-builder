@@ -11,6 +11,9 @@ use QtBuilder\Definition\PhpClassConstant;
 use QtBuilder\Definition\PhpMethod;
 use QtBuilder\Definition\PhpParameter;
 use QtBuilder\Definition\PhpProperty;
+use QtBuilder\Support\CppClassTypeResolver;
+use QtBuilder\Support\GeneratedTypeIdentity;
+use QtBuilder\Support\TypeResolutionContext;
 
 /**
  * Transforms the raw inspector data (arrays from QtClassInspector) into
@@ -32,19 +35,28 @@ class ClassDefinitionBuilder
      *
      * @param array{name: string, qualified_name?: string, is_abstract: bool, is_copy_constructible?: bool, has_public_constructor?: bool, has_public_destructor?: bool, is_qobject_derived?: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, signals?: list<array<string, mixed>>, enum_constants?: list<array<string, mixed>>} $classData
      */
-    public function build(array $classData): PhpClass
+    public function build(array $classData, ?CppClassTypeResolver $classTypeResolver = null): PhpClass
     {
         $className = $classData['name'];
         $qualifiedName = is_string($classData['qualified_name'] ?? null)
             ? trim((string) $classData['qualified_name'])
             : '';
-        $properties = $this->buildProperties($classData['properties'], $className);
-        $methods = $this->buildMethods($classData['methods'], $className);
-        $signals = $this->buildMethods($classData['signals'] ?? [], $className);
+        $resolutionContext = TypeResolutionContext::fromNames($className, $qualifiedName);
+        $smartPointerAliases = $this->canonicalizeSmartPointerAliases(
+            is_array($classData['smart_pointer_aliases'] ?? null) ? $classData['smart_pointer_aliases'] : [],
+            $classTypeResolver,
+            $resolutionContext,
+        );
+        $properties = $this->buildProperties($classData['properties'], $className, $classTypeResolver, $resolutionContext, $smartPointerAliases);
+        $methods = $this->buildMethods($classData['methods'], $className, $classTypeResolver, $resolutionContext, $smartPointerAliases);
+        $signals = $this->buildMethods($classData['signals'] ?? [], $className, $classTypeResolver, $resolutionContext, $smartPointerAliases);
         $classConstants = $this->buildClassConstants($classData['enum_constants'] ?? []);
 
         // Use the first base class as the PHP parent (single inheritance).
-        $parent = $classData['bases'][0] ?? null;
+        $parentCppType = is_string($classData['bases'][0] ?? null) ? (string) $classData['bases'][0] : null;
+        $parent = $parentCppType !== null
+            ? $this->typeMapper->map($parentCppType, $className, $classTypeResolver, $resolutionContext, $smartPointerAliases)
+            : null;
 
         return new PhpClass(
             name: $classData['name'],
@@ -59,6 +71,8 @@ class ClassDefinitionBuilder
             signals: $signals,
             classConstants: $classConstants,
             nativeCppType: $qualifiedName !== '' && $qualifiedName !== $className ? $qualifiedName : null,
+            generationId: GeneratedTypeIdentity::fromNames($classData['name'], $qualifiedName !== '' ? $qualifiedName : null)->generationId,
+            smartPointerAliases: $smartPointerAliases,
         );
     }
 
@@ -108,7 +122,13 @@ class ClassDefinitionBuilder
      * @param list<array{name: string, type: string, access: string, is_static: bool}> $fields
      * @return list<PhpProperty>
      */
-    private function buildProperties(array $fields, string $className): array
+    private function buildProperties(
+        array $fields,
+        string $className,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
+        array $smartPointerAliases = [],
+    ): array
     {
         $properties = [];
 
@@ -117,10 +137,16 @@ class ClassDefinitionBuilder
                 continue;
             }
 
+            $cppType = $this->canonicalizeCppType(
+                (string) ($field['type'] ?? ''),
+                $classTypeResolver,
+                $resolutionContext,
+            );
+
             $properties[] = new PhpProperty(
                 name: $field['name'],
-                phpType: $this->typeMapper->map($field['type'], $className),
-                cppType: $field['type'],
+                phpType: $this->typeMapper->map($cppType, $className, $classTypeResolver, $resolutionContext, $smartPointerAliases),
+                cppType: $cppType,
                 access: $field['access'],
                 isStatic: $field['is_static'],
             );
@@ -137,7 +163,13 @@ class ClassDefinitionBuilder
      * @param list<array{name: string, return_type: string, access: string, parameters: list<array{name: string, type: string, has_default: bool}>, is_static: bool, is_const: bool, is_virtual: bool, is_pure_virtual: bool, is_override: bool, is_signal?: bool, is_slot?: bool}> $methods
      * @return list<PhpMethod>
      */
-    private function buildMethods(array $methods, string $className): array
+    private function buildMethods(
+        array $methods,
+        string $className,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
+        array $smartPointerAliases = [],
+    ): array
     {
         // Filter private methods.
         $methods = array_filter($methods, static fn(array $m): bool => $m['access'] !== 'private');
@@ -179,7 +211,7 @@ class ClassDefinitionBuilder
         $result = [];
 
         foreach ($grouped as $name => $variants) {
-            $result[] = $this->mergeOverloads($name, $variants, $className);
+            $result[] = $this->mergeOverloads($name, $variants, $className, $classTypeResolver, $resolutionContext, $smartPointerAliases);
         }
 
         return $result;
@@ -190,10 +222,20 @@ class ClassDefinitionBuilder
      *
      * @param list<array<string, mixed>> $variants
      */
-    private function mergeOverloads(string $name, array $variants, string $className): PhpMethod
+    private function mergeOverloads(
+        string $name,
+        array $variants,
+        string $className,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
+        array $smartPointerAliases = [],
+    ): PhpMethod
     {
         // Build the MethodOverload list from all variants.
-        $overloads = array_map(fn(array $variant): MethodOverload => $this->buildOverload($variant, $className), $variants);
+        $overloads = array_map(
+            fn(array $variant): MethodOverload => $this->buildOverload($variant, $className, $classTypeResolver, $resolutionContext, $smartPointerAliases),
+            $variants,
+        );
 
         // Determine access: use the most permissive (public > protected).
         $access = $this->mostPermissiveAccess($variants);
@@ -202,10 +244,10 @@ class ClassDefinitionBuilder
         $isStatic = $this->allStatic($variants);
 
         // Build the merged PHP return type.
-        $returnType = $this->mergeReturnTypes($variants, $className);
+        $returnType = $this->mergeReturnTypes($variants, $className, $classTypeResolver, $resolutionContext, $smartPointerAliases);
 
         // Build the merged PHP parameter list.
-        $parameters = $this->mergeParameters($variants, $className);
+        $parameters = $this->mergeParameters($variants, $className, $classTypeResolver, $resolutionContext, $smartPointerAliases);
 
         return new PhpMethod(
             name: $name,
@@ -224,15 +266,30 @@ class ClassDefinitionBuilder
     /**
      * @param array<string, mixed> $variant
      */
-    private function buildOverload(array $variant, string $className): MethodOverload
+    private function buildOverload(
+        array $variant,
+        string $className,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
+        array $smartPointerAliases = [],
+    ): MethodOverload
     {
         $parameters = $this->normalizeWritableParameterDefaults($variant['parameters']);
         $params = array_map(
-            function (array $p) use ($className): OverloadParameter {
-                $metadata = $this->analyzeCppParameterType((string) ($p['type'] ?? ''));
-                $phpType = $this->typeMapper->map((string) ($p['type'] ?? ''), $className);
-                $writableByRefMeta = $this->analyzeWritableByRefParameter(
+            function (array $p) use ($className, $classTypeResolver, $resolutionContext, $smartPointerAliases): OverloadParameter {
+                $cppType = $this->canonicalizeCppType(
                     (string) ($p['type'] ?? ''),
+                    $classTypeResolver,
+                    $resolutionContext,
+                );
+                $metadata = $this->analyzeCppParameterType($cppType);
+                $phpType = $this->typeMapper->map($cppType, $className, $classTypeResolver, $resolutionContext, $smartPointerAliases);
+                if ($this->shouldExpandStringLikeForClass($className) && $this->canAcceptPhpStringForParameter($metadata)) {
+                    $phpType = $this->expandStringLikeParameterPhpType($phpType, $cppType);
+                }
+                $smartPointerTargetCppType = $this->resolveSmartPointerTargetCppType($cppType, $smartPointerAliases);
+                $writableByRefMeta = $this->analyzeWritableByRefParameter(
+                    $cppType,
                     $phpType,
                     $metadata,
                     (bool) ($p['has_default'] ?? false),
@@ -240,8 +297,9 @@ class ClassDefinitionBuilder
 
                 return new OverloadParameter(
                     name: (string) ($p['name'] ?? ''),
-                    cppType: (string) ($p['type'] ?? ''),
+                    cppType: $cppType,
                     hasDefault: (bool) ($p['has_default'] ?? false),
+                    smartPointerTargetCppType: $smartPointerTargetCppType,
                     isReference: $metadata['is_reference'],
                     isConstReference: $metadata['is_const_reference'],
                     isNonConstReference: $metadata['is_non_const_reference'],
@@ -255,9 +313,16 @@ class ClassDefinitionBuilder
             $parameters,
         );
 
+        $returnCppType = $this->canonicalizeCppType(
+            (string) ($variant['return_type'] ?? 'void'),
+            $classTypeResolver,
+            $resolutionContext,
+        );
+
         return new MethodOverload(
             declaringClass: (string) ($variant['declaring_class'] ?? ''),
-            returnType: $variant['return_type'],
+            returnType: $returnCppType,
+            smartPointerReturnTargetCppType: $this->resolveSmartPointerTargetCppType($returnCppType, $smartPointerAliases),
             parameters: $params,
             access: (string) ($variant['access'] ?? 'public'),
             isConst: $variant['is_const'],
@@ -298,12 +363,23 @@ class ClassDefinitionBuilder
      *
      * @param list<array<string, mixed>> $variants
      */
-    private function mergeReturnTypes(array $variants, string $className): string
+    private function mergeReturnTypes(
+        array $variants,
+        string $className,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
+        array $smartPointerAliases = [],
+    ): string
     {
         $phpTypes = [];
 
         foreach ($variants as $v) {
-            $phpTypes[] = $this->typeMapper->map($v['return_type'], $className);
+            $cppType = $this->canonicalizeCppType(
+                (string) ($v['return_type'] ?? 'void'),
+                $classTypeResolver,
+                $resolutionContext,
+            );
+            $phpTypes[] = $this->typeMapper->map($cppType, $className, $classTypeResolver, $resolutionContext, $smartPointerAliases);
         }
 
         return $this->unionType($phpTypes);
@@ -326,7 +402,13 @@ class ClassDefinitionBuilder
      * @param list<array<string, mixed>> $variants
      * @return list<PhpParameter>
      */
-    private function mergeParameters(array $variants, string $className): array
+    private function mergeParameters(
+        array $variants,
+        string $className,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
+        array $smartPointerAliases = [],
+    ): array
     {
         $maxParams = 0;
         $minRequiredCount = PHP_INT_MAX;
@@ -371,10 +453,17 @@ class ClassDefinitionBuilder
                     continue;
                 }
 
-                $phpTypes[] = $this->typeMapper->map($params[$i]['type'], $className);
-                $paramType = (string) ($params[$i]['type'] ?? '');
-                $paramPhpType = $this->typeMapper->map($paramType, $className);
+                $paramType = $this->canonicalizeCppType(
+                    (string) ($params[$i]['type'] ?? ''),
+                    $classTypeResolver,
+                    $resolutionContext,
+                );
+                $mappedParamPhpType = $this->typeMapper->map($paramType, $className, $classTypeResolver, $resolutionContext, $smartPointerAliases);
                 $paramMeta = $this->analyzeCppParameterType($paramType);
+                $paramPhpType = ($this->shouldExpandStringLikeForClass($className) && $this->canAcceptPhpStringForParameter($paramMeta))
+                    ? $this->expandStringLikeParameterPhpType($mappedParamPhpType, $paramType)
+                    : $mappedParamPhpType;
+                $phpTypes[] = $paramPhpType;
                 $writableMeta = $this->analyzeWritableByRefParameter(
                     $paramType,
                     $paramPhpType,
@@ -429,6 +518,59 @@ class ClassDefinitionBuilder
         }
 
         return $parameters;
+    }
+
+    private function canonicalizeCppType(
+        string $cppType,
+        ?CppClassTypeResolver $classTypeResolver,
+        ?TypeResolutionContext $resolutionContext,
+    ): string {
+        if ($classTypeResolver === null || $resolutionContext === null) {
+            return $cppType;
+        }
+
+        return $classTypeResolver->canonicalizeType($cppType, $resolutionContext);
+    }
+
+    /**
+     * @param array<string, string> $aliases
+     * @return array<string, string>
+     */
+    private function canonicalizeSmartPointerAliases(
+        array $aliases,
+        ?CppClassTypeResolver $classTypeResolver,
+        ?TypeResolutionContext $resolutionContext,
+    ): array {
+        $resolved = [];
+        foreach ($aliases as $alias => $target) {
+            if (!is_string($alias) || !is_string($target)) {
+                continue;
+            }
+            $resolved[trim($alias)] = $this->canonicalizeCppType(trim($target), $classTypeResolver, $resolutionContext);
+        }
+
+        return $resolved;
+    }
+
+    /**
+     * @param array<string, string> $smartPointerAliases
+     */
+    private function resolveSmartPointerTargetCppType(string $cppType, array $smartPointerAliases): ?string
+    {
+        if ($smartPointerAliases === []) {
+            return null;
+        }
+
+        if (preg_match('/^(?:const\s+)?(?<alias>[A-Za-z_][A-Za-z0-9_]*)\s*(?:[&*]\s*)?$/', trim($cppType), $matches) !== 1) {
+            return null;
+        }
+
+        $alias = trim((string) ($matches['alias'] ?? ''));
+        if ($alias === '') {
+            return null;
+        }
+
+        return $smartPointerAliases[$alias] ?? null;
     }
 
     /**
@@ -539,6 +681,47 @@ class ClassDefinitionBuilder
         }
 
         return trim($type);
+    }
+
+    private function expandStringLikeParameterPhpType(string $phpType, string $cppType): string
+    {
+        if ($phpType === '' || $phpType === 'mixed' || str_contains($phpType, 'string')) {
+            return $phpType;
+        }
+
+        $baseType = $this->normalizeBaseCppType($cppType);
+        if (!\in_array($baseType, [
+            'QString',
+            'QByteArray',
+            'QStringView',
+            'QLatin1StringView',
+            'QAnyStringView',
+        ], true)) {
+            return $phpType;
+        }
+
+        return $this->unionType([$phpType, 'string']);
+    }
+
+    /**
+     * @param array{is_reference: bool, is_const_reference: bool, is_non_const_reference: bool, is_rvalue_reference: bool, pointer_depth: int} $paramMetadata
+     */
+    private function canAcceptPhpStringForParameter(array $paramMetadata): bool
+    {
+        return !$paramMetadata['is_non_const_reference']
+            && !$paramMetadata['is_rvalue_reference']
+            && $paramMetadata['pointer_depth'] === 0;
+    }
+
+    private function shouldExpandStringLikeForClass(string $className): bool
+    {
+        return !in_array($className, [
+            'QString',
+            'QByteArray',
+            'QStringView',
+            'QLatin1StringView',
+            'QAnyStringView',
+        ], true);
     }
 
     /**

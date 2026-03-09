@@ -26,6 +26,9 @@
 #include <QByteArray>
 #include <QVariant>
 #include <QMetaType>
+@if($ctx->nativeCppType === 'QString')
+#include <Zend/zend_interfaces.h>
+@endif
 @if($ctx->hasQObjectPropertySupport())
 #include "qt_qvariant.h"
 #include <QMetaMethod>
@@ -40,12 +43,22 @@
 #include <QMetaObject>
 #include <QThread>
 @endif
-@if($ctx->parentCeVarName)
-#include "{!! 'qt_' . strtolower($ctx->parentClassName) !!}.h"
+@if($ctx->hasPreventDestroy && !$ctx->hasSignals())
+#include <QCoreApplication>
+@endif
+@if($ctx->parentCeVarName && $ctx->parentFilePrefix)
+#include "{!! $ctx->parentFilePrefix !!}.h"
 @endif
 @foreach($ctx->requiredIncludes as $include)
 #include "{!! $include !!}"
 @endforeach
+
+@if($ctx->hasPreventDestroy || $ctx->isQObjectDerived)
+bool qt_runtime_is_shutdown_in_progress(void);
+@endif
+@if($ctx->isQObjectDerived)
+void qt_runtime_try_hook_about_to_quit(void);
+@endif
 
 /* ------------------------------------------------------------------ */
 /* Globals                                                             */
@@ -484,14 +497,14 @@ static void qt_qobject_variant_to_property_zval(zval *target, const QVariant &va
         return;
     }
 
-    object_init_ex(target, qt_ce_QVariant);
+    object_init_ex(target, {!! $ctx->ceVarNameForPhpType('QVariant') !!});
     qt_qvariant_object *_qt_variant_intern = qt_qvariant_from_obj(Z_OBJ_P(target));
     _qt_variant_intern->native_ptr = new QVariant(value);
 }
 
 static bool qt_qobject_zval_to_property_variant(zval *value, QVariant *out)
 {
-    if (Z_TYPE_P(value) == IS_OBJECT && qt_ce_QVariant != NULL && instanceof_function(Z_OBJCE_P(value), qt_ce_QVariant)) {
+    if (Z_TYPE_P(value) == IS_OBJECT && {!! $ctx->ceVarNameForPhpType('QVariant') !!} != NULL && instanceof_function(Z_OBJCE_P(value), {!! $ctx->ceVarNameForPhpType('QVariant') !!})) {
         qt_qvariant_object *_qt_variant_intern = qt_qvariant_from_obj(Z_OBJ_P(value));
         if (_qt_variant_intern->native_ptr == NULL) {
             *out = QVariant();
@@ -933,6 +946,12 @@ static inline std::shared_ptr<qt_signal_callback_t> qt_signal_callback_create(co
 
 static inline bool qt_signal_callback_invoke(const std::shared_ptr<qt_signal_callback_t> &callback, uint32_t param_count, zval *params)
 {
+@if($ctx->isQObjectDerived)
+    if (qt_runtime_is_shutdown_in_progress()) {
+        return false;
+    }
+@endif
+
     zval retval;
     ZVAL_NULL(&retval);
 
@@ -1238,6 +1257,20 @@ qt_should_delete_native(T *ptr, bool prevent_destroy)
         return false;
     }
 
+    if (QCoreApplication::closingDown()) {
+        return false;
+    }
+
+#ifdef EG_FLAGS_IN_SHUTDOWN
+    if ((EG(flags) & EG_FLAGS_IN_SHUTDOWN) != 0) {
+        return false;
+    }
+#endif
+
+    if (qt_runtime_is_shutdown_in_progress()) {
+        return false;
+    }
+
     {
         std::lock_guard<std::mutex> lock(qt_native_registry_mutex<T>());
         if (qt_native_registry<T>().find(static_cast<void *>(ptr)) == qt_native_registry<T>().end()) {
@@ -1441,6 +1474,9 @@ PHP_QT_API void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativ
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(return_value);
     intern->native_ptr = native;
     qt_track_native_instance(intern->native_ptr);
+@if($ctx->isQObjectDerived)
+    qt_runtime_try_hook_about_to_quit();
+@endif
     intern->prevent_destroy = prevent_destroy;
 @if($ctx->tracksGeneratedNativeSubclass)
     intern->native_is_generated_subclass = false;
@@ -1465,6 +1501,26 @@ PHP_QT_API void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativ
 @include('generation.method.simple', ['ctx' => $ctx, 'method' => $method])
 @endif
 @endforeach
+@if($ctx->nativeCppType === 'QString')
+
+/* __toString */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __toString)
+{
+    ZEND_PARSE_PARAMETERS_NONE();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (intern->native_ptr == NULL) {
+        RETURN_EMPTY_STRING();
+    }
+
+    QByteArray _qt_utf8 = intern->native_ptr->toUtf8();
+    RETURN_STRINGL(_qt_utf8.constData(), _qt_utf8.size());
+}
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX({!! $ctx->filePrefix !!}_arginfo___tostring, 0, 0, IS_STRING, 0)
+ZEND_END_ARG_INFO()
+
+@endif
 @if($ctx->isQObjectClass)
 
 /* property */
@@ -1723,6 +1779,9 @@ static const zend_function_entry {!! $ctx->filePrefix !!}_methods[] = {
     ZEND_ME({!! $ctx->zendClassSymbol !!}, {!! $method->name !!}, {!! $method->arginfoName !!}, {!! $method->accessFlags !!})
 @endif
 @endforeach
+@if($ctx->nativeCppType === 'QString')
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, __toString, {!! $ctx->filePrefix !!}_arginfo___tostring, ZEND_ACC_PUBLIC)
+@endif
 @if($ctx->isQObjectClass)
     ZEND_ME({!! $ctx->zendClassSymbol !!}, property, {!! $ctx->propertyArginfoName !!}, ZEND_ACC_PUBLIC)
     ZEND_ME({!! $ctx->zendClassSymbol !!}, setProperty, {!! $ctx->setPropertyArginfoName !!}, ZEND_ACC_PUBLIC)
@@ -1756,6 +1815,9 @@ PHP_MINIT_FUNCTION({!! $ctx->minitName !!})
     {!! $ctx->ceVarName !!} = zend_register_internal_class_ex(&ce, {!! $ctx->parentCeVarName !!});
 @else
     {!! $ctx->ceVarName !!} = zend_register_internal_class(&ce);
+@endif
+@if($ctx->nativeCppType === 'QString')
+    zend_class_implements({!! $ctx->ceVarName !!}, 1, zend_ce_stringable);
 @endif
 
 @if($ctx->isFinal)

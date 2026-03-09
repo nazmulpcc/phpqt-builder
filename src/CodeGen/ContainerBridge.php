@@ -7,11 +7,17 @@ namespace QtBuilder\CodeGen;
 use QtBuilder\Definition\ContainerType;
 use QtBuilder\Parsing\ContainerTypeParser;
 use QtBuilder\Parsing\CppToPhpTypeMapper;
+use QtBuilder\Support\CppClassTypeResolver;
+use QtBuilder\Support\TypeResolutionContext;
 
 class ContainerBridge
 {
     private readonly ContainerTypeParser $parser;
     private readonly CppToPhpTypeMapper $typeMapper;
+    private ?CppClassTypeResolver $classTypeResolver = null;
+    private ?TypeResolutionContext $resolutionContext = null;
+    /** @var array<string, string> */
+    private array $smartPointerAliases = [];
 
     public function __construct(
         ?ContainerTypeParser $parser = null,
@@ -19,6 +25,19 @@ class ContainerBridge
     ) {
         $this->parser = $parser ?? new ContainerTypeParser();
         $this->typeMapper = $typeMapper ?? new CppToPhpTypeMapper();
+    }
+
+    /**
+     * @param array<string, string> $smartPointerAliases
+     */
+    public function setTypeResolutionMetadata(
+        ?CppClassTypeResolver $classTypeResolver,
+        ?TypeResolutionContext $resolutionContext,
+        array $smartPointerAliases = [],
+    ): void {
+        $this->classTypeResolver = $classTypeResolver;
+        $this->resolutionContext = $resolutionContext;
+        $this->smartPointerAliases = $smartPointerAliases;
     }
 
     public function parse(string $cppType): ?ContainerType
@@ -67,7 +86,12 @@ class ContainerBridge
 
     public function elementPhpType(string $cppType): string
     {
-        return $this->typeMapper->map($cppType);
+        return $this->typeMapper->map(
+            $cppType,
+            classTypeResolver: $this->classTypeResolver,
+            resolutionContext: $this->resolutionContext,
+            smartPointerAliases: $this->smartPointerAliases,
+        );
     }
 
     private function isSupportedSequenceElement(string $cppType): bool
@@ -150,7 +174,7 @@ class ContainerBridge
             return [];
         }
 
-        $phpType = $this->typeMapper->map($trimmed);
+        $phpType = $this->elementPhpType($trimmed);
         if (in_array($phpType, ['int', 'float', 'bool', 'string', 'void', 'array', 'mixed'], true)) {
             return [];
         }

@@ -8,6 +8,8 @@ use QtBuilder\Definition\MethodOverload;
 use QtBuilder\Definition\OverloadParameter;
 use QtBuilder\Definition\PhpMethod;
 use QtBuilder\Definition\PhpParameter;
+use QtBuilder\Parsing\CppToPhpTypeMapper;
+use QtBuilder\Support\TypeResolutionContext;
 
 /**
  * Prepared template context for a single PHP method.
@@ -19,6 +21,7 @@ class MethodContext
 {
     private readonly TypeBridge $typeBridge;
     private readonly string $className;
+    private readonly ClassContext $classCtx;
 
     /** PHP method name */
     public readonly string $name;
@@ -102,6 +105,7 @@ class MethodContext
     ) {
         $this->typeBridge = $typeBridge;
         $this->className = $classCtx->phpClassName;
+        $this->classCtx = $classCtx;
         $this->name = $method->name;
         $this->cppName = $method->cppName ?? $method->name;
         $this->access = $method->access;
@@ -129,7 +133,10 @@ class MethodContext
         // Return handling
         $primaryReturn = $this->primaryReturnType($method->returnType);
         $primaryCppReturn = $method->overloads[0]->returnType ?? $primaryReturn;
-        $this->returnStrategy = $typeBridge->returnStrategyForCpp($primaryReturn, $primaryCppReturn);
+        $primarySmartPointerTarget = $method->overloads[0]->smartPointerReturnTargetCppType ?? null;
+        $this->returnStrategy = $primarySmartPointerTarget !== null
+            ? 'smart_pointer_alias'
+            : $typeBridge->returnStrategyForCpp($primaryReturn, $primaryCppReturn);
         $this->returnMacro = $typeBridge->returnMacro($primaryReturn);
         $this->returnsObject = $typeBridge->isObjectType($primaryReturn);
 
@@ -302,8 +309,20 @@ class MethodContext
             $sourceIsZval = $mergedParam?->isParsedAsZval ?? false;
             $nullable = $param->hasDefault;
             $pairedCountVarName = null;
+            $effectivePhpType = $param->phpType;
+            if ($param->smartPointerTargetCppType !== null) {
+                $mapper = new CppToPhpTypeMapper();
+                $ownerClass = $overload->declaringClass !== '' ? $overload->declaringClass : $classCtx->nativeCppType;
+                $effectivePhpType = $mapper->map(
+                    $param->smartPointerTargetCppType,
+                    $this->ownerClassName($ownerClass),
+                    $classCtx->classTypeResolver,
+                    TypeResolutionContext::fromNames($this->ownerClassName($ownerClass), $ownerClass),
+                    $classCtx->smartPointerAliases,
+                );
+            }
             $targetCppType = $overload->access === 'protected' && !$this->isConstructor
-                ? $classCtx->typeBridge->accessShimBoundaryType($param->phpType, $param->cppType)
+                ? $classCtx->typeBridge->accessShimBoundaryType($effectivePhpType, $param->cppType)
                 : $param->cppType;
 
             if (
@@ -317,7 +336,7 @@ class MethodContext
             }
 
             $setup = $classCtx->typeBridge->nativeArgumentSetup(
-                phpType: $param->phpType,
+                phpType: $effectivePhpType,
                 cppType: $targetCppType,
                 sourceVarName: $sourceVarName,
                 nativeVarName: sprintf('_qt_arg_%d', $i),
@@ -344,6 +363,15 @@ class MethodContext
             'setup_lines' => $setupLines,
             'args' => $args,
         ];
+    }
+
+    private function ownerClassName(string $ownerClass): string
+    {
+        if (!str_contains($ownerClass, '::')) {
+            return $ownerClass;
+        }
+
+        return (string) substr($ownerClass, (int) strrpos($ownerClass, '::') + 2);
     }
 
     private function constructorNullableObjectFallbackExpr(OverloadContext $overload, int $paramIndex): ?string
@@ -428,8 +456,8 @@ class MethodContext
         if ($classCtx->phpClassName === 'QCoreApplication' && $this->name === 'postEvent') {
             $eventParam = $this->params[1] ?? null;
             if ($eventParam !== null) {
-                $eventStruct = $classCtx->typeBridge->objectStructName('QEvent');
-                $fromObj = $classCtx->typeBridge->fromObjFuncName('QEvent');
+                $eventStruct = $classCtx->objectStructNameForPhpType('QEvent');
+                $fromObj = $classCtx->fromObjFuncNameForPhpType('QEvent');
 
                 return [
                     sprintf('%s *_qt_posted_event = %s(Z_OBJ_P(%s));', $eventStruct, $fromObj, $eventParam->cVarName),
@@ -453,8 +481,8 @@ class MethodContext
                 continue;
             }
 
-            $objectStruct = $classCtx->typeBridge->objectStructName($phpClassName);
-            $fromObj = $classCtx->typeBridge->fromObjFuncName($phpClassName);
+            $objectStruct = $classCtx->objectStructNameForPhpType($phpClassName);
+            $fromObj = $classCtx->fromObjFuncNameForPhpType($phpClassName);
 
             $lines[] = sprintf('%s *_qt_owned_arg_%d = %s(Z_OBJ_P(%s));', $objectStruct, $paramIndex, $fromObj, $ownedParam->cVarName);
             $lines[] = sprintf('_qt_owned_arg_%d->prevent_destroy = true;', $paramIndex);
@@ -477,8 +505,8 @@ class MethodContext
                 continue;
             }
 
-            $objectStruct = $classCtx->typeBridge->objectStructName($phpClassName);
-            $fromObj = $classCtx->typeBridge->fromObjFuncName($phpClassName);
+            $objectStruct = $classCtx->objectStructNameForPhpType($phpClassName);
+            $fromObj = $classCtx->fromObjFuncNameForPhpType($phpClassName);
 
             $lines[] = sprintf('%s *_qt_owned_arg_%d = %s(Z_OBJ_P(%s));', $objectStruct, $paramIndex, $fromObj, $ownedParam->cVarName);
             $lines[] = sprintf('if (%s) {', $probeExpr);
@@ -499,16 +527,43 @@ class MethodContext
             return [];
         }
 
-        if ($this->name === 'setLayout' && $classCtx->phpClassName === 'QWidget' && $firstParam->phpType === 'QLayout') {
+        if ($this->name === 'setLayout' && $classCtx->phpClassName === 'QWidget' && $this->paramHasPhpType($firstParam, 'QLayout')) {
             return [[0, 'QLayout']];
         }
 
-        if ($this->name === 'addWidget' && $firstParam->phpType === 'QWidget') {
+        if ($this->name === 'addWidget' && $this->paramHasPhpType($firstParam, 'QWidget')) {
             return [[0, 'QWidget']];
         }
 
-        if ($this->name === 'addLayout' && $firstParam->phpType === 'QLayout') {
+        if ($this->name === 'addLayout' && $this->paramHasPhpType($firstParam, 'QLayout')) {
             return [[0, 'QLayout']];
+        }
+
+        if (
+            $this->name === 'setRootEntity'
+            && $classCtx->phpClassName === 'QAspectEngine'
+            && $firstParam->smartPointerTargetCppType !== null
+            && $this->paramHasPhpType($firstParam, 'QEntity')
+        ) {
+            // Qt3D keeps the root entity through a QSharedPointer alias after
+            // the call returns, so the PHP wrapper must stop owning the pointee.
+            return [[0, 'QEntity']];
+        }
+
+        if (
+            $this->name === 'registerAspect'
+            && $classCtx->phpClassName === 'QAspectEngine'
+            && $this->paramHasPhpType($firstParam, 'QAbstractAspect')
+        ) {
+            // QAspectEngine retains registered aspect instances.
+            return [[0, 'QAbstractAspect']];
+        }
+
+        if ($this->name === 'setSurface' && $classCtx->phpClassName === 'QRenderSurfaceSelector' && $this->paramHasPhpType($firstParam, 'QObject')) {
+            // The frame graph retains the target surface object beyond the
+            // setter call. QWindow instances have no QObject parent, so the
+            // generic parent-based ownership probe is too weak here.
+            return [[0, 'QObject']];
         }
 
         return [];
@@ -519,13 +574,29 @@ class MethodContext
      */
     private function ownershipProbeSpec(ClassContext $classCtx, int $paramIndex, OverloadParamContext $param): ?array
     {
-        if (!$classCtx->typeBridge->isObjectType($param->phpType) || $classCtx->typeBridge->isValueType($param->phpType)) {
+        if (!$this->isObjectOnlyTypeUnion($param->phpType)) {
             return null;
+        }
+
+        $objectPhpType = $this->firstObjectType($param->phpType);
+        if ($objectPhpType === null || $classCtx->typeBridge->isValueType($objectPhpType)) {
+            return null;
+        }
+
+        // Smart-pointer aliases like QEntityPtr become non-owning QSharedPointer<T>
+        // wrappers around an existing native pointer at the PHP boundary. The
+        // callee may retain that shared-pointer alias after the PHP wrapper falls
+        // out of scope, so the pointee must not be deleted by the PHP wrapper.
+        if ($param->smartPointerTargetCppType !== null) {
+            return [
+                $objectPhpType,
+                'true',
+            ];
         }
 
         $probeVar = sprintf('_qt_owned_arg_%d', $paramIndex);
 
-        return match ($param->phpType) {
+        return match ($objectPhpType) {
             'QStandardItem' => [
                 'QStandardItem',
                 sprintf(
@@ -538,10 +609,89 @@ class MethodContext
                 sprintf('(_qt_owned_arg_%d->native_ptr != NULL && _qt_owned_arg_%d->native_ptr->tableWidget() != NULL)', $paramIndex, $paramIndex),
             ],
             default => [
-                $param->phpType,
+                $objectPhpType,
                 sprintf('qt_native_has_qobject_parent(%s->native_ptr)', $probeVar),
             ],
         };
+    }
+
+    private function paramHasPhpType(OverloadParamContext $param, string $phpType): bool
+    {
+        foreach (explode('|', $param->phpType) as $candidate) {
+            if ($this->phpTypeMatches(trim($candidate), $phpType)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function phpTypeMatches(string $actual, string $expected): bool
+    {
+        if ($actual === $expected) {
+            return true;
+        }
+
+        if ($actual === '' || $actual === 'null') {
+            return false;
+        }
+
+        $actualBase = $this->phpTypeBaseName($actual);
+        $expectedBase = $this->phpTypeBaseName($expected);
+
+        return $actualBase !== '' && $actualBase === $expectedBase;
+    }
+
+    private function phpTypeBaseName(string $phpType): string
+    {
+        $trimmed = ltrim(trim($phpType), '\\');
+        if ($trimmed === '' || in_array($trimmed, ['null', 'int', 'float', 'bool', 'string', 'array', 'mixed', 'void'], true)) {
+            return $trimmed;
+        }
+
+        $separator = strrpos($trimmed, '\\');
+        if ($separator === false) {
+            return $trimmed;
+        }
+
+        return substr($trimmed, $separator + 1);
+    }
+
+    private function isObjectOnlyTypeUnion(string $phpType): bool
+    {
+        $parts = array_values(array_filter(explode('|', $phpType), static fn(string $part): bool => trim($part) !== ''));
+        if ($parts === []) {
+            return false;
+        }
+
+        foreach ($parts as $part) {
+            $trimmed = trim($part);
+            if ($trimmed === 'null') {
+                continue;
+            }
+
+            if (!$this->typeBridge->isObjectType($trimmed)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function firstObjectType(string $phpType): ?string
+    {
+        foreach (explode('|', $phpType) as $part) {
+            $part = trim($part);
+            if ($part === '' || $part === 'null') {
+                continue;
+            }
+
+            if ($this->typeBridge->isObjectType($part)) {
+                return $part;
+            }
+        }
+
+        return null;
     }
 
     private function overloadParamMatchCondition(int $position, OverloadParamContext $param): string
@@ -574,7 +724,7 @@ class MethodContext
                 ? $this->typeBridge->dereferencedZvalExpr($mergedParam->cVarName)
                 : $mergedParam->cVarName;
 
-            return $this->typeBridge->zvalTypeMatchScoreExpr($matchVar, $param->phpType);
+            return $this->overloadObjectAwareMatchScoreExpr($matchVar, $param->phpType, $param->cppType);
         }
 
         return $mergedParam->phpType === $param->phpType ? '500' : '-1';
@@ -594,5 +744,60 @@ class MethodContext
         $parts = explode('|', $returnType);
 
         return $parts[0];
+    }
+
+    private function overloadObjectAwareMatchScoreExpr(string $varName, string $phpType, ?string $cppType = null): string
+    {
+        if ($this->typeBridge->isUnionType($phpType)) {
+            $parts = array_values(array_filter(explode('|', $phpType), static fn(string $part): bool => $part !== ''));
+            if ($parts === []) {
+                return '-1';
+            }
+
+            $expr = $this->overloadObjectAwareMatchScoreExpr($varName, array_shift($parts), $cppType);
+            foreach ($parts as $part) {
+                $expr = sprintf('qt_match_score_max(%s, %s)', $expr, $this->overloadObjectAwareMatchScoreExpr($varName, $part, $cppType));
+            }
+
+            return $expr;
+        }
+
+        return match ($phpType) {
+            'int' => sprintf('((Z_TYPE_P(%s) == IS_LONG) ? 500 : -1)', $varName),
+            'float' => sprintf('((Z_TYPE_P(%s) == IS_DOUBLE) ? 500 : -1)', $varName),
+            'string' => sprintf('((Z_TYPE_P(%s) == IS_STRING) ? %d : -1)', $varName, $this->stringOverloadMatchScore($cppType)),
+            'bool' => sprintf('(((Z_TYPE_P(%1$s) == IS_TRUE || Z_TYPE_P(%1$s) == IS_FALSE)) ? 500 : -1)', $varName),
+            'array' => sprintf('((Z_TYPE_P(%s) == IS_ARRAY) ? 500 : -1)', $varName),
+            'null' => sprintf('((Z_TYPE_P(%s) == IS_NULL) ? 500 : -1)', $varName),
+            'void' => '-1',
+            'mixed' => '0',
+            default => sprintf('qt_zval_object_match_score(%s, %s)', $varName, $this->classCtx->ceVarNameForPhpType($phpType)),
+        };
+    }
+
+    private function stringOverloadMatchScore(?string $cppType): int
+    {
+        if ($cppType === null || $cppType === '') {
+            return 500;
+        }
+
+        $base = trim($cppType);
+        $base = preg_replace('/\bconst\b/', '', $base) ?? $base;
+        $base = trim(preg_replace('/\s+/', ' ', $base) ?? $base);
+        $base = rtrim($base, '& ');
+        if (!str_contains($base, '<')) {
+            while (str_ends_with($base, '*')) {
+                $base = rtrim(substr($base, 0, -1));
+            }
+        }
+
+        return match ($base) {
+            'QString' => 560,
+            'QByteArray' => 550,
+            'QAnyStringView' => 540,
+            'QStringView' => 530,
+            'QLatin1StringView' => 520,
+            default => 500,
+        };
     }
 }

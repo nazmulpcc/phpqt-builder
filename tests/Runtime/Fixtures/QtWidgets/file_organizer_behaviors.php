@@ -23,7 +23,7 @@ final class RuntimeFilesystemModel extends \Qt\Gui\QFileSystemModel
         return parent::parentModelIndex($child);
     }
 
-    public function index(int|string $row, int $column = 0, ?QModelIndex $parent = null): QModelIndex
+    public function index(\Qt\Core\QString|int|string $row, int $column = 0, ?QModelIndex $parent = null): QModelIndex
     {
         return parent::index($row, $column, $parent ?? new QModelIndex());
     }

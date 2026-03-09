@@ -16,7 +16,10 @@ use QtBuilder\Parsing\ClassDefinitionBuilder;
 use QtBuilder\Parsing\ClangArgumentBuilder;
 use QtBuilder\Parsing\CppToPhpTypeMapper;
 use QtBuilder\Parsing\QtClassInspector;
+use QtBuilder\Support\CppClassTypeResolver;
 use QtBuilder\Support\CppName;
+use QtBuilder\Support\SmartPointerAliasResolver;
+use QtBuilder\Support\TypeResolutionContext;
 
 class ClassGenerationService
 {
@@ -36,6 +39,7 @@ class ClassGenerationService
         private readonly TypeBridge $typeBridge = new TypeBridge(),
         private readonly CppToPhpTypeMapper $typeMapper = new CppToPhpTypeMapper(),
         private readonly QListSpecializationResolver $listSpecializationResolver = new QListSpecializationResolver(),
+        private readonly SmartPointerAliasResolver $smartPointerAliasResolver = new SmartPointerAliasResolver(),
     ) {}
 
     /**
@@ -65,25 +69,30 @@ class ClassGenerationService
 
         /** @var array<string, mixed> $classData */
         $classData = $facts['class_data'];
+        $resolutionContext = TypeResolutionContext::fromClassData($classData);
+        $classTypeResolver = CppClassTypeResolver::fromPreparedClassData([$className => $classData]);
+        $classData = $this->canonicalizeKnownBaseTypes($classData, $classTypeResolver, $resolutionContext);
         $classData = $this->mergeInheritedTypeMetadata(
             $classData,
-            function (string $baseClass) use ($headerPath, $includePaths, $classHeaders): ?array {
-                $baseHeaderPath = $classHeaders[$baseClass] ?? $headerPath;
-                $facts = $this->prepareDiscoveryFacts($baseHeaderPath, $baseClass, $includePaths);
+            function (string $baseClass) use ($headerPath, $includePaths, $classHeaders, $classTypeResolver, $resolutionContext): ?array {
+                $resolvedBaseClass = $this->resolvedTypeLookupKey($baseClass, $classTypeResolver, $resolutionContext);
+                $baseHeaderPath = $classHeaders[$resolvedBaseClass] ?? $classHeaders[$baseClass] ?? $headerPath;
+                $facts = $this->prepareDiscoveryFacts($baseHeaderPath, CppName::unqualify($resolvedBaseClass), $includePaths);
 
                 return (($facts['status'] ?? 'error') === 'ok' && is_array($facts['class_data'] ?? null))
-                    ? $facts['class_data']
+                    ? $this->canonicalizeKnownBaseTypes((array) $facts['class_data'], $classTypeResolver, TypeResolutionContext::fromClassData((array) $facts['class_data']))
                     : null;
             },
         );
         $classData['is_qobject_derived'] = $this->isQObjectDerivedClassData(
             $classData,
-            function (string $baseClass) use ($headerPath, $includePaths, $classHeaders): ?array {
-                $baseHeaderPath = $classHeaders[$baseClass] ?? $headerPath;
-                $facts = $this->prepareDiscoveryFacts($baseHeaderPath, $baseClass, $includePaths);
+            function (string $baseClass) use ($headerPath, $includePaths, $classHeaders, $classTypeResolver, $resolutionContext): ?array {
+                $resolvedBaseClass = $this->resolvedTypeLookupKey($baseClass, $classTypeResolver, $resolutionContext);
+                $baseHeaderPath = $classHeaders[$resolvedBaseClass] ?? $classHeaders[$baseClass] ?? $headerPath;
+                $facts = $this->prepareDiscoveryFacts($baseHeaderPath, CppName::unqualify($resolvedBaseClass), $includePaths);
 
                 return (($facts['status'] ?? 'error') === 'ok' && is_array($facts['class_data'] ?? null))
-                    ? $facts['class_data']
+                    ? $this->canonicalizeKnownBaseTypes((array) $facts['class_data'], $classTypeResolver, TypeResolutionContext::fromClassData((array) $facts['class_data']))
                     : null;
             },
         );
@@ -92,7 +101,7 @@ class ClassGenerationService
         $classData = $this->normalizeSupportedListBases($classData, $headerPath, $className);
 
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
-        if ($parentClass !== null && !in_array($parentClass, $allowedClasses, true)) {
+        if ($parentClass !== null && !$this->allowedClassesContain($allowedClasses, $parentClass, $classTypeResolver, $resolutionContext)) {
             if ($this->canIgnoreUnavailableParent($parentClass)) {
                 $classData['bases'] = array_values(array_filter(
                     (array) ($classData['bases'] ?? []),
@@ -111,7 +120,7 @@ class ClassGenerationService
             }
         }
 
-        $filtered = $this->methodPolicy->filter($classData, $allowedClasses, $preferExternalDependencyReasons, $enumRegistry);
+        $filtered = $this->methodPolicy->filter($classData, $allowedClasses, $preferExternalDependencyReasons, $enumRegistry, $classTypeResolver);
         $filtered['selected_methods'] = $this->mergeInheritedWidgetEventMethods(
             $classData,
             $filtered['selected_methods'],
@@ -149,8 +158,18 @@ class ClassGenerationService
             $virtualFilter['selected_methods'],
             static fn(array $method): bool => ($method['is_signal'] ?? false) !== true,
         ));
+        $constructorPrune = $this->pruneUnsupportedConstructorVariants(
+            $classData['methods'],
+            $sourceClassData,
+            $className,
+            $classTypeResolver,
+            $resolutionContext,
+        );
+        $classData['methods'] = $constructorPrune['selected_methods'];
 
-        $phpClass = $this->builder->build($classData);
+        $phpClass = $this->builder->build($classData, $classTypeResolver);
+        $constructorOverloadPrune = $this->pruneDisallowedPhpConstructorOverloads($phpClass, $sourceClassData, $className, $classTypeResolver, $resolutionContext);
+        $phpClass = $constructorOverloadPrune['class'];
         $inheritanceFiltered = $this->filterConflictingInheritedMethods(
             $phpClass,
             $headerPath,
@@ -159,7 +178,14 @@ class ClassGenerationService
             $classHeaders,
         );
         $phpClass = $inheritanceFiltered['class'];
-        $skippedMethods = [...$filtered['skipped_methods'], ...$signalFilter['skipped_methods'], ...$virtualFilter['skipped_methods'], ...$inheritanceFiltered['skipped_methods']];
+        $skippedMethods = [
+            ...$filtered['skipped_methods'],
+            ...$signalFilter['skipped_methods'],
+            ...$virtualFilter['skipped_methods'],
+            ...$constructorPrune['skipped_methods'],
+            ...$constructorOverloadPrune['skipped_methods'],
+            ...$inheritanceFiltered['skipped_methods'],
+        ];
         $abstractConstructorAdjusted = $this->filterUnsupportedAbstractConstructors(
             $phpClass,
             $sourceClassData,
@@ -204,6 +230,373 @@ class ClassGenerationService
         }
 
         return ClassGenerationResult::ok($className, $headerPath, $phpClass, $skippedMethods);
+    }
+
+    /**
+     * @param list<array<string, mixed>> $selectedMethods
+     * @param array<string, mixed> $sourceClassData
+     * @return array{selected_methods: list<array<string, mixed>>, skipped_methods: list<array<string, string>>}
+     */
+    private function pruneUnsupportedConstructorVariants(
+        array $selectedMethods,
+        array $sourceClassData,
+        string $className,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
+    ): array {
+        $disallowedBySignature = [];
+        $constructorCountByArity = [];
+        $disallowedByUniqueArity = [];
+        foreach ((array) ($sourceClassData['methods'] ?? []) as $variant) {
+            if (!is_array($variant) || !$this->isConstructorVariant($className, $variant)) {
+                continue;
+            }
+
+            $key = $this->sourceConstructorVariantKey($variant, $className, $sourceClassData);
+            $arity = count(is_array($variant['parameters'] ?? null) ? $variant['parameters'] : []);
+            $constructorCountByArity[$arity] = ($constructorCountByArity[$arity] ?? 0) + 1;
+            if ($key === null) {
+                continue;
+            }
+
+            $access = (string) ($variant['access'] ?? 'unknown');
+            if ($access === 'private' || $access === 'unknown') {
+                $reason = [
+                    'code' => 'non_public_constructor',
+                    'message' => sprintf('Constructors with %s access are not exposed.', $access),
+                ];
+                $disallowedBySignature[$key] = $reason;
+                $disallowedByUniqueArity[$arity] = $reason;
+                continue;
+            }
+
+            if (($variant['is_deleted'] ?? false) === true) {
+                $reason = [
+                    'code' => 'deleted_constructor',
+                    'message' => 'Deleted constructors are not exposed.',
+                ];
+                $disallowedBySignature[$key] = $reason;
+                $disallowedByUniqueArity[$arity] = $reason;
+                continue;
+            }
+
+            if ($this->isCopyConstructorVariant($className, $variant, $classTypeResolver, $resolutionContext)) {
+                $reason = [
+                    'code' => 'copy_constructor_filtered',
+                    'message' => 'Copy constructors are not exposed as PHP constructors.',
+                ];
+                $disallowedBySignature[$key] = $reason;
+                $disallowedByUniqueArity[$arity] = $reason;
+            }
+        }
+
+        if ($disallowedBySignature === []) {
+            return [
+                'selected_methods' => $selectedMethods,
+                'skipped_methods' => [],
+            ];
+        }
+
+        $keptMethods = [];
+        $skippedMethods = [];
+
+        foreach ($selectedMethods as $method) {
+            $key = $this->methodVariantKey($method);
+            if (($method['name'] ?? null) !== $className) {
+                $keptMethods[] = $method;
+                continue;
+            }
+
+            $reason = $key !== null ? ($disallowedBySignature[$key] ?? null) : null;
+            if ($reason === null) {
+                $arity = count(is_array($method['parameters'] ?? null) ? $method['parameters'] : []);
+                if (($constructorCountByArity[$arity] ?? 0) === 1) {
+                    $reason = $disallowedByUniqueArity[$arity] ?? null;
+                }
+            }
+            if ($reason === null) {
+                $keptMethods[] = $method;
+                continue;
+            }
+
+            $skippedMethods[] = [
+                'name' => '__construct',
+                'reason_code' => $reason['code'],
+                'reason_message' => $reason['message'],
+            ];
+        }
+
+        return [
+            'selected_methods' => $keptMethods,
+            'skipped_methods' => $skippedMethods,
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $sourceClassData
+     * @return array{class: PhpClass, skipped_methods: list<array<string, string>>}
+     */
+    private function pruneDisallowedPhpConstructorOverloads(
+        PhpClass $phpClass,
+        array $sourceClassData,
+        string $className,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
+    ): array {
+        $disallowedBySignature = [];
+        $constructorCountByArity = [];
+        $disallowedByUniqueArity = [];
+
+        foreach ((array) ($sourceClassData['methods'] ?? []) as $variant) {
+            if (!is_array($variant) || !$this->isConstructorVariant($className, $variant)) {
+                continue;
+            }
+
+            $key = $this->sourceConstructorVariantKey($variant, $className, $sourceClassData);
+            $arity = count(is_array($variant['parameters'] ?? null) ? $variant['parameters'] : []);
+            $constructorCountByArity[$arity] = ($constructorCountByArity[$arity] ?? 0) + 1;
+
+            $access = (string) ($variant['access'] ?? 'unknown');
+            if ($access === 'private' || $access === 'unknown') {
+                $reason = [
+                    'code' => 'non_public_constructor',
+                    'message' => sprintf('Constructors with %s access are not exposed.', $access),
+                ];
+                $disallowedByUniqueArity[$arity] = $reason;
+                if ($key !== null) {
+                    $disallowedBySignature[$key] = $reason;
+                }
+                continue;
+            }
+
+            if (($variant['is_deleted'] ?? false) === true) {
+                $reason = [
+                    'code' => 'deleted_constructor',
+                    'message' => 'Deleted constructors are not exposed.',
+                ];
+                $disallowedByUniqueArity[$arity] = $reason;
+                if ($key !== null) {
+                    $disallowedBySignature[$key] = $reason;
+                }
+                continue;
+            }
+
+            if ($this->isCopyConstructorVariant($className, $variant, $classTypeResolver, $resolutionContext)) {
+                $reason = [
+                    'code' => 'copy_constructor_filtered',
+                    'message' => 'Copy constructors are not exposed as PHP constructors.',
+                ];
+                $disallowedByUniqueArity[$arity] = $reason;
+                if ($key !== null) {
+                    $disallowedBySignature[$key] = $reason;
+                }
+            }
+        }
+
+        $methods = [];
+        $skippedMethods = [];
+        $changed = false;
+
+        foreach ($phpClass->methods as $method) {
+            if ($method->name !== '__construct' || $method->overloads === []) {
+                $methods[] = $method;
+                continue;
+            }
+
+            $keptOverloads = [];
+            foreach ($method->overloads as $overload) {
+                $arity = count($overload->parameters);
+                $overloadKey = $this->overloadSignatureKey($overload);
+                $reason = $overloadKey !== null ? ($disallowedBySignature[$overloadKey] ?? null) : null;
+                if ($reason === null) {
+                    $reason = (($constructorCountByArity[$arity] ?? 0) === 1)
+                        ? ($disallowedByUniqueArity[$arity] ?? null)
+                        : null;
+                }
+                if ($reason !== null) {
+                    $changed = true;
+                    $skippedMethods[] = [
+                        'name' => '__construct',
+                        'reason_code' => $reason['code'],
+                        'reason_message' => $reason['message'],
+                    ];
+                    continue;
+                }
+
+                $keptOverloads[] = $overload;
+            }
+
+            if ($keptOverloads === []) {
+                continue;
+            }
+
+            if ($keptOverloads === $method->overloads) {
+                $methods[] = $method;
+                continue;
+            }
+
+            $parameters = count($keptOverloads) === 1
+                ? array_map(
+                    static fn(\QtBuilder\Definition\OverloadParameter $parameter, int $position): \QtBuilder\Definition\PhpParameter => new \QtBuilder\Definition\PhpParameter(
+                        name: $parameter->name,
+                        phpType: 'mixed',
+                        hasDefault: $parameter->hasDefault,
+                        position: $position,
+                        isByRef: $parameter->isWritableByRef || $parameter->isWritableByRefPointer,
+                        isNullableByRef: $parameter->isWritableByRefPointer,
+                    ),
+                    $keptOverloads[0]->parameters,
+                    array_keys($keptOverloads[0]->parameters),
+                )
+                : $method->parameters;
+
+            $methods[] = new PhpMethod(
+                name: $method->name,
+                access: $method->access,
+                isStatic: $method->isStatic,
+                isSignal: $method->isSignal,
+                isSlot: $method->isSlot,
+                isAbstractMethod: $method->isAbstractMethod,
+                returnType: $method->returnType,
+                parameters: $parameters,
+                overloads: $keptOverloads,
+                cppName: $method->cppName,
+            );
+        }
+
+        if (!$changed) {
+            return [
+                'class' => $phpClass,
+                'skipped_methods' => [],
+            ];
+        }
+
+        return [
+            'class' => new PhpClass(
+                name: $phpClass->name,
+                parent: $phpClass->parent,
+                isAbstract: $phpClass->isAbstract,
+                isCopyConstructible: $phpClass->isCopyConstructible,
+                hasPublicConstructor: $phpClass->hasPublicConstructor,
+                hasPublicDestructor: $phpClass->hasPublicDestructor,
+                isQObjectDerived: $phpClass->isQObjectDerived,
+                properties: $phpClass->properties,
+                methods: $methods,
+                signals: $phpClass->signals,
+                classConstants: $phpClass->classConstants,
+                nativeIncludes: $phpClass->nativeIncludes,
+                nativeAliasOf: $phpClass->nativeAliasOf,
+                nativeCppType: $phpClass->nativeCppType,
+                generationId: $phpClass->generationId,
+                smartPointerAliases: $phpClass->smartPointerAliases,
+            ),
+            'skipped_methods' => $skippedMethods,
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $variant
+     */
+    private function sourceConstructorVariantKey(array $variant, string $className, array $sourceClassData): ?string
+    {
+        $parameters = is_array($variant['parameters'] ?? null) ? $variant['parameters'] : [];
+        $types = [];
+
+        foreach ($parameters as $parameter) {
+            $type = is_string($parameter['type'] ?? null) ? $parameter['type'] : '';
+            if ($type === '') {
+                return null;
+            }
+
+            $types[] = $this->normalizeConstructorParameterTypeForMatching($type, $className, $sourceClassData);
+        }
+
+        return $this->parameterSignatureKey($types);
+    }
+
+    private function overloadSignatureKey(\QtBuilder\Definition\MethodOverload $overload): ?string
+    {
+        $types = [];
+        foreach ($overload->parameters as $parameter) {
+            $type = trim($parameter->cppType);
+            if ($type === '') {
+                return null;
+            }
+
+            $types[] = $this->normalizeSignatureType($type);
+        }
+
+        return $this->parameterSignatureKey($types);
+    }
+
+    /**
+     * Source metadata can spell flag alias constructors using the alias name
+     * while overload generation normalizes them to the underlying QFlags type.
+     * Normalize those aliases here so constructor pruning can match the built
+     * overloads without broadening the public type-resolution rules.
+     */
+    private function normalizeConstructorParameterTypeForMatching(string $type, string $className, array $sourceClassData): string
+    {
+        $trimmed = trim($type);
+        $flagAliases = is_array($sourceClassData['flag_aliases'] ?? null) ? $sourceClassData['flag_aliases'] : [];
+        $qualifiedClassName = is_string($sourceClassData['qualified_name'] ?? null) && $sourceClassData['qualified_name'] !== ''
+            ? (string) $sourceClassData['qualified_name']
+            : $className;
+
+        if (isset($flagAliases[$trimmed]) && is_string($flagAliases[$trimmed]) && $flagAliases[$trimmed] !== '') {
+            return $this->normalizeSignatureType(sprintf('QFlags<%s::%s>', $qualifiedClassName, $flagAliases[$trimmed]));
+        }
+
+        return $this->normalizeSignatureType($trimmed);
+    }
+
+    /**
+     * @param array<string, mixed> $variant
+     */
+    private function isConstructorVariant(string $className, array $variant): bool
+    {
+        return ($variant['name'] ?? null) === $className;
+    }
+
+    /**
+     * @param array<string, mixed> $variant
+     */
+    private function isCopyConstructorVariant(
+        string $className,
+        array $variant,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
+    ): bool {
+        if (!$this->isConstructorVariant($className, $variant)) {
+            return false;
+        }
+
+        $parameters = is_array($variant['parameters'] ?? null) ? $variant['parameters'] : [];
+        if (count($parameters) !== 1) {
+            return false;
+        }
+
+        $type = is_string($parameters[0]['type'] ?? null) ? $parameters[0]['type'] : '';
+        if ($type === '') {
+            return false;
+        }
+
+        $trimmed = trim($type);
+        if (str_contains($trimmed, '*') || !str_contains($trimmed, '&')) {
+            return false;
+        }
+
+        $normalized = trim($trimmed);
+        $normalized = preg_replace('/\bconst\b/', '', $normalized) ?? $normalized;
+        $normalized = trim(preg_replace('/\s+/', ' ', $normalized) ?? $normalized);
+        $normalized = rtrim($normalized, '& ');
+
+        $resolvedPhpClass = $classTypeResolver?->resolvePhpClassIdentity($normalized, $resolutionContext);
+        if ($resolvedPhpClass !== null) {
+            return $resolvedPhpClass === $className;
+        }
+
+        return CppName::unqualify($normalized) === $className;
     }
 
     /**
@@ -252,6 +645,7 @@ class ClassGenerationService
         $classData['has_public_destructor'] = $lifecycle['has_public_destructor'];
         $classData['flag_aliases'] = $this->discoverFlagAliases($headerPath, $className);
         $classData['enum_names'] = $this->discoverEnumNames($headerPath, $className);
+        $classData['smart_pointer_aliases'] = $this->smartPointerAliasResolver->discover($headerPath);
         $classData['methods'] = $this->annotateConstructorVariants(
             is_array($classData['methods'] ?? null) ? $classData['methods'] : [],
             $headerPath,
@@ -289,24 +683,33 @@ class ClassGenerationService
                 'Prepared class data is missing the class name.',
             );
         }
+        $classTypeResolver = CppClassTypeResolver::fromPreparedClassData($preparedClassDataByClass + [$className => $classData]);
+        $resolutionContext = TypeResolutionContext::fromClassData($classData);
+        $classData = $this->canonicalizeKnownBaseTypes($classData, $classTypeResolver, $resolutionContext);
         $classData = $this->mergeInheritedTypeMetadata(
             $classData,
-            static fn(string $baseClass): ?array => is_array($preparedClassDataByClass[$baseClass] ?? null)
-                ? $preparedClassDataByClass[$baseClass]
-                : null,
+            fn(string $baseClass): ?array => $this->preparedClassDataForType(
+                $baseClass,
+                $preparedClassDataByClass,
+                $classTypeResolver,
+                $resolutionContext,
+            ),
         );
         $classData['is_qobject_derived'] = $this->isQObjectDerivedClassData(
             $classData,
-            static fn(string $baseClass): ?array => is_array($preparedClassDataByClass[$baseClass] ?? null)
-                ? $preparedClassDataByClass[$baseClass]
-                : null,
+            fn(string $baseClass): ?array => $this->preparedClassDataForType(
+                $baseClass,
+                $preparedClassDataByClass,
+                $classTypeResolver,
+                $resolutionContext,
+            ),
         );
         $sourceClassData = $classData;
         $allowedClasses = $this->augmentAllowedClassesWithSyntheticParents($classData, $allowedClasses, $headerPath, $className);
         $classData = $this->normalizeSupportedListBases($classData, $headerPath, $className);
 
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
-        if ($parentClass !== null && !in_array($parentClass, $allowedClasses, true)) {
+        if ($parentClass !== null && !$this->allowedClassesContain($allowedClasses, $parentClass, $classTypeResolver, $resolutionContext)) {
             if ($this->canIgnoreUnavailableParent($parentClass)) {
                 $classData['bases'] = array_values(array_filter(
                     (array) ($classData['bases'] ?? []),
@@ -325,12 +728,12 @@ class ClassGenerationService
             }
         }
 
-        $filtered = $this->methodPolicy->filter($classData, $allowedClasses, $preferExternalDependencyReasons, $enumRegistry);
+        $filtered = $this->methodPolicy->filter($classData, $allowedClasses, $preferExternalDependencyReasons, $enumRegistry, $classTypeResolver);
         $filtered['selected_methods'] = $this->mergeInheritedWidgetEventMethods(
             $classData,
             $filtered['selected_methods'],
-            function (string $baseClass) use ($preparedClassDataByClass, $allowedClasses, $preferExternalDependencyReasons, $enumRegistry): ?array {
-                $baseClassData = $preparedClassDataByClass[$baseClass] ?? null;
+            function (string $baseClass) use ($preparedClassDataByClass, $allowedClasses, $preferExternalDependencyReasons, $enumRegistry, $classTypeResolver, $resolutionContext): ?array {
+                $baseClassData = $this->preparedClassDataForType($baseClass, $preparedClassDataByClass, $classTypeResolver, $resolutionContext);
                 if (!is_array($baseClassData)) {
                     return null;
                 }
@@ -340,6 +743,7 @@ class ClassGenerationService
                     $allowedClasses,
                     $preferExternalDependencyReasons,
                     $enumRegistry,
+                    $classTypeResolver,
                 );
                 $baseClassData['selected_methods'] = $filtered['selected_methods'];
 
@@ -370,7 +774,9 @@ class ClassGenerationService
             static fn(array $method): bool => ($method['is_signal'] ?? false) !== true,
         ));
 
-        $phpClass = $this->builder->build($classData);
+        $phpClass = $this->builder->build($classData, $classTypeResolver);
+        $constructorOverloadPrune = $this->pruneDisallowedPhpConstructorOverloads($phpClass, $sourceClassData, $className, $classTypeResolver, $resolutionContext);
+        $phpClass = $constructorOverloadPrune['class'];
         $inheritanceFiltered = $this->filterConflictingInheritedMethodsFromPrepared(
             $phpClass,
             $headerPath,
@@ -378,7 +784,13 @@ class ClassGenerationService
             $preparedClassDataByClass,
         );
         $phpClass = $inheritanceFiltered['class'];
-        $skippedMethods = [...$filtered['skipped_methods'], ...$signalFilter['skipped_methods'], ...$virtualFilter['skipped_methods'], ...$inheritanceFiltered['skipped_methods']];
+        $skippedMethods = [
+            ...$filtered['skipped_methods'],
+            ...$signalFilter['skipped_methods'],
+            ...$virtualFilter['skipped_methods'],
+            ...$constructorOverloadPrune['skipped_methods'],
+            ...$inheritanceFiltered['skipped_methods'],
+        ];
         $abstractConstructorAdjusted = $this->filterUnsupportedAbstractConstructors(
             $phpClass,
             $sourceClassData,
@@ -542,6 +954,8 @@ class ClassGenerationService
                 nativeIncludes: $phpClass->nativeIncludes,
                 nativeAliasOf: $phpClass->nativeAliasOf,
                 nativeCppType: $phpClass->nativeCppType,
+                generationId: $phpClass->generationId,
+                smartPointerAliases: $phpClass->smartPointerAliases,
             ),
             'skipped_methods' => $skippedMethods,
         ];
@@ -776,7 +1190,13 @@ class ClassGenerationService
             );
         }
 
-        $filtered = $this->methodPolicy->filter($classData, $allowedClasses);
+        $filtered = $this->methodPolicy->filter(
+            $classData,
+            $allowedClasses,
+            false,
+            null,
+            CppClassTypeResolver::fromPreparedClassData($preparedClassDataByClass),
+        );
         $signalFilter = $this->filterSignalCallbackMethods(
             $filtered['selected_methods'],
             [],
@@ -1109,8 +1529,9 @@ class ClassGenerationService
         array $preparedClassDataByClass,
         array &$parameterClassFactsCache,
     ): ?array {
-        if (isset($preparedClassDataByClass[$phpType]) && is_array($preparedClassDataByClass[$phpType])) {
-            return $preparedClassDataByClass[$phpType];
+        $preparedFacts = $this->preparedClassDataForType($phpType, $preparedClassDataByClass);
+        if (is_array($preparedFacts)) {
+            return $preparedFacts;
         }
 
         if (array_key_exists($phpType, $parameterClassFactsCache)) {
@@ -1134,6 +1555,86 @@ class ClassGenerationService
         $parameterClassFactsCache[$phpType] = $facts['class_data'];
 
         return $parameterClassFactsCache[$phpType];
+    }
+
+    /**
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     */
+    private function preparedClassDataForType(
+        string $type,
+        array $preparedClassDataByClass,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
+    ): ?array {
+        $lookup = $this->resolvedTypeLookupKey($type, $classTypeResolver, $resolutionContext);
+
+        $resolved = $preparedClassDataByClass[$lookup] ?? null;
+        if (is_array($resolved)) {
+            $resolvedContext = TypeResolutionContext::fromClassData($resolved);
+
+            return $this->canonicalizeKnownBaseTypes($resolved, $classTypeResolver, $resolvedContext);
+        }
+
+        $fallback = $preparedClassDataByClass[$type] ?? null;
+
+        if (!is_array($fallback)) {
+            return null;
+        }
+
+        $fallbackContext = TypeResolutionContext::fromClassData($fallback);
+
+        return $this->canonicalizeKnownBaseTypes($fallback, $classTypeResolver, $fallbackContext);
+    }
+
+    /**
+     * @param list<string> $allowedClasses
+     */
+    private function allowedClassesContain(
+        array $allowedClasses,
+        string $type,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
+    ): bool {
+        $lookup = $this->resolvedTypeLookupKey($type, $classTypeResolver, $resolutionContext);
+
+        return in_array($lookup, $allowedClasses, true) || in_array($type, $allowedClasses, true);
+    }
+
+    /**
+     * @param array<string, mixed> $classData
+     * @return array<string, mixed>
+     */
+    private function canonicalizeKnownBaseTypes(
+        array $classData,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
+    ): array {
+        $bases = is_array($classData['bases'] ?? null) ? $classData['bases'] : [];
+        if ($bases === [] || $classTypeResolver === null || $resolutionContext === null) {
+            return $classData;
+        }
+
+        $classData['bases'] = array_values(array_map(
+            fn(mixed $base): mixed => is_string($base)
+                ? $classTypeResolver->canonicalizeType($base, $resolutionContext)
+                : $base,
+            $bases,
+        ));
+
+        return $classData;
+    }
+
+    private function resolvedTypeLookupKey(
+        string $type,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
+    ): string {
+        $trimmed = trim($type);
+        if ($trimmed === '' || $classTypeResolver === null) {
+            return $trimmed;
+        }
+
+        return $classTypeResolver->canonicalizeType($trimmed, $resolutionContext ?? TypeResolutionContext::fromNames(CppName::unqualify($trimmed)));
     }
 
     /**
@@ -1294,6 +1795,7 @@ class ClassGenerationService
         $classData['has_public_destructor'] = $lifecycle['has_public_destructor'];
         $classData['flag_aliases'] = $this->discoverFlagAliases($headerPath, $className);
         $classData['enum_names'] = $this->discoverEnumNames($headerPath, $className);
+        $classData['smart_pointer_aliases'] = $this->smartPointerAliasResolver->discover($headerPath);
         $classData['methods'] = $this->annotateConstructorVariants(
             is_array($classData['methods'] ?? null) ? $classData['methods'] : [],
             $headerPath,
@@ -1324,7 +1826,13 @@ class ClassGenerationService
             }
         }
 
-        $filtered = $this->methodPolicy->filter($classData, $allowedClasses);
+        $filtered = $this->methodPolicy->filter(
+            $classData,
+            $allowedClasses,
+            false,
+            null,
+            CppClassTypeResolver::fromPreparedClassData([$className => $classData]),
+        );
         $classData['selected_methods'] = $filtered['selected_methods'];
 
         return $classData;
@@ -1370,7 +1878,13 @@ class ClassGenerationService
                     : null;
             },
         );
-        $classData['selected_methods'] = $this->methodPolicy->filter($classData, $allowedClasses)['selected_methods'];
+        $classData['selected_methods'] = $this->methodPolicy->filter(
+            $classData,
+            $allowedClasses,
+            false,
+            null,
+            CppClassTypeResolver::fromPreparedClassData([$className => $classData]),
+        )['selected_methods'];
 
         return $classData;
     }
@@ -1690,6 +2204,8 @@ class ClassGenerationService
                 nativeIncludes: $phpClass->nativeIncludes,
                 nativeAliasOf: $phpClass->nativeAliasOf,
                 nativeCppType: $phpClass->nativeCppType,
+                generationId: $phpClass->generationId,
+                smartPointerAliases: $phpClass->smartPointerAliases,
             ),
             'skipped_methods' => $skippedMethods,
         ];
@@ -2192,6 +2708,8 @@ class ClassGenerationService
                 nativeIncludes: $phpClass->nativeIncludes,
                 nativeAliasOf: $phpClass->nativeAliasOf,
                 nativeCppType: $phpClass->nativeCppType,
+                generationId: $phpClass->generationId,
+                smartPointerAliases: $phpClass->smartPointerAliases,
             ),
             'skipped_methods' => [[
                 'name' => '__construct',
@@ -2263,6 +2781,8 @@ class ClassGenerationService
             nativeIncludes: $phpClass->nativeIncludes,
             nativeAliasOf: $phpClass->nativeAliasOf,
             nativeCppType: $phpClass->nativeCppType,
+            generationId: $phpClass->generationId,
+            smartPointerAliases: $phpClass->smartPointerAliases,
         );
     }
 
@@ -3256,6 +3776,8 @@ class ClassGenerationService
             nativeIncludes: $phpClass->nativeIncludes,
             nativeAliasOf: $phpClass->nativeAliasOf,
             nativeCppType: $phpClass->nativeCppType,
+            generationId: $phpClass->generationId,
+            smartPointerAliases: $phpClass->smartPointerAliases,
         );
     }
 

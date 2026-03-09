@@ -3,9 +3,6 @@
 declare(strict_types=1);
 
 require dirname(__DIR__) . '/bootstrap.php';
-require dirname(__DIR__, 4) . '/examples/obj-browser/ObjMaterialLibrary.php';
-require dirname(__DIR__, 4) . '/examples/obj-browser/ObjLoader.php';
-require dirname(__DIR__, 4) . '/examples/obj-browser/ObjBrowserWidget.php';
 
 use Qt\Core\QCoreApplication;
 use Qt\Core\QTimer;
@@ -14,6 +11,10 @@ use Qt\Widgets\QApplication;
 
 qt_runtime_require_class('Qt\\OpenGLWidgets\\QOpenGLWidget', 'QtOpenGLWidgets is unavailable in this build.');
 qt_runtime_require_class('Qt\\OpenGL\\QOpenGLShaderProgram', 'QtOpenGL shader support is unavailable in this build.');
+
+require dirname(__DIR__, 4) . '/examples/obj-browser/ObjMaterialLibrary.php';
+require dirname(__DIR__, 4) . '/examples/obj-browser/ObjLoader.php';
+require dirname(__DIR__, 4) . '/examples/obj-browser/ObjBrowserWidget.php';
 
 $app = new QApplication();
 $widget = new ObjBrowserWidget();

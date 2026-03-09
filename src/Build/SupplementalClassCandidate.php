@@ -38,4 +38,9 @@ readonly class SupplementalClassCandidate
             'trigger_reason' => $this->triggerReason,
         ];
     }
+
+    public function identityKey(): string
+    {
+        return $this->candidate->identityKey();
+    }
 }

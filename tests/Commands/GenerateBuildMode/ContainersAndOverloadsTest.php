@@ -274,7 +274,7 @@ it('does not mistake self pointer constructors for copy constructors', function 
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qselfparentthing.cpp');
     
         Assert::assertStringContainsString('public function __construct(QSelfParentThing|null $parent = null)', $stub);
-        Assert::assertStringContainsString('intern->native_ptr = new QSelfParentThing((parent != NULL && Z_TYPE_P(parent) == IS_OBJECT ? qt_qselfparentthing_from_obj(Z_OBJ_P(parent))->native_ptr : NULL));', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr = new QSelfParentThing(((parent != NULL && Z_TYPE_P(parent) == IS_OBJECT && instanceof_function(Z_OBJCE_P(parent), qt_ce_qselfparentthing)) ? qt_qselfparentthing_from_obj(Z_OBJ_P(parent))->native_ptr : NULL));', $cpp);
 });
 
 it('keeps supported constructor overloads when one sibling is unsupported', function (): void {
@@ -342,7 +342,7 @@ it('retains method overloads and matches across all parameters', function (): vo
         Assert::assertStringContainsString('int _qt_overload_best_score = -1;', $cpp);
         Assert::assertStringContainsString('intern->native_ptr->resize(*qt_qsizelike_from_obj(Z_OBJ_P(size))->native_ptr);', $cpp);
         Assert::assertStringContainsString('intern->native_ptr->resize((int)Z_LVAL_P(size), (int)height);', $cpp);
-        Assert::assertStringContainsString('qt_zval_object_match_score(size, qt_ce_QSizeLike)', $cpp);
+        Assert::assertStringContainsString('qt_zval_object_match_score(size, qt_ce_qsizelike)', $cpp);
         Assert::assertStringContainsString('Z_TYPE_P(size) == IS_LONG', $cpp);
         Assert::assertStringContainsString('zend_throw_error(NULL, "No matching overload for QOverloadHost::setSlot().");', $cpp);
 });
@@ -373,8 +373,8 @@ it('prefers more specific object overloads', function (): void {
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qcomponentlike.cpp');
     
         Assert::assertStringContainsString('int _qt_overload_best_score = -1;', $cpp);
-        Assert::assertStringContainsString('qt_zval_object_match_score(parent, qt_ce_QEngineLike)', $cpp);
-        Assert::assertStringContainsString('qt_zval_object_match_score(parent, qt_ce_QObject)', $cpp);
+        Assert::assertStringContainsString('qt_zval_object_match_score(parent, qt_ce_qenginelike)', $cpp);
+        Assert::assertStringContainsString('qt_zval_object_match_score(parent, qt_ce_qobject)', $cpp);
         Assert::assertStringContainsString('_qt_score_1 > _qt_overload_best_score', $cpp);
 });
 
