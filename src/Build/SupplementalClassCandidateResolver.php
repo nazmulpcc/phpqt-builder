@@ -10,8 +10,9 @@ use QtBuilder\Scanning\HeaderCandidate;
 
 class SupplementalClassCandidateResolver
 {
-    /** @var array<string, list<string>> */
-    private array $includeGraphCache = [];
+    public function __construct(
+        private readonly IncludeGraphResolver $includeGraphResolver = new IncludeGraphResolver(),
+    ) {}
 
     /**
      * @param list<string> $requestedModules
@@ -72,7 +73,7 @@ class SupplementalClassCandidateResolver
     {
         return array_values(array_unique([
             $headerPath,
-            ...$this->transitiveIncludes($headerPath, $includePaths),
+            ...$this->includeGraphResolver->transitiveIncludes($headerPath, $includePaths),
         ]));
     }
 
@@ -84,88 +85,6 @@ class SupplementalClassCandidateResolver
         $inspector = new QtClassInspector(new ClangArgumentBuilder($includePaths));
 
         return $inspector->locateClassHeader($headerPath, $className);
-    }
-
-    /**
-     * @param list<string> $includePaths
-     * @return list<string>
-     */
-    private function transitiveIncludes(string $headerPath, array $includePaths): array
-    {
-        if (isset($this->includeGraphCache[$headerPath])) {
-            return $this->includeGraphCache[$headerPath];
-        }
-
-        /** @var array<string, bool> $visited */
-        $visited = [];
-        /** @var array<string, bool> $resolved */
-        $resolved = [];
-        /** @var list<string> $queue */
-        $queue = [$headerPath];
-
-        while ($queue !== []) {
-            $current = array_shift($queue);
-            if (!is_string($current) || $current === '' || isset($visited[$current])) {
-                continue;
-            }
-
-            $visited[$current] = true;
-            if (!is_file($current)) {
-                continue;
-            }
-
-            $contents = (string) file_get_contents($current);
-            if (preg_match_all('/^\s*#\s*include\s*[<"]([^">]+)[">]/m', $contents, $matches) !== 1) {
-                continue;
-            }
-
-            foreach ($matches[1] as $include) {
-                if (!is_string($include)) {
-                    continue;
-                }
-
-                $resolvedPath = $this->resolveIncludePath($include, $current, $includePaths);
-                if ($resolvedPath === null) {
-                    continue;
-                }
-
-                $resolved[$resolvedPath] = true;
-                if (!isset($visited[$resolvedPath])) {
-                    $queue[] = $resolvedPath;
-                }
-            }
-        }
-
-        $headers = array_keys($resolved);
-        sort($headers);
-        $this->includeGraphCache[$headerPath] = $headers;
-
-        return $headers;
-    }
-
-    /**
-     * @param list<string> $includePaths
-     */
-    private function resolveIncludePath(string $include, string $sourceHeader, array $includePaths): ?string
-    {
-        $candidates = [dirname($sourceHeader) . '/' . $include];
-        foreach ($includePaths as $includePath) {
-            if (!is_string($includePath) || $includePath === '' || str_starts_with($includePath, '-')) {
-                continue;
-            }
-
-            $candidates[] = rtrim($includePath, '/') . '/' . ltrim($include, '/');
-            $candidates[] = rtrim(dirname($includePath), '/') . '/' . ltrim($include, '/');
-        }
-
-        foreach ($candidates as $candidate) {
-            $real = realpath($candidate);
-            if ($real !== false && is_file($real)) {
-                return $real;
-            }
-        }
-
-        return null;
     }
 
     private function moduleForHeaderPath(string $headerPath, string $fallbackModule): string

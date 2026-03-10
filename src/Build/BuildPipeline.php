@@ -22,6 +22,7 @@ class BuildPipeline
     public function __construct(
         private readonly ExtensionBootstrapper $bootstrapper,
         private readonly BuildDiscoveryService $discoveryService = new BuildDiscoveryService(),
+        private readonly FixedPointEngine $fixedPointEngine = new FixedPointEngine(),
     ) {}
 
     public function analyze(BuildExecutionRequest $request, OutputInterface $output): BuildAnalysisResult
@@ -42,6 +43,8 @@ class BuildPipeline
                 $request->installation->rootPath,
             );
         }
+        $preparedClassDataByClass = [];
+        $supplementalCandidates = [];
 
         if ($cachedDiscovery !== null) {
             $acceptedCandidates = $cachedDiscovery->acceptedCandidates;
@@ -50,6 +53,7 @@ class BuildPipeline
             $candidateCount = $cachedDiscovery->candidateCount;
             $moduleMethodTotals = $cachedDiscovery->moduleMethodTotals;
             $moduleAcceptedMethodTotals = $cachedDiscovery->moduleAcceptedMethodTotals;
+            $supplementalCandidates = $cachedDiscovery->supplementalCandidates;
             $this->renderCacheUsage($output, $metadataDir);
         } else {
             if ($request->reuseDiscoveryCache) {
@@ -68,6 +72,7 @@ class BuildPipeline
                 $output,
                 $request->extensionName,
                 $request->importedAbi,
+                resolveViability: false,
             );
 
             if ($discovery->errors !== []) {
@@ -109,6 +114,8 @@ class BuildPipeline
             $candidateCount = $discovery->candidateCount;
             $moduleMethodTotals = $discovery->moduleMethodTotals;
             $moduleAcceptedMethodTotals = $discovery->moduleAcceptedMethodTotals;
+            $preparedClassDataByClass = $discovery->preparedClassData;
+            $supplementalCandidates = $discovery->supplementalCandidates;
 
             $this->discoveryService->writeCache(
                 $metadataDir,
@@ -126,111 +133,121 @@ class BuildPipeline
             count($skippedClasses),
         ));
 
-        $classStructureStartedAt = microtime(true);
-        $classStructures = $this->discoveryService->prepareClassStructures(
-            $acceptedCandidates,
-            $request->outputDir,
-            $request->installation->includeRoots,
-            $metadataDir,
-            $request->jobs,
-            $output,
-            $request->extensionName,
-        );
+        if ($cachedDiscovery === null && $preparedClassDataByClass !== []) {
+            $timings['class_structure_cache'] = 0.0;
+            $this->renderPhaseTiming($output, 'Class structure cache', $timings['class_structure_cache']);
+            $timings['supplemental_discovery'] = 0.0;
+            $this->renderPhaseTiming($output, 'Supplemental discovery', $timings['supplemental_discovery']);
+        } else {
+            $classStructureStartedAt = microtime(true);
+            $classStructures = $this->discoveryService->prepareClassStructures(
+                $acceptedCandidates,
+                $request->outputDir,
+                $request->installation->includeRoots,
+                $metadataDir,
+                $request->jobs,
+                $output,
+                $request->extensionName,
+            );
 
-        if ($classStructures['errors'] !== []) {
-            foreach ($classStructures['errors'] as $error) {
-                $message = is_string($error['reason_message'] ?? null) ? $error['reason_message'] : 'Class structure cache failed.';
-                $output->writeln(sprintf('<error>%s</error>', $message));
+            if ($classStructures['errors'] !== []) {
+                foreach ($classStructures['errors'] as $error) {
+                    $message = is_string($error['reason_message'] ?? null) ? $error['reason_message'] : 'Class structure cache failed.';
+                    $output->writeln(sprintf('<error>%s</error>', $message));
+                }
+
+                return new BuildAnalysisResult(
+                    metadataDir: $metadataDir,
+                    candidateCount: $candidateCount,
+                    acceptedCandidates: [],
+                    skippedClasses: [...$skippedClasses, ...$classStructures['skipped_classes']],
+                    skippedMethods: [],
+                    errors: $classStructures['errors'],
+                    generatedClasses: [],
+                    generatedPhpClasses: [],
+                    generatedClassParents: [],
+                    generatedClassDependencies: [],
+                    generatedClassHeaders: [],
+                    generatedClassModules: [],
+                    classNamespaces: [],
+                    enumHolders: [],
+                    moduleMethodTotals: $moduleMethodTotals,
+                    moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
+                    moduleGeneratedMethodTotals: [],
+                    passes: 0,
+                    requiresSignalConnectionSupport: false,
+                    timings: $timings + ['class_structure_cache' => microtime(true) - $classStructureStartedAt, 'analysis_total' => microtime(true) - $analysisStartedAt],
+                );
+            }
+            $timings['class_structure_cache'] = microtime(true) - $classStructureStartedAt;
+            $this->renderPhaseTiming($output, 'Class structure cache', $timings['class_structure_cache']);
+
+            $supplementalStartedAt = microtime(true);
+            $acceptedCandidates = $classStructures['accepted_candidates'];
+            $skippedClasses = [...$skippedClasses, ...$classStructures['skipped_classes']];
+            $supplemental = $this->discoveryService->augmentWithSupplementalCandidates(
+                $acceptedCandidates,
+                $classStructures['prepared_class_data'],
+                $request->modules,
+                $request->installation->includeRoots,
+                $request->outputDir,
+                $metadataDir,
+                $request->jobs,
+                $output,
+                $request->extensionName,
+                $request->importedAbi?->availableClasses ?? [],
+            );
+
+            if ($supplemental['errors'] !== []) {
+                foreach ($supplemental['errors'] as $error) {
+                    $message = is_string($error['reason_message'] ?? null) ? $error['reason_message'] : 'Supplemental class discovery failed.';
+                    $output->writeln(sprintf('<error>%s</error>', $message));
+                }
+
+                return new BuildAnalysisResult(
+                    metadataDir: $metadataDir,
+                    candidateCount: $candidateCount,
+                    acceptedCandidates: [],
+                    skippedClasses: [...$skippedClasses, ...$supplemental['skipped_classes']],
+                    skippedMethods: [],
+                    errors: $supplemental['errors'],
+                    generatedClasses: [],
+                    generatedPhpClasses: [],
+                    generatedClassParents: [],
+                    generatedClassDependencies: [],
+                    generatedClassHeaders: [],
+                    generatedClassModules: [],
+                    classNamespaces: [],
+                    enumHolders: [],
+                    moduleMethodTotals: $moduleMethodTotals,
+                    moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
+                    moduleGeneratedMethodTotals: [],
+                    passes: 0,
+                    requiresSignalConnectionSupport: false,
+                    timings: $timings + ['supplemental_discovery' => microtime(true) - $supplementalStartedAt, 'analysis_total' => microtime(true) - $analysisStartedAt],
+                );
             }
 
-            return new BuildAnalysisResult(
-                metadataDir: $metadataDir,
-                candidateCount: $candidateCount,
-                acceptedCandidates: [],
-                skippedClasses: [...$skippedClasses, ...$classStructures['skipped_classes']],
-                skippedMethods: [],
-                errors: $classStructures['errors'],
-                generatedClasses: [],
-                generatedPhpClasses: [],
-                generatedClassParents: [],
-                generatedClassDependencies: [],
-                generatedClassHeaders: [],
-                generatedClassModules: [],
-                classNamespaces: [],
-                enumHolders: [],
-                moduleMethodTotals: $moduleMethodTotals,
-                moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
-                moduleGeneratedMethodTotals: [],
-                passes: 0,
-                requiresSignalConnectionSupport: false,
-                timings: $timings + ['class_structure_cache' => microtime(true) - $classStructureStartedAt, 'analysis_total' => microtime(true) - $analysisStartedAt],
-            );
-        }
-        $timings['class_structure_cache'] = microtime(true) - $classStructureStartedAt;
-        $this->renderPhaseTiming($output, 'Class structure cache', $timings['class_structure_cache']);
-
-        $supplementalStartedAt = microtime(true);
-        $acceptedCandidates = $classStructures['accepted_candidates'];
-        $skippedClasses = [...$skippedClasses, ...$classStructures['skipped_classes']];
-        $supplemental = $this->discoveryService->augmentWithSupplementalCandidates(
-            $acceptedCandidates,
-            $classStructures['prepared_class_data'],
-            $request->modules,
-            $request->installation->includeRoots,
-            $request->outputDir,
-            $metadataDir,
-            $request->jobs,
-            $output,
-            $request->extensionName,
-            $request->importedAbi?->availableClasses ?? [],
-        );
-
-        if ($supplemental['errors'] !== []) {
-            foreach ($supplemental['errors'] as $error) {
-                $message = is_string($error['reason_message'] ?? null) ? $error['reason_message'] : 'Supplemental class discovery failed.';
-                $output->writeln(sprintf('<error>%s</error>', $message));
+            $acceptedCandidates = $supplemental['accepted_candidates'];
+            $skippedClasses = [...$skippedClasses, ...$supplemental['skipped_classes']];
+            $preparedClassDataByClass = $supplemental['prepared_class_data'];
+            if ($supplemental['supplemental_candidates'] !== []) {
+                $supplementalCandidates = $supplemental['supplemental_candidates'];
             }
-
-            return new BuildAnalysisResult(
-                metadataDir: $metadataDir,
-                candidateCount: $candidateCount,
-                acceptedCandidates: [],
-                skippedClasses: [...$skippedClasses, ...$supplemental['skipped_classes']],
-                skippedMethods: [],
-                errors: $supplemental['errors'],
-                generatedClasses: [],
-                generatedPhpClasses: [],
-                generatedClassParents: [],
-                generatedClassDependencies: [],
-                generatedClassHeaders: [],
-                generatedClassModules: [],
-                classNamespaces: [],
-                enumHolders: [],
-                moduleMethodTotals: $moduleMethodTotals,
-                moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
-                moduleGeneratedMethodTotals: [],
-                passes: 0,
-                requiresSignalConnectionSupport: false,
-                timings: $timings + ['supplemental_discovery' => microtime(true) - $supplementalStartedAt, 'analysis_total' => microtime(true) - $analysisStartedAt],
-            );
+            $timings['supplemental_discovery'] = microtime(true) - $supplementalStartedAt;
+            $this->renderPhaseTiming($output, 'Supplemental discovery', $timings['supplemental_discovery']);
         }
-
-        $acceptedCandidates = $supplemental['accepted_candidates'];
-        $skippedClasses = [...$skippedClasses, ...$supplemental['skipped_classes']];
-        $classStructures['prepared_class_data'] = $supplemental['prepared_class_data'];
         file_put_contents(
             $metadataDir . '/supplemental_candidates.json',
-            json_encode($supplemental['supplemental_candidates'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]',
+            json_encode($supplementalCandidates, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]',
         );
-        $timings['supplemental_discovery'] = microtime(true) - $supplementalStartedAt;
-        $this->renderPhaseTiming($output, 'Supplemental discovery', $timings['supplemental_discovery']);
 
         $enumStartedAt = microtime(true);
         $classNamespaces = $this->classNamespaces($acceptedCandidates, $request->importedAbi);
         $enumCandidateHeaders = (new EnumCandidateHeaderCollector())->collect(
             $request->installation->includeRoots,
             $acceptedCandidates,
-            $classStructures['prepared_class_data'],
+            $preparedClassDataByClass,
         );
         file_put_contents(
             $metadataDir . '/enum_candidate_headers.json',
@@ -283,7 +300,7 @@ class BuildPipeline
                 $request->installation->includeRoots,
                 $acceptedCandidates,
                 $skippedClasses,
-                $classStructures['prepared_class_data'],
+                $preparedClassDataByClass,
                 $classNamespaces,
                 $enumCandidateHeaders,
                 static function (int $completed, int $total) use ($enumProgressBar): void {
@@ -320,7 +337,7 @@ class BuildPipeline
             $acceptedCandidates,
             $skippedClasses,
             $allowedClasses,
-            $classStructures['prepared_class_data'],
+            $preparedClassDataByClass,
             $output,
             $request->importedAbi,
             $enumRegistry,
@@ -354,7 +371,7 @@ class BuildPipeline
                 candidateCount: $candidateCount,
                 moduleMethodTotals: $moduleMethodTotals,
                 moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
-                supplementalCandidates: $supplemental['supplemental_candidates'],
+                supplementalCandidates: $supplementalCandidates,
             ),
         );
 
@@ -760,135 +777,173 @@ class BuildPipeline
         $rawGeneratedClassDependencies = [];
         /** @var array<string, int> $moduleGeneratedMethodTotals */
         $moduleGeneratedMethodTotals = [];
-        $passes = 0;
         $candidateModules = [];
         foreach ($acceptedCandidates as $candidate) {
             $candidateModules[$candidate->identityKey()] = $candidate->module;
         }
 
-        do {
-            $passes++;
-            if ($passes > 1) {
-                $output->writeln(sprintf(
-                    '<comment>Re-evaluating generated dependency set (pass %d, %d class(es)).</comment>',
-                    $passes,
-                    count($currentCandidates),
-                ));
-            }
-
-            $progressBar = $this->createBuildProgressBar(
+        $resolved = $this->fixedPointEngine->run(
+            [
+                'current_candidates' => $currentCandidates,
+                'current_allowed_classes' => $currentAllowedClasses,
+            ],
+            function (int $passes, array $state) use (
                 $output,
-                count($currentCandidates),
-                'qt_generate_analysis',
-                'Generate analysis pass ' . $passes,
-            );
-            $progressBar?->start();
+                $preparedClassDataByClass,
+                $importedAvailableClasses,
+                $allPreparedClassData,
+                $importedAbi,
+                $enumRegistry,
+                $candidateModules,
+                $generationService,
+                &$errorsByClass,
+                &$skippedByClass,
+                &$skippedMethodsByClass,
+                &$generatedClasses,
+                &$generatedPhpClasses,
+                &$rawGeneratedClassParents,
+                &$rawGeneratedClassDependencies,
+                &$generatedClassHeaders,
+                &$generatedClassModules,
+            ): array {
+                $currentCandidates = $state['current_candidates'];
+                $currentAllowedClasses = $state['current_allowed_classes'];
 
-            $generatedClasses = [];
-            $generatedPhpClasses = [];
-
-            foreach ($currentCandidates as $candidate) {
-                $candidateKey = $candidate->identityKey();
-                $classData = $preparedClassDataByClass[$candidateKey] ?? null;
-                if (!is_array($classData)) {
-                    $errorsByClass[$candidateKey] = [
-                        'module' => $candidate->module,
-                        'class' => $candidate->className,
-                        'header' => $candidate->parseHeader,
-                        'reason_code' => 'missing_class_data',
-                        'reason_message' => 'Prepared class data is missing from the class cache.',
-                    ];
-                    $progressBar?->advance();
-                    continue;
-                }
-
-                $availableClasses = array_values(array_unique([
-                    ...$currentAllowedClasses,
-                    ...$importedAvailableClasses,
-                ]));
-                sort($availableClasses);
-
-                $result = $generationService->generateFromPreparedData(
-                    $classData,
-                    $candidate->parseHeader,
-                    $availableClasses,
-                    $allPreparedClassData,
-                    $importedAbi !== null,
-                    $enumRegistry,
-                );
-                unset($errorsByClass[$candidateKey]);
-
-                if ($result->status === 'ok' && $result->phpClass !== null) {
-                    $generatedClasses[] = $candidateKey;
-                    $generatedPhpClasses[$candidateKey] = $this->withResolvedNativeIncludes(
-                        $result->phpClass,
-                        $candidate,
-                    );
-                    $payload = $result->toArray();
-                    $rawGeneratedClassParents[$candidateKey] = is_string($payload['parent_class'] ?? null)
-                        ? $payload['parent_class']
-                        : null;
-                    $rawGeneratedClassDependencies[$candidateKey] = array_values(array_filter(
-                        array_map(
-                            static fn(mixed $value): string => is_string($value) ? $value : '',
-                            $payload['class_dependencies'] ?? [],
-                        ),
-                        static fn(string $value): bool => $value !== '',
+                if ($passes > 1) {
+                    $output->writeln(sprintf(
+                        '<comment>Re-evaluating generated dependency set (pass %d, %d class(es)).</comment>',
+                        $passes,
+                        count($currentCandidates),
                     ));
-                    $generatedClassHeaders[$candidateKey] = $candidate->parseHeader;
-                    $generatedClassModules[$candidateKey] = $candidate->module;
-                    unset($skippedByClass[$candidateKey]);
-                } elseif ($result->status === 'skipped') {
-                    $skippedByClass[$candidateKey] = [
-                        'module' => $candidateModules[$candidateKey] ?? null,
-                        'class' => $result->className,
-                        'header' => $result->headerPath,
-                        'reason_code' => $result->reasonCode,
-                        'reason_message' => $result->reasonMessage,
-                    ];
-                } else {
-                    $errorsByClass[$candidateKey] = [
-                        'module' => $candidate->module,
-                        'class' => $candidate->className,
-                        'header' => $candidate->parseHeader,
-                        'reason_code' => 'generation_failed',
-                        'reason_message' => 'Class generation analysis failed.',
-                    ];
                 }
 
-                if ($result->status === 'ok') {
-                    $skippedMethodsByClass[$candidateKey] = [];
-                    foreach ($result->skippedMethods as $skippedMethod) {
-                        $skippedMethodsByClass[$candidateKey][] = [
+                $progressBar = $this->createBuildProgressBar(
+                    $output,
+                    count($currentCandidates),
+                    'qt_generate_analysis',
+                    'Generate analysis pass ' . $passes,
+                );
+                $progressBar?->start();
+
+                $generatedClasses = [];
+                $generatedPhpClasses = [];
+
+                foreach ($currentCandidates as $candidate) {
+                    $candidateKey = $candidate->identityKey();
+                    $classData = $preparedClassDataByClass[$candidateKey] ?? null;
+                    if (!is_array($classData)) {
+                        $errorsByClass[$candidateKey] = [
+                            'module' => $candidate->module,
+                            'class' => $candidate->className,
+                            'header' => $candidate->parseHeader,
+                            'reason_code' => 'missing_class_data',
+                            'reason_message' => 'Prepared class data is missing from the class cache.',
+                        ];
+                        $progressBar?->advance();
+                        continue;
+                    }
+
+                    $availableClasses = array_values(array_unique([
+                        ...$currentAllowedClasses,
+                        ...$importedAvailableClasses,
+                    ]));
+                    sort($availableClasses);
+
+                    $result = $generationService->generateFromPreparedData(
+                        $classData,
+                        $candidate->parseHeader,
+                        $availableClasses,
+                        $allPreparedClassData,
+                        $importedAbi !== null,
+                        $enumRegistry,
+                    );
+                    unset($errorsByClass[$candidateKey]);
+
+                    if ($result->status === 'ok' && $result->phpClass !== null) {
+                        $generatedClasses[] = $candidateKey;
+                        $generatedPhpClasses[$candidateKey] = $this->withResolvedNativeIncludes(
+                            $result->phpClass,
+                            $candidate,
+                        );
+                        $payload = $result->toArray();
+                        $rawGeneratedClassParents[$candidateKey] = is_string($payload['parent_class'] ?? null)
+                            ? $payload['parent_class']
+                            : null;
+                        $rawGeneratedClassDependencies[$candidateKey] = array_values(array_filter(
+                            array_map(
+                                static fn(mixed $value): string => is_string($value) ? $value : '',
+                                $payload['class_dependencies'] ?? [],
+                            ),
+                            static fn(string $value): bool => $value !== '',
+                        ));
+                        $generatedClassHeaders[$candidateKey] = $candidate->parseHeader;
+                        $generatedClassModules[$candidateKey] = $candidate->module;
+                        unset($skippedByClass[$candidateKey]);
+                    } elseif ($result->status === 'skipped') {
+                        $skippedByClass[$candidateKey] = [
                             'module' => $candidateModules[$candidateKey] ?? null,
                             'class' => $result->className,
-                        ] + $skippedMethod;
+                            'header' => $result->headerPath,
+                            'reason_code' => $result->reasonCode,
+                            'reason_message' => $result->reasonMessage,
+                        ];
+                    } else {
+                        $errorsByClass[$candidateKey] = [
+                            'module' => $candidate->module,
+                            'class' => $candidate->className,
+                            'header' => $candidate->parseHeader,
+                            'reason_code' => 'generation_failed',
+                            'reason_message' => 'Class generation analysis failed.',
+                        ];
                     }
-                } else {
-                    unset($skippedMethodsByClass[$candidateKey]);
+
+                    if ($result->status === 'ok') {
+                        $skippedMethodsByClass[$candidateKey] = [];
+                        foreach ($result->skippedMethods as $skippedMethod) {
+                            $skippedMethodsByClass[$candidateKey][] = [
+                                'module' => $candidateModules[$candidateKey] ?? null,
+                                'class' => $result->className,
+                            ] + $skippedMethod;
+                        }
+                    } else {
+                        unset($skippedMethodsByClass[$candidateKey]);
+                    }
+
+                    $progressBar?->advance();
                 }
 
-                $progressBar?->advance();
-            }
-
-            if ($progressBar !== null) {
-                $progressBar->finish();
-                $output->write(PHP_EOL);
-            }
-
-            sort($generatedClasses);
-            $stable = $generatedClasses === $currentAllowedClasses;
-
-            $nextCandidates = [];
-            foreach ($currentCandidates as $candidate) {
-                if (in_array($candidate->identityKey(), $generatedClasses, true)) {
-                    $nextCandidates[] = $candidate;
+                if ($progressBar !== null) {
+                    $progressBar->finish();
+                    $output->write(PHP_EOL);
                 }
-            }
 
-            $currentCandidates = $nextCandidates;
-            $currentAllowedClasses = $generatedClasses;
-        } while (!$stable && $errorsByClass === [] && $currentCandidates !== []);
+                sort($generatedClasses);
+                $stable = $generatedClasses === $currentAllowedClasses;
+
+                $nextCandidates = [];
+                foreach ($currentCandidates as $candidate) {
+                    if (in_array($candidate->identityKey(), $generatedClasses, true)) {
+                        $nextCandidates[] = $candidate;
+                    }
+                }
+
+                return [
+                    'state' => [
+                        'current_candidates' => $nextCandidates,
+                        'current_allowed_classes' => $generatedClasses,
+                    ],
+                    'changed' => !$stable,
+                    'has_errors' => $errorsByClass !== [],
+                    'is_empty' => $nextCandidates === [],
+                ];
+            },
+        );
+
+        /** @var array{current_candidates: list<HeaderCandidate>, current_allowed_classes: list<string>} $resolvedState */
+        $resolvedState = $resolved['state'];
+        $currentCandidates = $resolvedState['current_candidates'];
+        $currentAllowedClasses = $resolvedState['current_allowed_classes'];
+        $passes = $resolved['passes'];
 
         $syntheticClasses = $this->synthesizeListWrapperClasses(
             $generatedPhpClasses,
@@ -1260,7 +1315,10 @@ class BuildPipeline
                 continue;
             }
 
-            $sourceBases = $this->classBaseDeclarationsFromSource($headerPath, $className);
+            $sourceBases = $this->classBaseDeclarationsFromPreparedData($preparedClassDataByClass[$className] ?? null);
+            if ($sourceBases === []) {
+                $sourceBases = $this->classBaseDeclarationsFromSource($headerPath, $className);
+            }
             $specialization = null;
             foreach ($sourceBases as $baseClass) {
                 $specialization = $resolver->specializationFor($baseClass);
@@ -1291,6 +1349,38 @@ class BuildPipeline
             'generated_class_modules' => $syntheticModules,
             'class_namespaces' => $syntheticNamespaces,
         ];
+    }
+
+    /**
+     * @param array<string, mixed>|null $classData
+     * @return list<string>
+     */
+    private function classBaseDeclarationsFromPreparedData(?array $classData): array
+    {
+        if (!is_array($classData)) {
+            return [];
+        }
+
+        $baseSpecifiers = is_array($classData['base_specifiers'] ?? null) ? $classData['base_specifiers'] : [];
+        $bases = [];
+        foreach ($baseSpecifiers as $specifier) {
+            if (!is_array($specifier)) {
+                continue;
+            }
+
+            $type = is_string($specifier['type'] ?? null) ? trim($specifier['type']) : '';
+            if ($type !== '') {
+                $bases[] = $type;
+            }
+        }
+
+        if ($bases === []) {
+            return [];
+        }
+
+        $bases = array_values(array_unique($bases));
+
+        return $bases;
     }
 
     /**

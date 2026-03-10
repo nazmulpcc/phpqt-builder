@@ -12,6 +12,7 @@ use CParser\FieldCursor;
 use CParser\MethodCursor;
 use CParser\NamespaceCursor;
 use CParser\ParameterCursor;
+use CParser\TypeAliasCursor;
 use CParser\TranslationUnit;
 use CParser\TranslationUnitFlags;
 
@@ -25,11 +26,22 @@ class QtClassInspector
 {
     private TranslationUnit $tu;
     private readonly bool $supportsAnnotations;
+    private readonly bool $supportsBaseSpecifiers;
+    private readonly bool $supportsAliases;
+    private readonly bool $supportsConstructorSemantics;
 
     public function __construct(
         private readonly ClangArgumentBuilder $argBuilder,
     ) {
         $this->supportsAnnotations = method_exists(Cursor::class, 'getAnnotations');
+        $this->supportsBaseSpecifiers = method_exists(ClassCursor::class, 'getBaseSpecifiers');
+        $this->supportsAliases = method_exists(TranslationUnit::class, 'aliases');
+        $this->supportsConstructorSemantics = method_exists(MethodCursor::class, 'isDeleted')
+            && method_exists(MethodCursor::class, 'isDefaulted')
+            && method_exists(MethodCursor::class, 'isExplicit')
+            && method_exists(MethodCursor::class, 'isCopyConstructor')
+            && method_exists(MethodCursor::class, 'isMoveConstructor')
+            && method_exists(MethodCursor::class, 'isDefaultConstructor');
     }
 
     /**
@@ -86,7 +98,18 @@ class QtClassInspector
      * Convenience method that combines {@see parse()}, {@see findClass()},
      * and {@see extractClassData()} in one call.
      *
-     * @return array{name: string, is_abstract: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, enum_constants: list<array<string, mixed>>}|null
+     * @return array{
+     *   name: string,
+     *   is_abstract: bool,
+     *   is_struct: bool,
+     *   bases: list<string>,
+     *   base_specifiers?: list<array{type: string, access: string, is_virtual: bool}>,
+     *   properties: list<array<string, mixed>>,
+     *   methods: list<array<string, mixed>>,
+     *   enum_constants: list<array<string, mixed>>,
+     *   enum_names?: list<string>,
+     *   flag_aliases?: array<string, string>
+     * }|null
      */
     public function inspect(string $headerPath, string $className): ?array
     {
@@ -146,7 +169,19 @@ class QtClassInspector
      * Some Qt classes are exposed by ext-cparser as a forward-declaration ClassCursor plus
      * member nodes in the translation unit. In that case recover members by scanning the TU.
      *
-     * @return array{name: string, qualified_name: string, is_abstract: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, enum_constants: list<array<string, mixed>>}
+     * @return array{
+     *   name: string,
+     *   qualified_name: string,
+     *   is_abstract: bool,
+     *   is_struct: bool,
+     *   bases: list<string>,
+     *   base_specifiers?: list<array{type: string, access: string, is_virtual: bool}>,
+     *   properties: list<array<string, mixed>>,
+     *   methods: list<array<string, mixed>>,
+     *   enum_constants: list<array<string, mixed>>,
+     *   enum_names?: list<string>,
+     *   flag_aliases?: array<string, string>
+     * }
      */
     private function extractClassDataFromTranslationUnit(ClassCursor $classCursor): array
     {
@@ -220,9 +255,12 @@ class QtClassInspector
                 static fn(ClassCursor $base): string => $base->getSpelling(),
                 iterator_to_array($classCursor->getBases(), false),
             )),
+            'base_specifiers' => $this->extractBaseSpecifiers($classCursor),
             'properties' => $properties,
             'methods' => $methods,
             'enum_constants' => $this->extractEnumConstants($classCursor),
+            'enum_names' => $this->extractEnumNames($classCursor),
+            'flag_aliases' => $this->extractClassFlagAliases($classCursor),
         ];
     }
 
@@ -322,7 +360,19 @@ class QtClassInspector
     /**
      * Extract structured metadata from a ClassCursor.
      *
-     * @return array{name: string, qualified_name: string, is_abstract: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, enum_constants: list<array<string, mixed>>}
+     * @return array{
+     *   name: string,
+     *   qualified_name: string,
+     *   is_abstract: bool,
+     *   is_struct: bool,
+     *   bases: list<string>,
+     *   base_specifiers?: list<array{type: string, access: string, is_virtual: bool}>,
+     *   properties: list<array<string, mixed>>,
+     *   methods: list<array<string, mixed>>,
+     *   enum_constants: list<array<string, mixed>>,
+     *   enum_names?: list<string>,
+     *   flag_aliases?: array<string, string>
+     * }
      */
     public function extractClassData(ClassCursor $class): array
     {
@@ -354,10 +404,56 @@ class QtClassInspector
             'is_abstract' => $class->isAbstract(),
             'is_struct' => $class->isStruct(),
             'bases' => $bases,
+            'base_specifiers' => $this->extractBaseSpecifiers($class),
             'properties' => $properties,
             'methods' => $methods,
             'enum_constants' => $this->extractEnumConstants($class),
+            'enum_names' => $this->extractEnumNames($class),
+            'flag_aliases' => $this->extractClassFlagAliases($class),
         ];
+    }
+
+    /**
+     * @return list<array{type: string, access: string, is_virtual: bool}>
+     */
+    private function extractBaseSpecifiers(ClassCursor $class): array
+    {
+        $specifiers = [];
+
+        if (!$this->supportsBaseSpecifiers) {
+            foreach ($class->getBases() as $base) {
+                $type = trim($base->getSpelling());
+                if ($type === '') {
+                    continue;
+                }
+
+                $specifiers[] = [
+                    'type' => $type,
+                    'access' => 'unknown',
+                    'is_virtual' => false,
+                ];
+            }
+
+            return $specifiers;
+        }
+
+        foreach ($class->getBaseSpecifiers() as $base) {
+            $type = trim((string) ($base->getType()?->toString() ?? ''));
+            if ($type === '') {
+                $type = trim((string) ($base->getReferenced()?->getSpelling() ?? ''));
+            }
+            if ($type === '') {
+                continue;
+            }
+
+            $specifiers[] = [
+                'type' => $type,
+                'access' => self::accessLabel($base->getAccessSpecifier()),
+                'is_virtual' => $base->isVirtual(),
+            ];
+        }
+
+        return $specifiers;
     }
 
     /**
@@ -389,6 +485,81 @@ class QtClassInspector
         }
 
         return $constants;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function extractEnumNames(ClassCursor $class): array
+    {
+        $names = [];
+
+        foreach ($class->getEnums() as $enum) {
+            $name = trim($enum->getSpelling());
+            if ($name === '') {
+                continue;
+            }
+
+            $names[] = $name;
+        }
+
+        $names = array_values(array_unique($names));
+        sort($names);
+
+        return $names;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function extractClassFlagAliases(ClassCursor $class): array
+    {
+        if (!$this->supportsAliases) {
+            return [];
+        }
+
+        /** @var array<string, string> $aliases */
+        $aliases = [];
+        foreach ($this->tu->aliases() as $cursor) {
+            if (!$cursor instanceof TypeAliasCursor || !$this->belongsToClass($cursor, $class)) {
+                continue;
+            }
+
+            $aliasName = trim($cursor->getSpelling());
+            if ($aliasName === '' || preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $aliasName) !== 1) {
+                continue;
+            }
+
+            $sourceEnum = $this->extractQFlagsInnerType((string) $cursor->getUnderlyingType()->toString());
+            if ($sourceEnum === null || $sourceEnum === '') {
+                continue;
+            }
+
+            $sourceEnum = trim($sourceEnum);
+            if (str_contains($sourceEnum, '::')) {
+                $parts = explode('::', $sourceEnum);
+                $sourceEnum = trim((string) end($parts));
+            }
+
+            if ($sourceEnum === '' || preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $sourceEnum) !== 1) {
+                continue;
+            }
+
+            $aliases[$aliasName] = $sourceEnum;
+        }
+
+        ksort($aliases);
+
+        return $aliases;
+    }
+
+    private function extractQFlagsInnerType(string $type): ?string
+    {
+        if (preg_match('/^QFlags\s*<\s*(.+)\s*>$/', trim($type), $matches) !== 1) {
+            return null;
+        }
+
+        return is_string($matches[1] ?? null) ? trim($matches[1]) : null;
     }
 
     /**
@@ -477,7 +648,27 @@ class QtClassInspector
     }
 
     /**
-     * @return array{name: string, declaring_class: string, return_type: string, access: string, parameters: list<array<string, mixed>>, is_static: bool, is_const: bool, is_virtual: bool, is_pure_virtual: bool, is_override: bool, is_final: bool, is_signal: bool, is_slot: bool}
+     * @return array{
+     *   name: string,
+     *   declaring_class: string,
+     *   return_type: string,
+     *   access: string,
+     *   parameters: list<array<string, mixed>>,
+     *   is_static: bool,
+     *   is_const: bool,
+     *   is_virtual: bool,
+     *   is_pure_virtual: bool,
+     *   is_override: bool,
+     *   is_final: bool,
+     *   is_signal: bool,
+     *   is_slot: bool,
+     *   is_deleted?: bool,
+     *   is_defaulted?: bool,
+     *   is_explicit?: bool,
+     *   is_copy_constructor?: bool,
+     *   is_move_constructor?: bool,
+     *   is_default_constructor?: bool
+     * }
      */
     private function extractConstructor(Cursor $constructor, ClassCursor $class): array
     {
@@ -497,6 +688,21 @@ class QtClassInspector
             ? self::accessLabel($constructor->getAccessSpecifier())
             : 'unknown';
 
+        $isDeleted = false;
+        $isDefaulted = false;
+        $isExplicit = false;
+        $isCopyConstructor = false;
+        $isMoveConstructor = false;
+        $isDefaultConstructor = false;
+        if ($constructor instanceof MethodCursor && $this->supportsConstructorSemantics) {
+            $isDeleted = $constructor->isDeleted();
+            $isDefaulted = $constructor->isDefaulted();
+            $isExplicit = $constructor->isExplicit();
+            $isCopyConstructor = $constructor->isCopyConstructor();
+            $isMoveConstructor = $constructor->isMoveConstructor();
+            $isDefaultConstructor = $constructor->isDefaultConstructor();
+        }
+
         // Constructor name in the IR is the class name; ClassDefinitionBuilder renames it to __construct.
         return [
             'name' => $constructor->getSpelling(),
@@ -512,6 +718,12 @@ class QtClassInspector
             'is_final' => false,
             'is_signal' => false,
             'is_slot' => false,
+            'is_deleted' => $isDeleted,
+            'is_defaulted' => $isDefaulted,
+            'is_explicit' => $isExplicit,
+            'is_copy_constructor' => $isCopyConstructor,
+            'is_move_constructor' => $isMoveConstructor,
+            'is_default_constructor' => $isDefaultConstructor,
         ];
     }
 

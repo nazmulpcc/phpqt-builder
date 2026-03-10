@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace QtBuilder\Build;
 
 use CParser\ClassCursor;
+use CParser\Cursor;
 use CParser\EnumCursor;
 use CParser\NamespaceCursor;
+use CParser\TypeAliasCursor;
 use CParser\TranslationUnit;
 use CParser\TranslationUnitFlags;
 use QtBuilder\Parsing\ClangArgumentBuilder;
@@ -336,7 +338,14 @@ class EnumHolderExtractor
             );
         }
 
-        foreach ($this->discoverNamespaceFlagAliasesFromFiles(array_keys($aliasHeaderFiles)) as $aliasDefinition) {
+        $aliasDefinitions = $this->namespaceFlagAliasesFromTranslationUnit($tu, $knownClassNames, $headerPath);
+        foreach (array_keys($aliasHeaderFiles) as $aliasHeaderPath) {
+            foreach ($this->namespaceFlagAliasesFromSourceFile($aliasHeaderPath, $knownClassNames) as $aliasDefinition) {
+                $aliasDefinitions[] = $aliasDefinition;
+            }
+        }
+
+        foreach ($aliasDefinitions as $aliasDefinition) {
             $ownerCppPrefix = $aliasDefinition['owner'];
             $module = $this->moduleForHeaderPath($aliasDefinition['header'], $fallbackModule);
             $ownerPhpNamespace = $this->ownerPhpNamespace($module, $ownerCppPrefix);
@@ -406,6 +415,125 @@ class EnumHolderExtractor
         }
 
         return null;
+    }
+
+    /**
+     * @param array<string, bool> $knownClassNames
+     * @return list<array{header: string, owner: string, alias: string, source: string}>
+     */
+    private function namespaceFlagAliasesFromTranslationUnit(
+        TranslationUnit $tu,
+        array $knownClassNames,
+        string $fallbackHeaderPath,
+    ): array {
+        if (!method_exists(TranslationUnit::class, 'aliases')) {
+            return [];
+        }
+
+        $definitions = [];
+        foreach ($tu->aliases() as $cursor) {
+            if (!$cursor instanceof TypeAliasCursor) {
+                continue;
+            }
+
+            $owner = $this->namespaceOwnerForCursor($cursor);
+            if ($owner === null || !$this->isSupportedNamespaceOwner($owner, $knownClassNames)) {
+                continue;
+            }
+
+            $alias = trim($cursor->getSpelling());
+            if (!$this->isValidPhpHolderName($alias)) {
+                continue;
+            }
+
+            $source = $this->qFlagsAliasSourceType($cursor->getUnderlyingType()->toString());
+            if ($source === null || trim($source) === '') {
+                continue;
+            }
+
+            $header = is_string($cursor->getLocation()['file'] ?? null) ? (string) $cursor->getLocation()['file'] : '';
+            if ($header === '') {
+                $header = $fallbackHeaderPath;
+            }
+
+            $definitions[] = [
+                'header' => $header,
+                'owner' => $owner,
+                'alias' => $alias,
+                'source' => trim($source),
+            ];
+        }
+
+        return $definitions;
+    }
+
+    private function qFlagsAliasSourceType(string $underlyingType): ?string
+    {
+        if (preg_match('/^QFlags\s*<\s*(.+)\s*>$/', trim($underlyingType), $matches) !== 1) {
+            return null;
+        }
+
+        return is_string($matches[1] ?? null) ? trim($matches[1]) : null;
+    }
+
+    private function namespaceOwnerForCursor(Cursor $cursor): ?string
+    {
+        $names = [];
+        $current = $cursor->getParent();
+        while ($current !== null) {
+            if ($current instanceof ClassCursor) {
+                return null;
+            }
+
+            if ($current instanceof NamespaceCursor) {
+                $name = trim($current->getSpelling());
+                if ($name !== '') {
+                    array_unshift($names, $name);
+                }
+            }
+
+            $current = $current->getParent();
+        }
+
+        if ($names === []) {
+            return null;
+        }
+
+        return implode('::', $names);
+    }
+
+    /**
+     * @param array<string, bool> $knownClassNames
+     * @return list<array{header: string, owner: string, alias: string, source: string}>
+     */
+    private function namespaceFlagAliasesFromSourceFile(string $headerPath, array $knownClassNames): array
+    {
+        if (!is_file($headerPath)) {
+            return [];
+        }
+
+        $contents = (string) file_get_contents($headerPath);
+        $definitions = [];
+        foreach ($this->discoverNamespaceFlagAliases($contents) as $owner => $aliases) {
+            if (!$this->isSupportedNamespaceOwner($owner, $knownClassNames)) {
+                continue;
+            }
+
+            foreach ($aliases as $alias => $source) {
+                if (!$this->isValidPhpHolderName($alias) || trim($source) === '') {
+                    continue;
+                }
+
+                $definitions[] = [
+                    'header' => $headerPath,
+                    'owner' => $owner,
+                    'alias' => $alias,
+                    'source' => trim($source),
+                ];
+            }
+        }
+
+        return $definitions;
     }
 
     /**
@@ -483,38 +611,6 @@ class EnumHolderExtractor
         }
 
         return $aliases;
-    }
-
-    /**
-     * @param list<string> $headerPaths
-     * @return list<array{header: string, owner: string, alias: string, source: string}>
-     */
-    private function discoverNamespaceFlagAliasesFromFiles(array $headerPaths): array
-    {
-        $definitions = [];
-
-        foreach (array_values(array_unique($headerPaths)) as $candidatePath) {
-            if (!is_file($candidatePath)) {
-                continue;
-            }
-
-            foreach ($this->discoverNamespaceFlagAliases((string) file_get_contents($candidatePath)) as $owner => $aliases) {
-                foreach ($aliases as $alias => $source) {
-                    if (!$this->isValidPhpHolderName($alias) || trim($source) === '') {
-                        continue;
-                    }
-
-                    $definitions[] = [
-                        'header' => $candidatePath,
-                        'owner' => $owner,
-                        'alias' => $alias,
-                        'source' => trim($source),
-                    ];
-                }
-            }
-        }
-
-        return $definitions;
     }
 
     private function isValidPhpHolderName(string $name): bool

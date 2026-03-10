@@ -26,8 +26,8 @@ class ExtensionScaffolder
         $this->fileWriter = $fileWriter ?? new SmartFileWriter();
         $this->lastWriteStats = new FileWriteStats();
 
-        if (!is_dir($compiledPath)) {
-            mkdir($compiledPath, 0755, true);
+        if (!is_dir($compiledPath) && !mkdir($compiledPath, 0755, true) && !is_dir($compiledPath)) {
+            throw new \RuntimeException(sprintf('Could not create Blade compile directory: %s', $compiledPath));
         }
 
         $this->blade = new BladeOne($templatePath, $compiledPath, BladeOne::MODE_DEBUG);

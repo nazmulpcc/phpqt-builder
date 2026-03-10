@@ -14,7 +14,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class BuildDiscoveryService
 {
-    private const CLASS_CACHE_SCHEMA_VERSION = 5;
+    private const CLASS_CACHE_SCHEMA_VERSION = 7;
 
     public function __construct(
         private readonly GenerateWorkerPool $workerPool = new GenerateWorkerPool(__DIR__ . '/../..'),
@@ -22,6 +22,7 @@ class BuildDiscoveryService
         private readonly ClassExposurePolicy $classPolicy = new ClassExposurePolicy(),
         private readonly ClassGenerationService $generationService = new ClassGenerationService(),
         private readonly SupplementalClassCandidateResolver $supplementalResolver = new SupplementalClassCandidateResolver(),
+        private readonly FixedPointEngine $fixedPointEngine = new FixedPointEngine(),
     ) {}
 
     /**
@@ -36,6 +37,7 @@ class BuildDiscoveryService
         OutputInterface $output,
         string $extensionName = 'qt',
         ?ImportedModuleAbi $importedAbi = null,
+        bool $resolveViability = true,
     ): BuildDiscoveryResult {
         $this->ensureDirectory(dirname($metadataDir));
         $this->ensureDirectory($metadataDir);
@@ -61,6 +63,7 @@ class BuildDiscoveryService
                 moduleMethodTotals: [],
                 moduleAcceptedMethodTotals: [],
                 errors: $classStructures['errors'],
+                preparedClassData: $classStructures['prepared_class_data'],
             );
         }
 
@@ -87,6 +90,37 @@ class BuildDiscoveryService
                 moduleAcceptedMethodTotals: [],
                 errors: $supplemental['errors'],
                 supplementalCandidates: $supplemental['supplemental_candidates'],
+                preparedClassData: $supplemental['prepared_class_data'],
+            );
+        }
+
+        if (!$resolveViability) {
+            $acceptedCandidatesWithoutViability = $supplemental['accepted_candidates'];
+            $allowedClassesWithoutViability = array_values(array_unique(array_map(
+                static fn(HeaderCandidate $candidate): string => $candidate->identityKey(),
+                $acceptedCandidatesWithoutViability,
+            )));
+            sort($allowedClassesWithoutViability);
+
+            return new BuildDiscoveryResult(
+                acceptedCandidates: $acceptedCandidatesWithoutViability,
+                skippedClasses: [...$initialSkippedClasses, ...$classStructures['skipped_classes'], ...$supplemental['skipped_classes']],
+                allowedClasses: $allowedClassesWithoutViability,
+                candidateCount: $candidateCount,
+                moduleMethodTotals: $this->moduleMethodTotals(
+                    $modules,
+                    $acceptedCandidatesWithoutViability,
+                    $supplemental['prepared_class_data'],
+                ),
+                moduleAcceptedMethodTotals: $this->moduleMethodTotals(
+                    $modules,
+                    $acceptedCandidatesWithoutViability,
+                    $supplemental['prepared_class_data'],
+                ),
+                passes: 0,
+                errors: [],
+                supplementalCandidates: $supplemental['supplemental_candidates'],
+                preparedClassData: $supplemental['prepared_class_data'],
             );
         }
 
@@ -118,6 +152,7 @@ class BuildDiscoveryService
             passes: $viability['passes'],
             errors: $viability['errors'],
             supplementalCandidates: $supplemental['supplemental_candidates'],
+            preparedClassData: $supplemental['prepared_class_data'],
         );
     }
 
@@ -732,79 +767,98 @@ class BuildDiscoveryService
         $skippedByClass = [];
         /** @var array<string, array{module: string|null, class: string, header: string, reason_code: string|null, reason_message: string|null}> $errorsByClass */
         $errorsByClass = [];
-        $passes = 0;
-
-        do {
-            $passes++;
-            $allowedClasses = array_keys($viableCandidates);
-            $allowedClasses = array_values(array_unique([...$allowedClasses, ...$importedAvailableClasses]));
-            sort($allowedClasses);
-
-            if ($passes > 1) {
-                $output->writeln(sprintf(
-                    '<comment>Rechecking discovery dependencies (pass %d, %d class(es)).</comment>',
-                    $passes,
-                    count($viableCandidates),
-                ));
-            }
-
-            $progressBar = $this->createProgressBar(
+        $resolved = $this->fixedPointEngine->run(
+            ['viable_candidates' => $viableCandidates],
+            function (int $passes, array $state) use (
+                $importedAvailableClasses,
                 $output,
-                count($viableCandidates),
-                'qt_discovery',
-                'Discovery pass ' . $passes,
-            );
-            $progressBar?->start();
+                $preparedClassDataByClass,
+                $preferExternalDependencyReasons,
+                &$skippedByClass,
+                &$errorsByClass,
+            ): array {
+                $viableCandidates = $state['viable_candidates'];
+                $allowedClasses = array_keys($viableCandidates);
+                $allowedClasses = array_values(array_unique([...$allowedClasses, ...$importedAvailableClasses]));
+                sort($allowedClasses);
 
-            $nextViableCandidates = [];
-            foreach ($viableCandidates as $className => $candidate) {
-                $classData = $preparedClassDataByClass[$className] ?? null;
-                if (!is_array($classData)) {
-                    $errorsByClass[$className] = [
-                        'module' => $candidate->module,
-                        'class' => $className,
-                        'header' => $candidate->parseHeader,
-                        'reason_code' => 'missing_class_data',
-                        'reason_message' => 'Prepared class data is missing from the class cache.',
-                    ];
-                    $progressBar?->advance();
-                    continue;
+                if ($passes > 1) {
+                    $output->writeln(sprintf(
+                        '<comment>Rechecking discovery dependencies (pass %d, %d class(es)).</comment>',
+                        $passes,
+                        count($viableCandidates),
+                    ));
                 }
 
-                $result = $this->generationService->generateFromPreparedData(
-                    $classData,
-                    $candidate->parseHeader,
-                    $allowedClasses,
-                    $preparedClassDataByClass,
-                    $preferExternalDependencyReasons,
+                $progressBar = $this->createProgressBar(
+                    $output,
+                    count($viableCandidates),
+                    'qt_discovery',
+                    'Discovery pass ' . $passes,
                 );
+                $progressBar?->start();
 
-                if ($result->status === 'ok') {
-                    $nextViableCandidates[$className] = $candidate;
-                    unset($skippedByClass[$className], $errorsByClass[$className]);
+                $nextViableCandidates = [];
+                foreach ($viableCandidates as $className => $candidate) {
+                    $classData = $preparedClassDataByClass[$className] ?? null;
+                    if (!is_array($classData)) {
+                        $errorsByClass[$className] = [
+                            'module' => $candidate->module,
+                            'class' => $className,
+                            'header' => $candidate->parseHeader,
+                            'reason_code' => 'missing_class_data',
+                            'reason_message' => 'Prepared class data is missing from the class cache.',
+                        ];
+                        $progressBar?->advance();
+                        continue;
+                    }
+
+                    $result = $this->generationService->generateFromPreparedData(
+                        $classData,
+                        $candidate->parseHeader,
+                        $allowedClasses,
+                        $preparedClassDataByClass,
+                        $preferExternalDependencyReasons,
+                    );
+
+                    if ($result->status === 'ok') {
+                        $nextViableCandidates[$className] = $candidate;
+                        unset($skippedByClass[$className], $errorsByClass[$className]);
+                        $progressBar?->advance();
+                        continue;
+                    }
+
+                    $skippedByClass[$className] = [
+                        'module' => $candidate->module,
+                        'class' => $result->className,
+                        'header' => $result->headerPath,
+                        'reason_code' => $result->reasonCode,
+                        'reason_message' => $result->reasonMessage,
+                    ];
+                    unset($errorsByClass[$className]);
                     $progressBar?->advance();
-                    continue;
                 }
 
-                $skippedByClass[$className] = [
-                    'module' => $candidate->module,
-                    'class' => $result->className,
-                    'header' => $result->headerPath,
-                    'reason_code' => $result->reasonCode,
-                    'reason_message' => $result->reasonMessage,
+                if ($progressBar !== null) {
+                    $progressBar->finish();
+                    $output->write(PHP_EOL);
+                }
+
+                $changed = array_keys($nextViableCandidates) !== array_keys($viableCandidates);
+
+                return [
+                    'state' => ['viable_candidates' => $nextViableCandidates],
+                    'changed' => $changed,
+                    'has_errors' => $errorsByClass !== [],
+                    'is_empty' => $nextViableCandidates === [],
                 ];
-                unset($errorsByClass[$className]);
-                $progressBar?->advance();
-            }
+            },
+        );
 
-            if ($progressBar !== null) {
-                $progressBar->finish();
-                $output->write(PHP_EOL);
-            }
-
-            $changed = array_keys($nextViableCandidates) !== array_keys($viableCandidates);
-            $viableCandidates = $nextViableCandidates;
-        } while ($changed && $errorsByClass === [] && $viableCandidates !== []);
+        /** @var array{viable_candidates: array<string, HeaderCandidate>} $resolvedState */
+        $resolvedState = $resolved['state'];
+        $viableCandidates = $resolvedState['viable_candidates'];
+        $passes = $resolved['passes'];
 
         $allowedClasses = array_keys($viableCandidates);
         sort($allowedClasses);
