@@ -48,7 +48,10 @@ it('generates the extension tree from a fixture qt root', function (): void {
         ->and(is_file($metadataDir . '/enum_holders_cache.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/enum_candidate_headers.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/accepted_candidates.json'))->toBeTrue()
-        ->and(is_file($classCacheDir . '/QPoint.json'))->toBeTrue()
+        ->and(
+            is_file($classCacheDir . '/QPoint.json')
+            || is_file($classCacheDir . '/qpoint__qtcore__qpoint_h.json'),
+        )->toBeTrue()
         ->and(is_file($metadataDir . '/phpize.stdout.log'))->toBeTrue()
         ->and(is_file($metadataDir . '/gen_stub.stdout.log'))->toBeTrue()
         ->and(is_file($metadataDir . '/configure.stdout.log'))->toBeTrue()

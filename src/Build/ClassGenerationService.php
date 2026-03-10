@@ -638,20 +638,45 @@ class ClassGenerationService
             ];
         }
 
-        $lifecycle = $this->analyzeLifecycleCapabilities($headerPath, $className, (bool) ($classData['is_struct'] ?? false));
+        $runtimeLifecycle = $this->analyzeLifecycleCapabilitiesFromClassData($classData);
+        if ($runtimeLifecycle !== null && !$this->classDataHasDestructorMetadata($classData, $className)) {
+            $sourceLifecycle = $this->analyzeLifecycleCapabilities($headerPath, $className, (bool) ($classData['is_struct'] ?? false));
+            $runtimeLifecycle['has_public_destructor'] = $sourceLifecycle['has_public_destructor'];
+        }
+
+        $lifecycle = $runtimeLifecycle
+            ?? $this->analyzeLifecycleCapabilities($headerPath, $className, (bool) ($classData['is_struct'] ?? false));
         $classData['is_copy_constructible'] = $lifecycle['is_copy_constructible'];
         $classData['has_public_constructor'] = $lifecycle['has_public_constructor'];
         $classData['has_public_default_constructor'] = $lifecycle['has_public_default_constructor'];
         $classData['has_public_destructor'] = $lifecycle['has_public_destructor'];
-        $classData['flag_aliases'] = $this->discoverFlagAliases($headerPath, $className);
-        $classData['enum_names'] = $this->discoverEnumNames($headerPath, $className);
-        $classData['smart_pointer_aliases'] = $this->smartPointerAliasResolver->discover($headerPath);
-        $classData['methods'] = $this->annotateConstructorVariants(
-            is_array($classData['methods'] ?? null) ? $classData['methods'] : [],
-            $headerPath,
-            $className,
-            (bool) ($classData['is_struct'] ?? false),
+        $astFlagAliases = $this->normalizeFlagAliases(
+            is_array($classData['flag_aliases'] ?? null)
+                ? (array) $classData['flag_aliases']
+                : [],
         );
+        $classData['flag_aliases'] = $astFlagAliases !== []
+            ? $astFlagAliases
+            : $this->normalizeFlagAliases($this->discoverFlagAliases($headerPath, $className));
+
+        $astEnumNames = $this->normalizeEnumNames(
+            is_array($classData['enum_names'] ?? null)
+                ? (array) $classData['enum_names']
+                : [],
+        );
+        $classData['enum_names'] = $astEnumNames !== []
+            ? $astEnumNames
+            : $this->normalizeEnumNames($this->discoverEnumNames($headerPath, $className));
+        $classData['smart_pointer_aliases'] = $this->smartPointerAliasResolver->discover($headerPath);
+        $classData['methods'] = is_array($classData['methods'] ?? null) ? $classData['methods'] : [];
+        if (!$this->hasRuntimeConstructorSemantics($classData, $className)) {
+            $classData['methods'] = $this->annotateConstructorVariants(
+                $classData['methods'],
+                $headerPath,
+                $className,
+                (bool) ($classData['is_struct'] ?? false),
+            );
+        }
 
         return [
             'status' => 'ok',
@@ -1808,35 +1833,13 @@ class ClassGenerationService
         array $allowedClasses,
         array $classHeaders,
     ): ?array {
-        $decision = $this->classPolicy->decideClassName($className);
-        if (!$decision->accepted) {
+        $facts = $this->prepareDiscoveryFacts($headerPath, $className, $includePaths);
+        if (($facts['status'] ?? 'error') !== 'ok' || !is_array($facts['class_data'] ?? null)) {
             return null;
         }
 
-        if ($this->isTemplateClassDeclaration($headerPath, $className)) {
-            return null;
-        }
-
-        $inspector = new QtClassInspector(new ClangArgumentBuilder($includePaths));
-        $classData = $inspector->inspect($headerPath, $className);
-        if ($classData === null) {
-            return null;
-        }
-
-        $lifecycle = $this->analyzeLifecycleCapabilities($headerPath, $className, (bool) ($classData['is_struct'] ?? false));
-        $classData['is_copy_constructible'] = $lifecycle['is_copy_constructible'];
-        $classData['has_public_constructor'] = $lifecycle['has_public_constructor'];
-        $classData['has_public_default_constructor'] = $lifecycle['has_public_default_constructor'];
-        $classData['has_public_destructor'] = $lifecycle['has_public_destructor'];
-        $classData['flag_aliases'] = $this->discoverFlagAliases($headerPath, $className);
-        $classData['enum_names'] = $this->discoverEnumNames($headerPath, $className);
-        $classData['smart_pointer_aliases'] = $this->smartPointerAliasResolver->discover($headerPath);
-        $classData['methods'] = $this->annotateConstructorVariants(
-            is_array($classData['methods'] ?? null) ? $classData['methods'] : [],
-            $headerPath,
-            $className,
-            (bool) ($classData['is_struct'] ?? false),
-        );
+        /** @var array<string, mixed> $classData */
+        $classData = $facts['class_data'];
         $classData = $this->mergeInheritedTypeMetadata(
             $classData,
             function (string $baseClass) use ($headerPath, $includePaths, $classHeaders): ?array {
@@ -3198,6 +3201,144 @@ class ClassGenerationService
     }
 
     /**
+     * @param array<string, mixed> $classData
+     */
+    private function hasRuntimeConstructorSemantics(array $classData, string $className): bool
+    {
+        if (!method_exists(\CParser\MethodCursor::class, 'isDeleted')
+            || !method_exists(\CParser\MethodCursor::class, 'isDefaulted')
+            || !method_exists(\CParser\MethodCursor::class, 'isExplicit')
+            || !method_exists(\CParser\MethodCursor::class, 'isCopyConstructor')
+            || !method_exists(\CParser\MethodCursor::class, 'isMoveConstructor')
+            || !method_exists(\CParser\MethodCursor::class, 'isDefaultConstructor')
+        ) {
+            return false;
+        }
+
+        foreach ((array) ($classData['methods'] ?? []) as $method) {
+            if (!is_array($method) || (string) ($method['name'] ?? '') !== $className) {
+                continue;
+            }
+
+            if (!array_key_exists('is_deleted', $method)
+                || !array_key_exists('is_defaulted', $method)
+                || !array_key_exists('is_explicit', $method)
+                || !array_key_exists('is_copy_constructor', $method)
+                || !array_key_exists('is_move_constructor', $method)
+                || !array_key_exists('is_default_constructor', $method)
+            ) {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * @param array<string, mixed> $classData
+     */
+    private function classDataHasDestructorMetadata(array $classData, string $className): bool
+    {
+        foreach ((array) ($classData['methods'] ?? []) as $method) {
+            if (!is_array($method)) {
+                continue;
+            }
+
+            if ((string) ($method['name'] ?? '') === '~' . $className) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param array<string, mixed> $classData
+     * @return array{
+     *   is_copy_constructible: bool,
+     *   has_public_constructor: bool,
+     *   has_public_default_constructor: bool,
+     *   has_public_destructor: bool
+     * }|null
+     */
+    private function analyzeLifecycleCapabilitiesFromClassData(array $classData): ?array
+    {
+        $className = is_string($classData['name'] ?? null) ? $classData['name'] : '';
+        if ($className === '' || !$this->hasRuntimeConstructorSemantics($classData, $className)) {
+            return null;
+        }
+
+        $hasExplicitConstructor = false;
+        $hasPublicConstructor = false;
+        $hasPublicDefaultConstructor = false;
+        $hasExplicitDestructor = false;
+        $hasPublicDestructor = true;
+        $isCopyConstructible = true;
+
+        foreach ((array) ($classData['methods'] ?? []) as $method) {
+            if (!is_array($method)) {
+                continue;
+            }
+
+            $methodName = is_string($method['name'] ?? null) ? $method['name'] : '';
+            if ($methodName === '') {
+                continue;
+            }
+
+            if ($methodName === $className) {
+                $hasExplicitConstructor = true;
+                $access = is_string($method['access'] ?? null) ? $method['access'] : 'unknown';
+                $isDeleted = (bool) ($method['is_deleted'] ?? false);
+                $isCopy = (bool) ($method['is_copy_constructor'] ?? false);
+                $isMove = (bool) ($method['is_move_constructor'] ?? false);
+                $isDefaultCtor = (bool) ($method['is_default_constructor'] ?? false);
+
+                if ($isCopy && ($isDeleted || $access !== 'public')) {
+                    $isCopyConstructible = false;
+                }
+
+                if ($isMove) {
+                    continue;
+                }
+
+                if ($access === 'public' && !$isDeleted) {
+                    $hasPublicConstructor = true;
+                    if ($isDefaultCtor) {
+                        $hasPublicDefaultConstructor = true;
+                    }
+                }
+
+                continue;
+            }
+
+            if ($methodName === '~' . $className) {
+                $hasExplicitDestructor = true;
+                if ((string) ($method['access'] ?? 'unknown') !== 'public') {
+                    $hasPublicDestructor = false;
+                }
+            }
+        }
+
+        if (!$hasExplicitConstructor) {
+            $hasPublicConstructor = true;
+            $hasPublicDefaultConstructor = true;
+        }
+
+        if (!$hasExplicitDestructor) {
+            $hasPublicDestructor = true;
+        }
+
+        return [
+            'is_copy_constructible' => $isCopyConstructible,
+            'has_public_constructor' => $hasPublicConstructor,
+            'has_public_default_constructor' => $hasPublicDefaultConstructor,
+            'has_public_destructor' => $hasPublicDestructor,
+        ];
+    }
+
+    /**
      * @return array{
      *   is_copy_constructible: bool,
      *   has_public_constructor: bool,
@@ -3287,6 +3428,48 @@ class ClassGenerationService
             'has_public_default_constructor' => $hasPublicDefaultConstructor,
             'has_public_destructor' => $hasPublicDestructor,
         ];
+    }
+
+    /**
+     * @param array<string, mixed> $aliases
+     * @return array<string, string>
+     */
+    private function normalizeFlagAliases(array $aliases): array
+    {
+        $normalized = [];
+        foreach ($aliases as $alias => $source) {
+            if (!is_string($alias) || !is_string($source)) {
+                continue;
+            }
+
+            $alias = trim($alias);
+            $source = trim($source);
+            if ($alias === '' || $source === '') {
+                continue;
+            }
+
+            $normalized[$alias] = $source;
+        }
+
+        ksort($normalized);
+
+        return $normalized;
+    }
+
+    /**
+     * @param list<mixed> $enumNames
+     * @return list<string>
+     */
+    private function normalizeEnumNames(array $enumNames): array
+    {
+        $normalized = array_values(array_filter(
+            array_map(static fn(mixed $value): string => is_string($value) ? trim($value) : '', $enumNames),
+            static fn(string $value): bool => $value !== '',
+        ));
+        $normalized = array_values(array_unique($normalized));
+        sort($normalized);
+
+        return $normalized;
     }
 
     /**
@@ -4049,8 +4232,44 @@ class ClassGenerationService
      * @param array<string, mixed> $classData
      * @return list<string>
      */
+    private function runtimeBaseTypes(array $classData): array
+    {
+        $baseSpecifiers = is_array($classData['base_specifiers'] ?? null) ? $classData['base_specifiers'] : [];
+        $types = [];
+
+        foreach ($baseSpecifiers as $specifier) {
+            if (!is_array($specifier)) {
+                continue;
+            }
+
+            $type = is_string($specifier['type'] ?? null) ? trim($specifier['type']) : '';
+            if ($type === '') {
+                continue;
+            }
+
+            $types[] = $type;
+        }
+
+        if ($types === []) {
+            return [];
+        }
+
+        $types = array_values(array_unique($types));
+
+        return $types;
+    }
+
+    /**
+     * @param array<string, mixed> $classData
+     * @return list<string>
+     */
     private function specializableBases(array $classData, string $headerPath, string $className): array
     {
+        $runtimeBases = $this->runtimeBaseTypes($classData);
+        if ($runtimeBases !== []) {
+            return $runtimeBases;
+        }
+
         $sourceBases = $this->classBaseDeclarationsFromSource($headerPath, $className);
         if ($sourceBases !== []) {
             return $sourceBases;

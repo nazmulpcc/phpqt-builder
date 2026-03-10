@@ -16,6 +16,7 @@ readonly class BuildDiscoveryResult
      * @param array<string, int> $moduleMethodTotals
      * @param array<string, int> $moduleAcceptedMethodTotals
      * @param list<array<string, string>> $supplementalCandidates
+     * @param array<string, array<string, mixed>> $preparedClassData
      */
     public function __construct(
         public array $acceptedCandidates,
@@ -27,5 +28,6 @@ readonly class BuildDiscoveryResult
         public int $passes = 0,
         public array $errors = [],
         public array $supplementalCandidates = [],
+        public array $preparedClassData = [],
     ) {}
 }

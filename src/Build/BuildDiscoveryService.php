@@ -14,7 +14,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class BuildDiscoveryService
 {
-    private const CLASS_CACHE_SCHEMA_VERSION = 5;
+    private const CLASS_CACHE_SCHEMA_VERSION = 6;
 
     public function __construct(
         private readonly GenerateWorkerPool $workerPool = new GenerateWorkerPool(__DIR__ . '/../..'),
@@ -61,6 +61,7 @@ class BuildDiscoveryService
                 moduleMethodTotals: [],
                 moduleAcceptedMethodTotals: [],
                 errors: $classStructures['errors'],
+                preparedClassData: $classStructures['prepared_class_data'],
             );
         }
 
@@ -87,6 +88,7 @@ class BuildDiscoveryService
                 moduleAcceptedMethodTotals: [],
                 errors: $supplemental['errors'],
                 supplementalCandidates: $supplemental['supplemental_candidates'],
+                preparedClassData: $supplemental['prepared_class_data'],
             );
         }
 
@@ -118,6 +120,7 @@ class BuildDiscoveryService
             passes: $viability['passes'],
             errors: $viability['errors'],
             supplementalCandidates: $supplemental['supplemental_candidates'],
+            preparedClassData: $supplemental['prepared_class_data'],
         );
     }
 

@@ -42,6 +42,8 @@ class BuildPipeline
                 $request->installation->rootPath,
             );
         }
+        $preparedClassDataByClass = [];
+        $supplementalCandidates = [];
 
         if ($cachedDiscovery !== null) {
             $acceptedCandidates = $cachedDiscovery->acceptedCandidates;
@@ -50,6 +52,7 @@ class BuildPipeline
             $candidateCount = $cachedDiscovery->candidateCount;
             $moduleMethodTotals = $cachedDiscovery->moduleMethodTotals;
             $moduleAcceptedMethodTotals = $cachedDiscovery->moduleAcceptedMethodTotals;
+            $supplementalCandidates = $cachedDiscovery->supplementalCandidates;
             $this->renderCacheUsage($output, $metadataDir);
         } else {
             if ($request->reuseDiscoveryCache) {
@@ -109,6 +112,8 @@ class BuildPipeline
             $candidateCount = $discovery->candidateCount;
             $moduleMethodTotals = $discovery->moduleMethodTotals;
             $moduleAcceptedMethodTotals = $discovery->moduleAcceptedMethodTotals;
+            $preparedClassDataByClass = $discovery->preparedClassData;
+            $supplementalCandidates = $discovery->supplementalCandidates;
 
             $this->discoveryService->writeCache(
                 $metadataDir,
@@ -126,111 +131,121 @@ class BuildPipeline
             count($skippedClasses),
         ));
 
-        $classStructureStartedAt = microtime(true);
-        $classStructures = $this->discoveryService->prepareClassStructures(
-            $acceptedCandidates,
-            $request->outputDir,
-            $request->installation->includeRoots,
-            $metadataDir,
-            $request->jobs,
-            $output,
-            $request->extensionName,
-        );
+        if ($cachedDiscovery === null && $preparedClassDataByClass !== []) {
+            $timings['class_structure_cache'] = 0.0;
+            $this->renderPhaseTiming($output, 'Class structure cache', $timings['class_structure_cache']);
+            $timings['supplemental_discovery'] = 0.0;
+            $this->renderPhaseTiming($output, 'Supplemental discovery', $timings['supplemental_discovery']);
+        } else {
+            $classStructureStartedAt = microtime(true);
+            $classStructures = $this->discoveryService->prepareClassStructures(
+                $acceptedCandidates,
+                $request->outputDir,
+                $request->installation->includeRoots,
+                $metadataDir,
+                $request->jobs,
+                $output,
+                $request->extensionName,
+            );
 
-        if ($classStructures['errors'] !== []) {
-            foreach ($classStructures['errors'] as $error) {
-                $message = is_string($error['reason_message'] ?? null) ? $error['reason_message'] : 'Class structure cache failed.';
-                $output->writeln(sprintf('<error>%s</error>', $message));
+            if ($classStructures['errors'] !== []) {
+                foreach ($classStructures['errors'] as $error) {
+                    $message = is_string($error['reason_message'] ?? null) ? $error['reason_message'] : 'Class structure cache failed.';
+                    $output->writeln(sprintf('<error>%s</error>', $message));
+                }
+
+                return new BuildAnalysisResult(
+                    metadataDir: $metadataDir,
+                    candidateCount: $candidateCount,
+                    acceptedCandidates: [],
+                    skippedClasses: [...$skippedClasses, ...$classStructures['skipped_classes']],
+                    skippedMethods: [],
+                    errors: $classStructures['errors'],
+                    generatedClasses: [],
+                    generatedPhpClasses: [],
+                    generatedClassParents: [],
+                    generatedClassDependencies: [],
+                    generatedClassHeaders: [],
+                    generatedClassModules: [],
+                    classNamespaces: [],
+                    enumHolders: [],
+                    moduleMethodTotals: $moduleMethodTotals,
+                    moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
+                    moduleGeneratedMethodTotals: [],
+                    passes: 0,
+                    requiresSignalConnectionSupport: false,
+                    timings: $timings + ['class_structure_cache' => microtime(true) - $classStructureStartedAt, 'analysis_total' => microtime(true) - $analysisStartedAt],
+                );
+            }
+            $timings['class_structure_cache'] = microtime(true) - $classStructureStartedAt;
+            $this->renderPhaseTiming($output, 'Class structure cache', $timings['class_structure_cache']);
+
+            $supplementalStartedAt = microtime(true);
+            $acceptedCandidates = $classStructures['accepted_candidates'];
+            $skippedClasses = [...$skippedClasses, ...$classStructures['skipped_classes']];
+            $supplemental = $this->discoveryService->augmentWithSupplementalCandidates(
+                $acceptedCandidates,
+                $classStructures['prepared_class_data'],
+                $request->modules,
+                $request->installation->includeRoots,
+                $request->outputDir,
+                $metadataDir,
+                $request->jobs,
+                $output,
+                $request->extensionName,
+                $request->importedAbi?->availableClasses ?? [],
+            );
+
+            if ($supplemental['errors'] !== []) {
+                foreach ($supplemental['errors'] as $error) {
+                    $message = is_string($error['reason_message'] ?? null) ? $error['reason_message'] : 'Supplemental class discovery failed.';
+                    $output->writeln(sprintf('<error>%s</error>', $message));
+                }
+
+                return new BuildAnalysisResult(
+                    metadataDir: $metadataDir,
+                    candidateCount: $candidateCount,
+                    acceptedCandidates: [],
+                    skippedClasses: [...$skippedClasses, ...$supplemental['skipped_classes']],
+                    skippedMethods: [],
+                    errors: $supplemental['errors'],
+                    generatedClasses: [],
+                    generatedPhpClasses: [],
+                    generatedClassParents: [],
+                    generatedClassDependencies: [],
+                    generatedClassHeaders: [],
+                    generatedClassModules: [],
+                    classNamespaces: [],
+                    enumHolders: [],
+                    moduleMethodTotals: $moduleMethodTotals,
+                    moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
+                    moduleGeneratedMethodTotals: [],
+                    passes: 0,
+                    requiresSignalConnectionSupport: false,
+                    timings: $timings + ['supplemental_discovery' => microtime(true) - $supplementalStartedAt, 'analysis_total' => microtime(true) - $analysisStartedAt],
+                );
             }
 
-            return new BuildAnalysisResult(
-                metadataDir: $metadataDir,
-                candidateCount: $candidateCount,
-                acceptedCandidates: [],
-                skippedClasses: [...$skippedClasses, ...$classStructures['skipped_classes']],
-                skippedMethods: [],
-                errors: $classStructures['errors'],
-                generatedClasses: [],
-                generatedPhpClasses: [],
-                generatedClassParents: [],
-                generatedClassDependencies: [],
-                generatedClassHeaders: [],
-                generatedClassModules: [],
-                classNamespaces: [],
-                enumHolders: [],
-                moduleMethodTotals: $moduleMethodTotals,
-                moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
-                moduleGeneratedMethodTotals: [],
-                passes: 0,
-                requiresSignalConnectionSupport: false,
-                timings: $timings + ['class_structure_cache' => microtime(true) - $classStructureStartedAt, 'analysis_total' => microtime(true) - $analysisStartedAt],
-            );
-        }
-        $timings['class_structure_cache'] = microtime(true) - $classStructureStartedAt;
-        $this->renderPhaseTiming($output, 'Class structure cache', $timings['class_structure_cache']);
-
-        $supplementalStartedAt = microtime(true);
-        $acceptedCandidates = $classStructures['accepted_candidates'];
-        $skippedClasses = [...$skippedClasses, ...$classStructures['skipped_classes']];
-        $supplemental = $this->discoveryService->augmentWithSupplementalCandidates(
-            $acceptedCandidates,
-            $classStructures['prepared_class_data'],
-            $request->modules,
-            $request->installation->includeRoots,
-            $request->outputDir,
-            $metadataDir,
-            $request->jobs,
-            $output,
-            $request->extensionName,
-            $request->importedAbi?->availableClasses ?? [],
-        );
-
-        if ($supplemental['errors'] !== []) {
-            foreach ($supplemental['errors'] as $error) {
-                $message = is_string($error['reason_message'] ?? null) ? $error['reason_message'] : 'Supplemental class discovery failed.';
-                $output->writeln(sprintf('<error>%s</error>', $message));
+            $acceptedCandidates = $supplemental['accepted_candidates'];
+            $skippedClasses = [...$skippedClasses, ...$supplemental['skipped_classes']];
+            $preparedClassDataByClass = $supplemental['prepared_class_data'];
+            if ($supplemental['supplemental_candidates'] !== []) {
+                $supplementalCandidates = $supplemental['supplemental_candidates'];
             }
-
-            return new BuildAnalysisResult(
-                metadataDir: $metadataDir,
-                candidateCount: $candidateCount,
-                acceptedCandidates: [],
-                skippedClasses: [...$skippedClasses, ...$supplemental['skipped_classes']],
-                skippedMethods: [],
-                errors: $supplemental['errors'],
-                generatedClasses: [],
-                generatedPhpClasses: [],
-                generatedClassParents: [],
-                generatedClassDependencies: [],
-                generatedClassHeaders: [],
-                generatedClassModules: [],
-                classNamespaces: [],
-                enumHolders: [],
-                moduleMethodTotals: $moduleMethodTotals,
-                moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
-                moduleGeneratedMethodTotals: [],
-                passes: 0,
-                requiresSignalConnectionSupport: false,
-                timings: $timings + ['supplemental_discovery' => microtime(true) - $supplementalStartedAt, 'analysis_total' => microtime(true) - $analysisStartedAt],
-            );
+            $timings['supplemental_discovery'] = microtime(true) - $supplementalStartedAt;
+            $this->renderPhaseTiming($output, 'Supplemental discovery', $timings['supplemental_discovery']);
         }
-
-        $acceptedCandidates = $supplemental['accepted_candidates'];
-        $skippedClasses = [...$skippedClasses, ...$supplemental['skipped_classes']];
-        $classStructures['prepared_class_data'] = $supplemental['prepared_class_data'];
         file_put_contents(
             $metadataDir . '/supplemental_candidates.json',
-            json_encode($supplemental['supplemental_candidates'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]',
+            json_encode($supplementalCandidates, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]',
         );
-        $timings['supplemental_discovery'] = microtime(true) - $supplementalStartedAt;
-        $this->renderPhaseTiming($output, 'Supplemental discovery', $timings['supplemental_discovery']);
 
         $enumStartedAt = microtime(true);
         $classNamespaces = $this->classNamespaces($acceptedCandidates, $request->importedAbi);
         $enumCandidateHeaders = (new EnumCandidateHeaderCollector())->collect(
             $request->installation->includeRoots,
             $acceptedCandidates,
-            $classStructures['prepared_class_data'],
+            $preparedClassDataByClass,
         );
         file_put_contents(
             $metadataDir . '/enum_candidate_headers.json',
@@ -283,7 +298,7 @@ class BuildPipeline
                 $request->installation->includeRoots,
                 $acceptedCandidates,
                 $skippedClasses,
-                $classStructures['prepared_class_data'],
+                $preparedClassDataByClass,
                 $classNamespaces,
                 $enumCandidateHeaders,
                 static function (int $completed, int $total) use ($enumProgressBar): void {
@@ -320,7 +335,7 @@ class BuildPipeline
             $acceptedCandidates,
             $skippedClasses,
             $allowedClasses,
-            $classStructures['prepared_class_data'],
+            $preparedClassDataByClass,
             $output,
             $request->importedAbi,
             $enumRegistry,
@@ -354,7 +369,7 @@ class BuildPipeline
                 candidateCount: $candidateCount,
                 moduleMethodTotals: $moduleMethodTotals,
                 moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
-                supplementalCandidates: $supplemental['supplemental_candidates'],
+                supplementalCandidates: $supplementalCandidates,
             ),
         );
 
@@ -1260,7 +1275,10 @@ class BuildPipeline
                 continue;
             }
 
-            $sourceBases = $this->classBaseDeclarationsFromSource($headerPath, $className);
+            $sourceBases = $this->classBaseDeclarationsFromPreparedData($preparedClassDataByClass[$className] ?? null);
+            if ($sourceBases === []) {
+                $sourceBases = $this->classBaseDeclarationsFromSource($headerPath, $className);
+            }
             $specialization = null;
             foreach ($sourceBases as $baseClass) {
                 $specialization = $resolver->specializationFor($baseClass);
@@ -1291,6 +1309,38 @@ class BuildPipeline
             'generated_class_modules' => $syntheticModules,
             'class_namespaces' => $syntheticNamespaces,
         ];
+    }
+
+    /**
+     * @param array<string, mixed>|null $classData
+     * @return list<string>
+     */
+    private function classBaseDeclarationsFromPreparedData(?array $classData): array
+    {
+        if (!is_array($classData)) {
+            return [];
+        }
+
+        $baseSpecifiers = is_array($classData['base_specifiers'] ?? null) ? $classData['base_specifiers'] : [];
+        $bases = [];
+        foreach ($baseSpecifiers as $specifier) {
+            if (!is_array($specifier)) {
+                continue;
+            }
+
+            $type = is_string($specifier['type'] ?? null) ? trim($specifier['type']) : '';
+            if ($type !== '') {
+                $bases[] = $type;
+            }
+        }
+
+        if ($bases === []) {
+            return [];
+        }
+
+        $bases = array_values(array_unique($bases));
+
+        return $bases;
     }
 
     /**

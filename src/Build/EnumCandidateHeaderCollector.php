@@ -8,8 +8,9 @@ use QtBuilder\Scanning\HeaderCandidate;
 
 class EnumCandidateHeaderCollector
 {
-    /** @var array<string, list<string>> */
-    private array $resolvedIncludeCache = [];
+    public function __construct(
+        private readonly IncludeGraphResolver $includeGraphResolver = new IncludeGraphResolver(),
+    ) {}
 
     /**
      * @param list<string> $includePaths
@@ -265,83 +266,7 @@ class EnumCandidateHeaderCollector
      */
     private function transitiveIncludes(string $headerPath, array $includePaths): array
     {
-        if (isset($this->resolvedIncludeCache[$headerPath])) {
-            return $this->resolvedIncludeCache[$headerPath];
-        }
-
-        /** @var array<string, bool> $visited */
-        $visited = [];
-        /** @var list<string> $queue */
-        $queue = [$headerPath];
-        /** @var array<string, bool> $resolved */
-        $resolved = [];
-
-        while ($queue !== []) {
-            $current = array_shift($queue);
-            if (!is_string($current) || $current === '' || isset($visited[$current])) {
-                continue;
-            }
-
-            $visited[$current] = true;
-            if (!is_file($current)) {
-                continue;
-            }
-
-            $contents = (string) file_get_contents($current);
-            if (preg_match_all('/^\s*#\s*include\s*[<"]([^">]+)[">]/m', $contents, $matches) !== 1) {
-                continue;
-            }
-
-            foreach ($matches[1] as $include) {
-                if (!is_string($include)) {
-                    continue;
-                }
-
-                $resolvedPath = $this->resolveIncludePath($include, $current, $includePaths);
-                if ($resolvedPath === null) {
-                    continue;
-                }
-
-                $resolved[$resolvedPath] = true;
-                if (!isset($visited[$resolvedPath])) {
-                    $queue[] = $resolvedPath;
-                }
-            }
-        }
-
-        $paths = array_keys($resolved);
-        sort($paths);
-        $this->resolvedIncludeCache[$headerPath] = $paths;
-
-        return $paths;
-    }
-
-    /**
-     * @param list<string> $includePaths
-     */
-    private function resolveIncludePath(string $include, string $sourceHeader, array $includePaths): ?string
-    {
-        $candidates = [];
-
-        $localCandidate = dirname($sourceHeader) . '/' . $include;
-        $candidates[] = $localCandidate;
-        foreach ($includePaths as $includePath) {
-            if (!is_string($includePath) || $includePath === '') {
-                continue;
-            }
-
-            $candidates[] = rtrim($includePath, '/') . '/' . ltrim($include, '/');
-            $candidates[] = rtrim(dirname($includePath), '/') . '/' . ltrim($include, '/');
-        }
-
-        foreach ($candidates as $candidate) {
-            $real = realpath($candidate);
-            if ($real !== false && is_file($real)) {
-                return $real;
-            }
-        }
-
-        return null;
+        return $this->includeGraphResolver->transitiveIncludes($headerPath, $includePaths);
     }
 
     private function normalizeType(string $type): string

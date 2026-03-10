@@ -39,8 +39,8 @@ class ExtensionGenerator
         $templatePath ??= $projectRoot . '/templates';
         $compiledPath ??= $projectRoot . '/storage/blade/' . (string) getmypid();
 
-        if (!is_dir($compiledPath)) {
-            mkdir($compiledPath, 0755, true);
+        if (!is_dir($compiledPath) && !mkdir($compiledPath, 0755, true) && !is_dir($compiledPath)) {
+            throw new \RuntimeException(sprintf('Could not create Blade compile directory: %s', $compiledPath));
         }
 
         $this->blade = new BladeOne(
@@ -76,8 +76,8 @@ class ExtensionGenerator
         $files = [];
 
         // Ensure output directory exists
-        if (!is_dir($outputDir)) {
-            mkdir($outputDir, 0755, true);
+        if (!is_dir($outputDir) && !mkdir($outputDir, 0755, true) && !is_dir($outputDir)) {
+            throw new \RuntimeException(sprintf('Could not create output directory: %s', $outputDir));
         }
 
         // Render each template
