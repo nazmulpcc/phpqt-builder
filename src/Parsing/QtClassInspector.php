@@ -143,10 +143,8 @@ class QtClassInspector
     }
 
     /**
-     * Some Qt classes, notably exported QObject-style classes inside QT_BEGIN_NAMESPACE,
-     * are exposed by ext-cparser as a forward-declaration ClassCursor plus generic Cursor
-     * nodes for the actual definition. In that case we recover members by scanning the
-     * translation unit for methods/fields whose parent spelling matches the class name.
+     * Some Qt classes are exposed by ext-cparser as a forward-declaration ClassCursor plus
+     * member nodes in the translation unit. In that case recover members by scanning the TU.
      *
      * @return array{name: string, qualified_name: string, is_abstract: bool, is_struct: bool, bases: list<string>, properties: list<array<string, mixed>>, methods: list<array<string, mixed>>, enum_constants: list<array<string, mixed>>}
      */
@@ -178,32 +176,19 @@ class QtClassInspector
                 continue;
             }
 
-            $parameters = [];
-            foreach ($ctor->getChildren(CursorKind::ParmDecl) as $param) {
-                /** @var ParameterCursor $param */
-                $parameters[] = $this->extractParameter($param);
-            }
-
-            $signature = $className . '|void|' . json_encode($parameters);
+            $extracted = $this->extractConstructor($ctor, $classCursor);
+            $signature = $extracted['name']
+                . '|' . $extracted['return_type']
+                . '|' . json_encode($extracted['parameters'])
+                . '|' . ($extracted['is_const'] ? '1' : '0')
+                . '|' . ($extracted['is_static'] ? '1' : '0')
+                . '|' . $extracted['access'];
             if (isset($methodSignatures[$signature])) {
                 continue;
             }
             $methodSignatures[$signature] = true;
 
-            $methods[] = [
-                'name' => $className,
-                'declaring_class' => $qualifiedName,
-                'return_type' => 'void',
-                'access' => 'public',
-                'parameters' => $parameters,
-                'is_static' => false,
-                'is_const' => false,
-                'is_virtual' => false,
-                'is_pure_virtual' => false,
-                'is_override' => false,
-                'is_signal' => false,
-                'is_slot' => false,
-            ];
+            $methods[] = $extracted;
         }
 
         foreach ($this->tu->cursors(CursorKind::CXXMethod) as $method) {
@@ -354,7 +339,6 @@ class QtClassInspector
         $methods = [];
 
         // Extract constructors (CXXConstructor kind = 24, not returned by getMethods()).
-        // These are generic Cursor objects; parameters are ParameterCursor children.
         $constructors = $this->extractConstructors($class);
         foreach ($constructors as $ctor) {
             $methods[] = $ctor;
@@ -486,32 +470,49 @@ class QtClassInspector
             }
             $seen[$displayName] = true;
 
-            $parameters = [];
-            foreach ($ctor->getChildren(CursorKind::ParmDecl) as $param) {
-                /** @var ParameterCursor $param */
-                $parameters[] = $this->extractParameter($param);
-            }
-
-            // Constructor name in the IR is the class name; the ClassDefinitionBuilder
-            // will rename it to __construct.
-            $constructors[] = [
-                'name' => $ctor->getSpelling(),
-                'declaring_class' => $this->qualifiedCursorName($class),
-                'return_type' => 'void',
-                'access' => 'public', // generic Cursor lacks getAccessSpecifier()
-                'parameters' => $parameters,
-                'is_static' => false,
-                'is_const' => false,
-                'is_virtual' => false,
-                'is_pure_virtual' => false,
-                'is_override' => false,
-                'is_final' => false,
-                'is_signal' => false,
-                'is_slot' => false,
-            ];
+            $constructors[] = $this->extractConstructor($ctor, $class);
         }
 
         return $constructors;
+    }
+
+    /**
+     * @return array{name: string, declaring_class: string, return_type: string, access: string, parameters: list<array<string, mixed>>, is_static: bool, is_const: bool, is_virtual: bool, is_pure_virtual: bool, is_override: bool, is_final: bool, is_signal: bool, is_slot: bool}
+     */
+    private function extractConstructor(Cursor $constructor, ClassCursor $class): array
+    {
+        $parameters = [];
+        if ($constructor instanceof MethodCursor) {
+            foreach ($constructor->getParameters() as $param) {
+                $parameters[] = $this->extractParameter($param);
+            }
+        } else {
+            foreach ($constructor->getChildren(CursorKind::ParmDecl) as $param) {
+                /** @var ParameterCursor $param */
+                $parameters[] = $this->extractParameter($param);
+            }
+        }
+
+        $access = $constructor instanceof MethodCursor
+            ? self::accessLabel($constructor->getAccessSpecifier())
+            : 'unknown';
+
+        // Constructor name in the IR is the class name; ClassDefinitionBuilder renames it to __construct.
+        return [
+            'name' => $constructor->getSpelling(),
+            'declaring_class' => $this->qualifiedCursorName($class),
+            'return_type' => 'void',
+            'access' => $access,
+            'parameters' => $parameters,
+            'is_static' => false,
+            'is_const' => false,
+            'is_virtual' => false,
+            'is_pure_virtual' => false,
+            'is_override' => false,
+            'is_final' => false,
+            'is_signal' => false,
+            'is_slot' => false,
+        ];
     }
 
     /**

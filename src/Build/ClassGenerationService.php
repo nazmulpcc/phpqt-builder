@@ -868,8 +868,8 @@ class ClassGenerationService
         array $allowedClasses,
         array $classHeaders,
     ): array {
-        $parentClass = $phpClass->parent;
-        if ($parentClass === null || $parentClass === '' || $parentClass === $phpClass->name) {
+        $parentClass = $this->normalizeClassLookupName((string) $phpClass->parent);
+        if ($parentClass === '' || $parentClass === $phpClass->name) {
             return ['class' => $phpClass, 'skipped_methods' => []];
         }
 
@@ -976,6 +976,11 @@ class ClassGenerationService
         array $classHeaders,
         array &$visited = [],
     ): array {
+        $className = $this->normalizeClassLookupName($className);
+        if ($className === '') {
+            return [];
+        }
+
         if (isset($visited[$className])) {
             return [];
         }
@@ -989,9 +994,10 @@ class ClassGenerationService
         }
 
         $methods = [];
-        if ($phpClass->parent !== null && $phpClass->parent !== '' && $phpClass->parent !== $className) {
+        $normalizedParentClass = $phpClass->parent !== null ? $this->normalizeClassLookupName($phpClass->parent) : null;
+        if ($normalizedParentClass !== null && $normalizedParentClass !== '' && $normalizedParentClass !== $className) {
             $methods = $this->collectInheritedMethods(
-                $phpClass->parent,
+                $normalizedParentClass,
                 $headerPath,
                 $includePaths,
                 $allowedClasses,
@@ -1006,6 +1012,10 @@ class ClassGenerationService
             }
 
             $methods[$method->name] = $method;
+        }
+
+        foreach ($this->runtimeGeneratedMethodContracts($phpClass) as $name => $method) {
+            $methods[$name] ??= $method;
         }
 
         return $methods;
@@ -2144,16 +2154,28 @@ class ClassGenerationService
         array $allowedClasses,
         array $preparedClassDataByClass,
     ): array {
-        $parentClass = $phpClass->parent;
-        if ($parentClass === null || $parentClass === '' || $parentClass === $phpClass->name) {
+        $parentClass = $this->normalizeClassLookupName((string) $phpClass->parent);
+        if ($parentClass === '' || $parentClass === $phpClass->name) {
             return ['class' => $phpClass, 'skipped_methods' => []];
         }
+
+        $classTypeResolver = CppClassTypeResolver::fromPreparedClassData($preparedClassDataByClass);
+        $resolutionContext = TypeResolutionContext::fromNames(
+            $phpClass->name,
+            is_string($phpClass->nativeCppType) && $phpClass->nativeCppType !== ''
+                ? $phpClass->nativeCppType
+                : null,
+        );
+        $visited = [];
 
         $parentMethods = $this->collectInheritedMethodsFromPrepared(
             $parentClass,
             $headerPath,
             $allowedClasses,
             $preparedClassDataByClass,
+            $visited,
+            $classTypeResolver,
+            $resolutionContext,
         );
         if ($parentMethods === []) {
             return ['class' => $phpClass, 'skipped_methods' => []];
@@ -2248,16 +2270,36 @@ class ClassGenerationService
         array $allowedClasses,
         array $preparedClassDataByClass,
         array &$visited = [],
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
     ): array {
-        if (isset($visited[$className])) {
+        $className = $this->normalizeClassLookupName($className);
+        if ($className === '') {
             return [];
         }
 
-        $visited[$className] = true;
-        $classData = $preparedClassDataByClass[$className] ?? null;
+        $classTypeResolver ??= CppClassTypeResolver::fromPreparedClassData($preparedClassDataByClass);
+        $lookupClass = $this->resolvedTypeLookupKey($className, $classTypeResolver, $resolutionContext);
+        if ($lookupClass === '') {
+            return [];
+        }
+
+        if (isset($visited[$lookupClass])) {
+            return [];
+        }
+
+        $visited[$lookupClass] = true;
+        $classData = $this->preparedClassDataForType(
+            $className,
+            $preparedClassDataByClass,
+            $classTypeResolver,
+            $resolutionContext,
+        );
         if (!is_array($classData)) {
             return [];
         }
+
+        $classContext = TypeResolutionContext::fromClassData($classData);
 
         $result = $this->generateFromPreparedData(
             $classData,
@@ -2271,13 +2313,16 @@ class ClassGenerationService
         }
 
         $methods = [];
-        if ($phpClass->parent !== null && $phpClass->parent !== '' && $phpClass->parent !== $className) {
+        $normalizedParentClass = $phpClass->parent !== null ? $this->normalizeClassLookupName($phpClass->parent) : null;
+        if ($normalizedParentClass !== null && $normalizedParentClass !== '' && $normalizedParentClass !== $className) {
             $methods = $this->collectInheritedMethodsFromPrepared(
-                $phpClass->parent,
+                $normalizedParentClass,
                 $fallbackHeaderPath,
                 $allowedClasses,
                 $preparedClassDataByClass,
                 $visited,
+                $classTypeResolver,
+                $classContext,
             );
         }
 
@@ -2289,7 +2334,158 @@ class ClassGenerationService
             $methods[$method->name] = $method;
         }
 
+        foreach ($this->runtimeGeneratedMethodContracts($phpClass) as $name => $method) {
+            $methods[$name] ??= $method;
+        }
+
         return $methods;
+    }
+
+    /**
+     * @return array<string, PhpMethod>
+     */
+    private function runtimeGeneratedMethodContracts(PhpClass $phpClass): array
+    {
+        $contracts = [];
+
+        if ($phpClass->name === 'QObject') {
+            $contracts = [
+                'property' => new PhpMethod(
+                    name: 'property',
+                    access: 'public',
+                    isStatic: false,
+                    isSignal: false,
+                    isSlot: false,
+                    isAbstractMethod: false,
+                    returnType: 'mixed',
+                    parameters: [
+                        new PhpParameter(name: 'name', phpType: 'string', hasDefault: false, position: 0),
+                    ],
+                    overloads: [],
+                    cppName: 'property',
+                ),
+                'setProperty' => new PhpMethod(
+                    name: 'setProperty',
+                    access: 'public',
+                    isStatic: false,
+                    isSignal: false,
+                    isSlot: false,
+                    isAbstractMethod: false,
+                    returnType: 'bool',
+                    parameters: [
+                        new PhpParameter(name: 'name', phpType: 'string', hasDefault: false, position: 0),
+                        new PhpParameter(name: 'value', phpType: 'mixed', hasDefault: false, position: 1),
+                    ],
+                    overloads: [],
+                    cppName: 'setProperty',
+                ),
+                'hasProperty' => new PhpMethod(
+                    name: 'hasProperty',
+                    access: 'public',
+                    isStatic: false,
+                    isSignal: false,
+                    isSlot: false,
+                    isAbstractMethod: false,
+                    returnType: 'bool',
+                    parameters: [
+                        new PhpParameter(name: 'name', phpType: 'string', hasDefault: false, position: 0),
+                    ],
+                    overloads: [],
+                    cppName: 'hasProperty',
+                ),
+                'propertyNames' => new PhpMethod(
+                    name: 'propertyNames',
+                    access: 'public',
+                    isStatic: false,
+                    isSignal: false,
+                    isSlot: false,
+                    isAbstractMethod: false,
+                    returnType: 'array',
+                    parameters: [],
+                    overloads: [],
+                    cppName: 'propertyNames',
+                ),
+                'propertyInfo' => new PhpMethod(
+                    name: 'propertyInfo',
+                    access: 'public',
+                    isStatic: false,
+                    isSignal: false,
+                    isSlot: false,
+                    isAbstractMethod: false,
+                    returnType: 'array',
+                    parameters: [
+                        new PhpParameter(name: 'name', phpType: 'string', hasDefault: false, position: 0),
+                    ],
+                    overloads: [],
+                    cppName: 'propertyInfo',
+                ),
+                'connectPropertyNotify' => new PhpMethod(
+                    name: 'connectPropertyNotify',
+                    access: 'public',
+                    isStatic: false,
+                    isSignal: false,
+                    isSlot: false,
+                    isAbstractMethod: false,
+                    returnType: '\\Qt\\Core\\QMetaObjectConnection',
+                    parameters: [
+                        new PhpParameter(name: 'name', phpType: 'string', hasDefault: false, position: 0),
+                        new PhpParameter(name: 'callback', phpType: 'callable', hasDefault: false, position: 1),
+                    ],
+                    overloads: [],
+                    cppName: 'connectPropertyNotify',
+                ),
+            ];
+        }
+
+        if ($phpClass->signals !== []) {
+            $contracts['connect'] = new PhpMethod(
+                name: 'connect',
+                access: 'public',
+                isStatic: false,
+                isSignal: false,
+                isSlot: false,
+                isAbstractMethod: false,
+                returnType: '\\Qt\\Core\\QMetaObjectConnection',
+                parameters: [
+                    new PhpParameter(name: 'signalSignature', phpType: 'string', hasDefault: false, position: 0),
+                    new PhpParameter(name: 'callback', phpType: 'callable', hasDefault: false, position: 1),
+                ],
+                overloads: [],
+                cppName: 'connect',
+            );
+            $contracts['disconnect'] = new PhpMethod(
+                name: 'disconnect',
+                access: 'public',
+                isStatic: false,
+                isSignal: false,
+                isSlot: false,
+                isAbstractMethod: false,
+                returnType: 'bool',
+                parameters: [
+                    new PhpParameter(name: 'connection', phpType: '\\Qt\\Core\\QMetaObjectConnection', hasDefault: false, position: 0),
+                ],
+                overloads: [],
+                cppName: 'disconnect',
+            );
+        }
+
+        return $contracts;
+    }
+
+    private function normalizeClassLookupName(string $type): string
+    {
+        $trimmed = trim($type);
+        if ($trimmed === '') {
+            return '';
+        }
+
+        // In build mode the IR parent can be a PHP FQCN (\Qt\...\ClassName); lookups use C++/bare names.
+        if (str_contains($trimmed, '\\')) {
+            $parts = explode('\\', ltrim($trimmed, '\\'));
+            $trimmed = (string) end($parts);
+        }
+
+        return $trimmed;
     }
 
     private function isCompatibleInheritedMethod(PhpMethod $child, PhpMethod $parent): bool

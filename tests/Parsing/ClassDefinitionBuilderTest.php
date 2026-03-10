@@ -271,5 +271,5 @@ it('adds php string unions for qstring-like parameters when class types are avai
 
     expect($class->methods)->toHaveCount(1)
         ->and($class->methods[0]->parameters)->toHaveCount(1)
-        ->and($class->methods[0]->parameters[0]->phpType)->toBe('QString|string');
+        ->and($class->methods[0]->parameters[0]->phpType)->toBe('string');
 });

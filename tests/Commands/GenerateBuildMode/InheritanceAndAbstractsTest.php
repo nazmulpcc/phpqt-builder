@@ -53,6 +53,47 @@ it('skips child methods with incompatible inherited signatures', function (): vo
         Assert::assertStringNotContainsString('public function peer(): QChildSetter', $stub);
 });
 
+it('renames QObject helper name collisions to avoid php signature fatals', function (): void {
+        $fixtureRoot = qt_fixture_path('policy-qt');
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-qobject-collision-' . bin2hex(random_bytes(4));
+        $classHeadersFile = $outputDir . '/class_headers.json';
+        mkdir($outputDir, 0755, true);
+        file_put_contents($classHeadersFile, json_encode([
+            'QObject' => $fixtureRoot . '/include/QtCore/qobjectpropertycollisionthing.h',
+            'QObjectPropertyCollisionThing' => $fixtureRoot . '/include/QtCore/qobjectpropertycollisionthing.h',
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qobjectpropertycollisionthing.h',
+            'class' => 'QObjectPropertyCollisionThing',
+            '--qt-path' => '/definitely/not/a/qt/root',
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+            ],
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QObject,QObjectPropertyCollisionThing',
+            '--class-headers-file' => $classHeadersFile,
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        Assert::assertSame('ok', $payload['status']);
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qobjectpropertycollisionthing.stub.php');
+        Assert::assertStringContainsString('class QObjectPropertyCollisionThing extends QObject', $stub);
+        Assert::assertStringContainsString('public function propertyAsInt(): int {}', $stub);
+        Assert::assertStringContainsString('public function setPropertyInt(int $value): void {}', $stub);
+        Assert::assertStringNotContainsString('public function property(): int {}', $stub);
+        Assert::assertStringNotContainsString('public function setProperty(int $value): void {}', $stub);
+});
+
 it('generates abstract classes and retains pure virtual methods', function (): void {
         $fixtureRoot = qt_fixture_path('policy-qt');
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));

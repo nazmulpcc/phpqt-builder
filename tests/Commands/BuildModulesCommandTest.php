@@ -378,7 +378,7 @@ it('generates enum holder classes into their owning split modules', function ():
     ]);
 });
 
-it('builds unmapped split modules with a manifest warning', function (): void {
+it('builds split modules with static-manifest dependencies', function (): void {
     $fixtureRoot = qt_fixture_path('module-split-qt');
     $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-modules-unmapped-' . bin2hex(random_bytes(4));
     $bootstrapper = new FakeExtensionBootstrapper();
@@ -396,22 +396,23 @@ it('builds unmapped split modules with a manifest warning', function (): void {
     expect($result)->toBeSuccessfulCommandResult()
         ->and($result['display'])->toContain(
             'Requested modules: QtSvg',
-            'Auto-added dependency modules: QtCore',
-            'Manifest warning: QtSvg has no static dependency manifest entry; only the implicit QtCore dependency will be applied for that module.',
-            'Expanded modules: QtCore, QtSvg',
+            'Auto-added dependency modules: QtCore, QtGui',
+            'Expanded modules: QtCore, QtGui, QtSvg',
             'Building QtCore as qtcore...',
+            'Building QtGui as qtgui...',
             'Building QtSvg as qtsvg...',
-            'Extension load order: qtcore, qtsvg',
+            'Extension load order: qtcore, qtgui, qtsvg',
         );
-    expect($bootstrapper->contexts)->toHaveCount(2)
-        ->and(array_map(static fn($context): string => $context->extensionName, $bootstrapper->contexts))->toBe(['qtcore', 'qtsvg'])
+    expect($bootstrapper->contexts)->toHaveCount(3)
+        ->and(array_map(static fn($context): string => $context->extensionName, $bootstrapper->contexts))->toBe(['qtcore', 'qtgui', 'qtsvg'])
         ->and(is_file($buildRoot . '/QtCore/generated/module_abi.json'))->toBeTrue()
+        ->and(is_file($buildRoot . '/QtGui/generated/module_abi.json'))->toBeTrue()
         ->and(is_file($buildRoot . '/QtSvg/generated/module_abi.json'))->toBeTrue()
         ->and(is_file($buildRoot . '/generated/module_graph.json'))->toBeTrue();
 
     $manifest = qt_decode_json((string) file_get_contents($buildRoot . '/QtSvg/generated/module_abi.json'));
     expect($manifest['module'])->toBe('QtSvg')
         ->and($manifest['extension_name'])->toBe('qtsvg')
-        ->and($manifest['dependency_modules'])->toBe(['QtCore'])
+        ->and($manifest['dependency_modules'])->toBe(['QtCore', 'QtGui'])
         ->and($manifest['classes'])->toBe(['QSvgPoint']);
 });

@@ -29,6 +29,19 @@ it('loads supported modules from the static manifest', function (): void {
         'QtWebChannel',
         'QtWebEngineCore',
         'QtWebEngineQuick',
+        'QtXml',
+        'QtSvg',
+        'QtSvgWidgets',
+        'QtStateMachine',
+        'QtMultimediaWidgets',
+        'QtSerialPort',
+        'QtTextToSpeech',
+        'QtNetworkAuth',
+        'QtHttpServer',
+        'QtPdf',
+        'QtPdfWidgets',
+        'QtCharts',
+        'Qt3DAnimation',
     ]);
 });
 

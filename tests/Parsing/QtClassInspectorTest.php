@@ -109,6 +109,56 @@ it('extracts enum constants with scalar values', function (): void {
         ->and($constants['On']['value'])->toBe(1);
 });
 
+it('reads constructor access directly from cparser output', function (): void {
+    $fixtureRoot = qt_fixture_path('policy-qt');
+    $includeRoot = $fixtureRoot . '/include';
+    $header = $includeRoot . '/QtCore/qprivaterefconstructorthing.h';
+
+    $inspector = new QtClassInspector(new ClangArgumentBuilder([
+        $includeRoot,
+        $includeRoot . '/QtCore',
+    ]));
+
+    $classData = $inspector->inspect($header, 'QPrivateRefConstructorThing');
+    expect($classData)->not->toBeNull();
+
+    $ctors = array_values(array_filter(
+        $classData['methods'],
+        static fn (array $method): bool => $method['name'] === 'QPrivateRefConstructorThing',
+    ));
+
+    $ctorAccessByArity = [];
+    foreach ($ctors as $ctor) {
+        $ctorAccessByArity[count($ctor['parameters'])] = $ctor['access'];
+    }
+
+    expect($ctors)->toHaveCount(2)
+        ->and($ctorAccessByArity[0] ?? null)->toBe('public')
+        ->and($ctorAccessByArity[1] ?? null)->toBe('private');
+});
+
+it('reports private-only constructors as private', function (): void {
+    $fixtureRoot = qt_fixture_path('policy-qt');
+    $includeRoot = $fixtureRoot . '/include';
+    $header = $includeRoot . '/QtCore/quninstantiablething.h';
+
+    $inspector = new QtClassInspector(new ClangArgumentBuilder([
+        $includeRoot,
+        $includeRoot . '/QtCore',
+    ]));
+
+    $classData = $inspector->inspect($header, 'QUninstantiableThing');
+    expect($classData)->not->toBeNull();
+
+    $ctors = array_values(array_filter(
+        $classData['methods'],
+        static fn (array $method): bool => $method['name'] === 'QUninstantiableThing',
+    ));
+
+    expect($ctors)->toHaveCount(1)
+        ->and($ctors[0]['access'])->toBe('private');
+});
+
 it('finds namespaced classes from the requested header', function (): void {
     $fixtureRoot = qt_fixture_path('namespaced-qt');
     $header = $fixtureRoot . '/include/Qt3DCore/qnode.h';
