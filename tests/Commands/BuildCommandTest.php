@@ -64,7 +64,7 @@ it('generates the extension tree from a fixture qt root', function (): void {
             'Enum holder cache: miss.',
             'Extracting enum holders with 2 parallel worker(s)...',
             'Enum discovery',
-            'Discovery pass 1',
+            'Generate analysis pass 1',
             'timing:',
             'phpize: started',
             'phpize: succeeded (',

@@ -22,6 +22,7 @@ class BuildPipeline
     public function __construct(
         private readonly ExtensionBootstrapper $bootstrapper,
         private readonly BuildDiscoveryService $discoveryService = new BuildDiscoveryService(),
+        private readonly FixedPointEngine $fixedPointEngine = new FixedPointEngine(),
     ) {}
 
     public function analyze(BuildExecutionRequest $request, OutputInterface $output): BuildAnalysisResult
@@ -71,6 +72,7 @@ class BuildPipeline
                 $output,
                 $request->extensionName,
                 $request->importedAbi,
+                resolveViability: false,
             );
 
             if ($discovery->errors !== []) {
@@ -775,135 +777,173 @@ class BuildPipeline
         $rawGeneratedClassDependencies = [];
         /** @var array<string, int> $moduleGeneratedMethodTotals */
         $moduleGeneratedMethodTotals = [];
-        $passes = 0;
         $candidateModules = [];
         foreach ($acceptedCandidates as $candidate) {
             $candidateModules[$candidate->identityKey()] = $candidate->module;
         }
 
-        do {
-            $passes++;
-            if ($passes > 1) {
-                $output->writeln(sprintf(
-                    '<comment>Re-evaluating generated dependency set (pass %d, %d class(es)).</comment>',
-                    $passes,
-                    count($currentCandidates),
-                ));
-            }
-
-            $progressBar = $this->createBuildProgressBar(
+        $resolved = $this->fixedPointEngine->run(
+            [
+                'current_candidates' => $currentCandidates,
+                'current_allowed_classes' => $currentAllowedClasses,
+            ],
+            function (int $passes, array $state) use (
                 $output,
-                count($currentCandidates),
-                'qt_generate_analysis',
-                'Generate analysis pass ' . $passes,
-            );
-            $progressBar?->start();
+                $preparedClassDataByClass,
+                $importedAvailableClasses,
+                $allPreparedClassData,
+                $importedAbi,
+                $enumRegistry,
+                $candidateModules,
+                $generationService,
+                &$errorsByClass,
+                &$skippedByClass,
+                &$skippedMethodsByClass,
+                &$generatedClasses,
+                &$generatedPhpClasses,
+                &$rawGeneratedClassParents,
+                &$rawGeneratedClassDependencies,
+                &$generatedClassHeaders,
+                &$generatedClassModules,
+            ): array {
+                $currentCandidates = $state['current_candidates'];
+                $currentAllowedClasses = $state['current_allowed_classes'];
 
-            $generatedClasses = [];
-            $generatedPhpClasses = [];
-
-            foreach ($currentCandidates as $candidate) {
-                $candidateKey = $candidate->identityKey();
-                $classData = $preparedClassDataByClass[$candidateKey] ?? null;
-                if (!is_array($classData)) {
-                    $errorsByClass[$candidateKey] = [
-                        'module' => $candidate->module,
-                        'class' => $candidate->className,
-                        'header' => $candidate->parseHeader,
-                        'reason_code' => 'missing_class_data',
-                        'reason_message' => 'Prepared class data is missing from the class cache.',
-                    ];
-                    $progressBar?->advance();
-                    continue;
-                }
-
-                $availableClasses = array_values(array_unique([
-                    ...$currentAllowedClasses,
-                    ...$importedAvailableClasses,
-                ]));
-                sort($availableClasses);
-
-                $result = $generationService->generateFromPreparedData(
-                    $classData,
-                    $candidate->parseHeader,
-                    $availableClasses,
-                    $allPreparedClassData,
-                    $importedAbi !== null,
-                    $enumRegistry,
-                );
-                unset($errorsByClass[$candidateKey]);
-
-                if ($result->status === 'ok' && $result->phpClass !== null) {
-                    $generatedClasses[] = $candidateKey;
-                    $generatedPhpClasses[$candidateKey] = $this->withResolvedNativeIncludes(
-                        $result->phpClass,
-                        $candidate,
-                    );
-                    $payload = $result->toArray();
-                    $rawGeneratedClassParents[$candidateKey] = is_string($payload['parent_class'] ?? null)
-                        ? $payload['parent_class']
-                        : null;
-                    $rawGeneratedClassDependencies[$candidateKey] = array_values(array_filter(
-                        array_map(
-                            static fn(mixed $value): string => is_string($value) ? $value : '',
-                            $payload['class_dependencies'] ?? [],
-                        ),
-                        static fn(string $value): bool => $value !== '',
+                if ($passes > 1) {
+                    $output->writeln(sprintf(
+                        '<comment>Re-evaluating generated dependency set (pass %d, %d class(es)).</comment>',
+                        $passes,
+                        count($currentCandidates),
                     ));
-                    $generatedClassHeaders[$candidateKey] = $candidate->parseHeader;
-                    $generatedClassModules[$candidateKey] = $candidate->module;
-                    unset($skippedByClass[$candidateKey]);
-                } elseif ($result->status === 'skipped') {
-                    $skippedByClass[$candidateKey] = [
-                        'module' => $candidateModules[$candidateKey] ?? null,
-                        'class' => $result->className,
-                        'header' => $result->headerPath,
-                        'reason_code' => $result->reasonCode,
-                        'reason_message' => $result->reasonMessage,
-                    ];
-                } else {
-                    $errorsByClass[$candidateKey] = [
-                        'module' => $candidate->module,
-                        'class' => $candidate->className,
-                        'header' => $candidate->parseHeader,
-                        'reason_code' => 'generation_failed',
-                        'reason_message' => 'Class generation analysis failed.',
-                    ];
                 }
 
-                if ($result->status === 'ok') {
-                    $skippedMethodsByClass[$candidateKey] = [];
-                    foreach ($result->skippedMethods as $skippedMethod) {
-                        $skippedMethodsByClass[$candidateKey][] = [
+                $progressBar = $this->createBuildProgressBar(
+                    $output,
+                    count($currentCandidates),
+                    'qt_generate_analysis',
+                    'Generate analysis pass ' . $passes,
+                );
+                $progressBar?->start();
+
+                $generatedClasses = [];
+                $generatedPhpClasses = [];
+
+                foreach ($currentCandidates as $candidate) {
+                    $candidateKey = $candidate->identityKey();
+                    $classData = $preparedClassDataByClass[$candidateKey] ?? null;
+                    if (!is_array($classData)) {
+                        $errorsByClass[$candidateKey] = [
+                            'module' => $candidate->module,
+                            'class' => $candidate->className,
+                            'header' => $candidate->parseHeader,
+                            'reason_code' => 'missing_class_data',
+                            'reason_message' => 'Prepared class data is missing from the class cache.',
+                        ];
+                        $progressBar?->advance();
+                        continue;
+                    }
+
+                    $availableClasses = array_values(array_unique([
+                        ...$currentAllowedClasses,
+                        ...$importedAvailableClasses,
+                    ]));
+                    sort($availableClasses);
+
+                    $result = $generationService->generateFromPreparedData(
+                        $classData,
+                        $candidate->parseHeader,
+                        $availableClasses,
+                        $allPreparedClassData,
+                        $importedAbi !== null,
+                        $enumRegistry,
+                    );
+                    unset($errorsByClass[$candidateKey]);
+
+                    if ($result->status === 'ok' && $result->phpClass !== null) {
+                        $generatedClasses[] = $candidateKey;
+                        $generatedPhpClasses[$candidateKey] = $this->withResolvedNativeIncludes(
+                            $result->phpClass,
+                            $candidate,
+                        );
+                        $payload = $result->toArray();
+                        $rawGeneratedClassParents[$candidateKey] = is_string($payload['parent_class'] ?? null)
+                            ? $payload['parent_class']
+                            : null;
+                        $rawGeneratedClassDependencies[$candidateKey] = array_values(array_filter(
+                            array_map(
+                                static fn(mixed $value): string => is_string($value) ? $value : '',
+                                $payload['class_dependencies'] ?? [],
+                            ),
+                            static fn(string $value): bool => $value !== '',
+                        ));
+                        $generatedClassHeaders[$candidateKey] = $candidate->parseHeader;
+                        $generatedClassModules[$candidateKey] = $candidate->module;
+                        unset($skippedByClass[$candidateKey]);
+                    } elseif ($result->status === 'skipped') {
+                        $skippedByClass[$candidateKey] = [
                             'module' => $candidateModules[$candidateKey] ?? null,
                             'class' => $result->className,
-                        ] + $skippedMethod;
+                            'header' => $result->headerPath,
+                            'reason_code' => $result->reasonCode,
+                            'reason_message' => $result->reasonMessage,
+                        ];
+                    } else {
+                        $errorsByClass[$candidateKey] = [
+                            'module' => $candidate->module,
+                            'class' => $candidate->className,
+                            'header' => $candidate->parseHeader,
+                            'reason_code' => 'generation_failed',
+                            'reason_message' => 'Class generation analysis failed.',
+                        ];
                     }
-                } else {
-                    unset($skippedMethodsByClass[$candidateKey]);
+
+                    if ($result->status === 'ok') {
+                        $skippedMethodsByClass[$candidateKey] = [];
+                        foreach ($result->skippedMethods as $skippedMethod) {
+                            $skippedMethodsByClass[$candidateKey][] = [
+                                'module' => $candidateModules[$candidateKey] ?? null,
+                                'class' => $result->className,
+                            ] + $skippedMethod;
+                        }
+                    } else {
+                        unset($skippedMethodsByClass[$candidateKey]);
+                    }
+
+                    $progressBar?->advance();
                 }
 
-                $progressBar?->advance();
-            }
-
-            if ($progressBar !== null) {
-                $progressBar->finish();
-                $output->write(PHP_EOL);
-            }
-
-            sort($generatedClasses);
-            $stable = $generatedClasses === $currentAllowedClasses;
-
-            $nextCandidates = [];
-            foreach ($currentCandidates as $candidate) {
-                if (in_array($candidate->identityKey(), $generatedClasses, true)) {
-                    $nextCandidates[] = $candidate;
+                if ($progressBar !== null) {
+                    $progressBar->finish();
+                    $output->write(PHP_EOL);
                 }
-            }
 
-            $currentCandidates = $nextCandidates;
-            $currentAllowedClasses = $generatedClasses;
-        } while (!$stable && $errorsByClass === [] && $currentCandidates !== []);
+                sort($generatedClasses);
+                $stable = $generatedClasses === $currentAllowedClasses;
+
+                $nextCandidates = [];
+                foreach ($currentCandidates as $candidate) {
+                    if (in_array($candidate->identityKey(), $generatedClasses, true)) {
+                        $nextCandidates[] = $candidate;
+                    }
+                }
+
+                return [
+                    'state' => [
+                        'current_candidates' => $nextCandidates,
+                        'current_allowed_classes' => $generatedClasses,
+                    ],
+                    'changed' => !$stable,
+                    'has_errors' => $errorsByClass !== [],
+                    'is_empty' => $nextCandidates === [],
+                ];
+            },
+        );
+
+        /** @var array{current_candidates: list<HeaderCandidate>, current_allowed_classes: list<string>} $resolvedState */
+        $resolvedState = $resolved['state'];
+        $currentCandidates = $resolvedState['current_candidates'];
+        $currentAllowedClasses = $resolvedState['current_allowed_classes'];
+        $passes = $resolved['passes'];
 
         $syntheticClasses = $this->synthesizeListWrapperClasses(
             $generatedPhpClasses,
