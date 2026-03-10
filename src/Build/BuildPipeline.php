@@ -182,6 +182,7 @@ class BuildPipeline
             $request->jobs,
             $output,
             $request->extensionName,
+            $classStructures['signature_dependency_types_by_class'],
             $request->importedAbi?->availableClasses ?? [],
         );
 

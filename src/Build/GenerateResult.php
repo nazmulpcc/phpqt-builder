@@ -17,6 +17,7 @@ readonly class GenerateResult
         public string $headerPath,
         public ?string $candidateKey = null,
         public ?array $classData = null,
+        public array $signatureDependencyTypes = [],
         public ?string $parentClassName = null,
         public array $classDependencies = [],
         public array $generatedFiles = [],
@@ -38,6 +39,13 @@ readonly class GenerateResult
             headerPath: (string) ($payload['header'] ?? ''),
             candidateKey: is_string($payload['task_key'] ?? null) ? $payload['task_key'] : null,
             classData: is_array($payload['class_data'] ?? null) ? $payload['class_data'] : null,
+            signatureDependencyTypes: array_values(array_filter(
+                array_map(
+                    static fn(mixed $value): string => is_string($value) ? trim($value) : '',
+                    $payload['signature_dependency_types'] ?? [],
+                ),
+                static fn(string $value): bool => $value !== '',
+            )),
             parentClassName: is_string($payload['parent_class'] ?? null) ? $payload['parent_class'] : null,
             classDependencies: array_values(array_filter(
                 array_map(
@@ -57,7 +65,7 @@ readonly class GenerateResult
 
     public static function error(string $className, string $headerPath, string $reasonMessage, string $stderr = ''): self
     {
-        return new self('error', $className, $headerPath, null, null, null, [], [], [], [], 'worker_error', $reasonMessage, $stderr);
+        return new self('error', $className, $headerPath, null, null, [], null, [], [], [], [], 'worker_error', $reasonMessage, $stderr);
     }
 
     public function isOk(): bool

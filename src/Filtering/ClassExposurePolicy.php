@@ -60,6 +60,11 @@ class ClassExposurePolicy
 
     public function decideCandidate(HeaderCandidate $candidate): ExposureDecision
     {
+        $qualified = is_string($candidate->qualifiedClassName) ? trim($candidate->qualifiedClassName) : '';
+        if ($qualified !== '' && str_starts_with($qualified, 'QtPrivate::')) {
+            return ExposureDecision::skip('class_filtered', sprintf('Class %s is in internal namespace QtPrivate.', $qualified));
+        }
+
         return $this->decideClassName($candidate->className);
     }
 

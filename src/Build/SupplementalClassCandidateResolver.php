@@ -13,6 +13,12 @@ class SupplementalClassCandidateResolver
 {
     /** @var array<string, list<string>> */
     private array $includeGraphCache = [];
+    /** @var array<string, QtClassInspector> */
+    private array $inspectorsByIncludeSignature = [];
+    /** @var array<string, string|null> */
+    private array $classHeaderLookupCache = [];
+    /** @var array<string, string|null> */
+    private array $directHeaderLookupCache = [];
 
     /**
      * @param list<string> $requestedModules
@@ -31,6 +37,9 @@ class SupplementalClassCandidateResolver
         if (!$this->looksLikeClassName($missingClass)) {
             return null;
         }
+        if (str_starts_with($missingClass, 'QtPrivate::')) {
+            return null;
+        }
 
         $shortName = CppName::unqualify($missingClass);
         if (isset($knownClasses[$missingClass]) || isset($knownClasses[$shortName])) {
@@ -38,6 +47,25 @@ class SupplementalClassCandidateResolver
         }
 
         $requestedSet = array_fill_keys($requestedModules, true);
+
+        $directHeader = $this->locateDirectClassHeader($shortName, $includePaths);
+        if ($directHeader !== null) {
+            $module = $this->moduleForHeaderPath($directHeader, $fromCandidate->module);
+            if (isset($requestedSet[$module])) {
+                return new SupplementalClassCandidate(
+                    candidate: new HeaderCandidate(
+                        module: $module,
+                        className: $shortName,
+                        publicHeader: $directHeader,
+                        parseHeader: $directHeader,
+                        qualifiedClassName: str_contains($missingClass, '::') ? $missingClass : null,
+                    ),
+                    discoveredFromClass: $fromCandidate->className,
+                    discoveredFromHeader: $fromCandidate->parseHeader,
+                    triggerReason: $triggerReason,
+                );
+            }
+        }
 
         foreach ($this->candidateHeaders($fromCandidate->parseHeader, $includePaths) as $headerPath) {
             $definitionHeader = $this->locateClassDefinitionHeader($headerPath, $missingClass, $includePaths);
@@ -89,9 +117,17 @@ class SupplementalClassCandidateResolver
      */
     private function locateClassDefinitionHeader(string $headerPath, string $className, array $includePaths): ?string
     {
-        $inspector = new QtClassInspector(new ClangArgumentBuilder($includePaths));
+        $includeSignature = $this->includePathSignature($includePaths);
+        $cacheKey = $includeSignature . '|' . $headerPath . '|' . $className;
+        if (array_key_exists($cacheKey, $this->classHeaderLookupCache)) {
+            return $this->classHeaderLookupCache[$cacheKey];
+        }
 
-        return $inspector->locateClassHeader($headerPath, $className);
+        $inspector = $this->inspectorForIncludePaths($includePaths);
+        $resolved = $inspector->locateClassHeader($headerPath, $className);
+        $this->classHeaderLookupCache[$cacheKey] = $resolved;
+
+        return $resolved;
     }
 
     /**
@@ -183,5 +219,58 @@ class SupplementalClassCandidateResolver
         }
 
         return $fallbackModule;
+    }
+
+    /**
+     * @param list<string> $includePaths
+     */
+    private function inspectorForIncludePaths(array $includePaths): QtClassInspector
+    {
+        $signature = $this->includePathSignature($includePaths);
+        if (!isset($this->inspectorsByIncludeSignature[$signature])) {
+            $this->inspectorsByIncludeSignature[$signature] = new QtClassInspector(new ClangArgumentBuilder($includePaths));
+        }
+
+        return $this->inspectorsByIncludeSignature[$signature];
+    }
+
+    /**
+     * @param list<string> $includePaths
+     */
+    private function includePathSignature(array $includePaths): string
+    {
+        return sha1(json_encode(array_values($includePaths), JSON_UNESCAPED_SLASHES) ?: '');
+    }
+
+    /**
+     * @param list<string> $includePaths
+     */
+    private function locateDirectClassHeader(string $shortName, array $includePaths): ?string
+    {
+        $includeSignature = $this->includePathSignature($includePaths);
+        $cacheKey = $includeSignature . '|' . $shortName;
+        if (array_key_exists($cacheKey, $this->directHeaderLookupCache)) {
+            return $this->directHeaderLookupCache[$cacheKey];
+        }
+
+        foreach ($includePaths as $includePath) {
+            if (!is_string($includePath) || $includePath === '' || str_starts_with($includePath, '-')) {
+                continue;
+            }
+
+            $candidates = [
+                rtrim($includePath, '/') . '/' . $shortName,
+                rtrim(dirname($includePath), '/') . '/' . $shortName,
+            ];
+
+            foreach ($candidates as $candidate) {
+                $real = realpath($candidate);
+                if ($real !== false && is_file($real)) {
+                    return $this->directHeaderLookupCache[$cacheKey] = $real;
+                }
+            }
+        }
+
+        return $this->directHeaderLookupCache[$cacheKey] = null;
     }
 }

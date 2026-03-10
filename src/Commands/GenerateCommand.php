@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace QtBuilder\Commands;
 
 use QtBuilder\Build\ClassGenerationService;
+use QtBuilder\Build\SignatureDependencyCollector;
 use QtBuilder\CodeGen\ExtensionGenerator;
 use QtBuilder\Contracts\SystemInformation;
 use QtBuilder\Parsing\ClassDefinitionBuilder;
@@ -192,6 +193,13 @@ class GenerateCommand extends Command
         $taskKey = is_string($taskKey) && $taskKey !== '' ? $taskKey : null;
         if ($workerMode === 'facts') {
             $payload = $service->prepareDiscoveryFacts($headerPath, $className, $includePaths);
+            $payload['signature_dependency_types'] = [];
+            if (($payload['status'] ?? 'error') === 'ok' && is_array($payload['class_data'] ?? null)) {
+                $payload['signature_dependency_types'] = (new SignatureDependencyCollector())->collectFromClassData(
+                    $payload['class_data'],
+                    (string) ($payload['class'] ?? $className),
+                );
+            }
             if ($taskKey !== null) {
                 $payload['task_key'] = $taskKey;
             }

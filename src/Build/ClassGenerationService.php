@@ -639,6 +639,17 @@ class ClassGenerationService
             ];
         }
 
+        $qualifiedName = is_string($classData['qualified_name'] ?? null) ? trim((string) $classData['qualified_name']) : '';
+        if ($qualifiedName !== '' && str_starts_with($qualifiedName, 'QtPrivate::')) {
+            return [
+                'status' => 'skipped',
+                'class' => $className,
+                'header' => $headerPath,
+                'reason_code' => 'class_filtered',
+                'reason_message' => sprintf('Class %s is in internal namespace QtPrivate.', $qualifiedName),
+            ];
+        }
+
         $lifecycle = $this->analyzeLifecycleCapabilities($headerPath, $className, (bool) ($classData['is_struct'] ?? false));
         $classData['is_copy_constructible'] = $lifecycle['is_copy_constructible'];
         $classData['has_public_constructor'] = $lifecycle['has_public_constructor'];
@@ -771,6 +782,8 @@ class ClassGenerationService
             $allowedClasses,
             $preparedClassDataByClass,
             $virtualFilter['selected_methods'],
+            $classTypeResolver,
+            $resolutionContext,
         );
         $classData['methods'] = array_values(array_filter(
             $virtualFilter['selected_methods'],
@@ -1078,6 +1091,8 @@ class ClassGenerationService
         array $allowedClasses,
         array $preparedClassDataByClass,
         array $selectedMethods,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
     ): array {
         $signals = [];
 
@@ -1088,8 +1103,8 @@ class ClassGenerationService
         }
 
         $className = (string) ($classData['name'] ?? '');
-        $classTypeResolver = CppClassTypeResolver::fromPreparedClassData($preparedClassDataByClass + [$className => $classData]);
-        $resolutionContext = TypeResolutionContext::fromClassData($classData);
+        $classTypeResolver ??= CppClassTypeResolver::fromPreparedClassData($preparedClassDataByClass + [$className => $classData]);
+        $resolutionContext ??= TypeResolutionContext::fromClassData($classData);
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
         if (
             $parentClass === null

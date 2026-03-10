@@ -5,19 +5,19 @@ declare(strict_types=1);
 namespace QtBuilder\Build;
 
 use QtBuilder\Filtering\ClassExposurePolicy;
-use QtBuilder\Parsing\ContainerTypeParser;
-use QtBuilder\Parsing\CppToPhpTypeMapper;
 use QtBuilder\Qt\QtInstallation;
 use QtBuilder\Scanning\HeaderCandidate;
 use QtBuilder\Scanning\ModuleHeaderScanner;
+use QtBuilder\Support\CppClassTypeResolver;
 use QtBuilder\Support\CppName;
 use QtBuilder\Support\ModuleNamespace;
+use QtBuilder\Support\TypeResolutionContext;
 use Symfony\Component\Console\Helper\ProgressBar;
 use Symfony\Component\Console\Output\OutputInterface;
 
 class BuildDiscoveryService
 {
-    private const CLASS_CACHE_SCHEMA_VERSION = 5;
+    private const CLASS_CACHE_SCHEMA_VERSION = 7;
 
     public function __construct(
         private readonly GenerateWorkerPool $workerPool = new GenerateWorkerPool(__DIR__ . '/../..'),
@@ -25,6 +25,7 @@ class BuildDiscoveryService
         private readonly ClassExposurePolicy $classPolicy = new ClassExposurePolicy(),
         private readonly ClassGenerationService $generationService = new ClassGenerationService(),
         private readonly SupplementalClassCandidateResolver $supplementalResolver = new SupplementalClassCandidateResolver(),
+        private readonly SignatureDependencyCollector $signatureDependencyCollector = new SignatureDependencyCollector(),
     ) {}
 
     /**
@@ -77,6 +78,7 @@ class BuildDiscoveryService
             $jobs,
             $output,
             $extensionName,
+            $classStructures['signature_dependency_types_by_class'],
             $importedAbi?->availableClasses ?? [],
         );
 
@@ -257,6 +259,13 @@ class BuildDiscoveryService
             $acceptedCandidates[] = new HeaderCandidate($module, $className, $publicHeader, $parseHeader, $qualifiedName, $generationId);
         }
 
+        foreach ($acceptedCandidates as $candidate) {
+            $qualified = is_string($candidate->qualifiedClassName) ? trim($candidate->qualifiedClassName) : '';
+            if ($qualified !== '' && str_starts_with($qualified, 'QtPrivate::')) {
+                return null;
+            }
+        }
+
         $skippedClasses = array_values(array_filter(
             $decoded['skipped_classes'] ?? [],
             static fn(mixed $value): bool => is_array($value),
@@ -334,6 +343,7 @@ class BuildDiscoveryService
      * @param array<string, array<string, mixed>> $preparedClassDataByClass
      * @param list<string> $modules
      * @param list<string> $includePaths
+     * @param array<string, list<string>> $signatureDependencyTypesByClass
      * @param list<string> $importedAvailableClasses
      * @return array{
      *   accepted_candidates: list<HeaderCandidate>,
@@ -353,6 +363,7 @@ class BuildDiscoveryService
         int $jobs,
         OutputInterface $output,
         string $extensionName,
+        array $signatureDependencyTypesByClass = [],
         array $importedAvailableClasses = [],
     ): array {
         /** @var array<string, HeaderCandidate> $candidateMap */
@@ -367,6 +378,15 @@ class BuildDiscoveryService
         $errorsByClass = [];
         /** @var array<string, SupplementalClassCandidate> $supplementalCandidates */
         $supplementalCandidates = [];
+        /** @var array<string, list<string>> $dependencyTypeCache */
+        $dependencyTypeCache = $signatureDependencyTypesByClass;
+        /** @var array<string, bool> $pendingParentScan */
+        $pendingParentScan = array_fill_keys(array_keys($candidateMap), true);
+        /** @var array<string, bool> $pendingTypeScan */
+        $pendingTypeScan = array_fill_keys(array_keys($candidateMap), true);
+        $classTypeResolver = CppClassTypeResolver::fromPreparedClassData($preparedClassDataByClass);
+        $parentScanPass = 0;
+        $typeScanPass = 0;
 
         do {
             $knownClassNames = array_merge(
@@ -375,6 +395,12 @@ class BuildDiscoveryService
                 array_values($importedAvailableClasses),
                 array_keys($supplementalCandidates),
             );
+            foreach ($supplementalCandidates as $supplementalCandidate) {
+                $knownClassNames[] = $supplementalCandidate->candidate->className;
+                if ($supplementalCandidate->candidate->qualifiedClassName !== null) {
+                    $knownClassNames[] = $supplementalCandidate->candidate->qualifiedClassName;
+                }
+            }
             foreach ($candidateMap as $candidate) {
                 $knownClassNames[] = $candidate->className;
                 if ($candidate->qualifiedClassName !== null) {
@@ -385,55 +411,122 @@ class BuildDiscoveryService
 
             /** @var array<string, SupplementalClassCandidate> $queuedThisPass */
             $queuedThisPass = [];
-            foreach ($candidateMap as $className => $candidate) {
-                $classData = $preparedClassDataByClass[$className] ?? null;
-                if (!is_array($classData)) {
-                    continue;
+            $allowedClassLookup = array_fill_keys(array_values(array_unique(array_merge(
+                array_keys($candidateMap),
+                array_values($importedAvailableClasses),
+            ))), true);
+
+            if ($pendingParentScan !== []) {
+                $parentScanPass++;
+                /** @var array<string, HeaderCandidate> $parentScanCandidates */
+                $parentScanCandidates = [];
+                foreach (array_keys($pendingParentScan) as $candidateKey) {
+                    unset($pendingParentScan[$candidateKey]);
+                    if (isset($candidateMap[$candidateKey])) {
+                        $parentScanCandidates[$candidateKey] = $candidateMap[$candidateKey];
+                    }
                 }
 
-                $allowedClasses = array_values(array_unique(array_merge(
-                    array_keys($candidateMap),
-                    array_values($importedAvailableClasses),
-                )));
-                sort($allowedClasses);
-
-                $result = $this->generationService->generateFromPreparedData(
-                    $classData,
-                    $candidate->parseHeader,
-                    $allowedClasses,
-                    $preparedClassDataByClass,
-                    $importedAvailableClasses !== [],
-                    includePaths: $includePaths,
+                $scanProgress = $this->createProgressBar(
+                    $output,
+                    count($parentScanCandidates),
+                    'qt_discovery',
+                    'Supplemental scan pass ' . $parentScanPass,
                 );
+                $scanProgress?->start();
 
-                $missingClass = $this->supplementalMissingClass($result->reasonCode, $result->reasonMessage);
-                if ($missingClass === null || isset($knownClasses[$missingClass])) {
-                    continue;
+                foreach ($parentScanCandidates as $className => $candidate) {
+                    $classData = $preparedClassDataByClass[$className] ?? null;
+                    if (!is_array($classData)) {
+                        $scanProgress?->advance();
+                        continue;
+                    }
+
+                    $missingClass = $this->missingSupplementalParentClass(
+                        $classData,
+                        $allowedClassLookup,
+                        $classTypeResolver,
+                    );
+                    if ($missingClass === null || isset($knownClasses[$missingClass]) || isset($knownClasses[CppName::unqualify($missingClass)])) {
+                        $scanProgress?->advance();
+                        continue;
+                    }
+
+                    $supplemental = $this->supplementalResolver->resolve(
+                        $missingClass,
+                        $candidate,
+                        $modules,
+                        $includePaths,
+                        $knownClasses,
+                        'unsupported_parent_class',
+                    );
+                    if ($supplemental === null) {
+                        $scanProgress?->advance();
+                        continue;
+                    }
+
+                    $queuedThisPass[$supplemental->candidate->identityKey()] = $supplemental;
+                    $knownClasses[$supplemental->candidate->identityKey()] = true;
+                    $knownClasses[$supplemental->candidate->className] = true;
+                    if ($supplemental->candidate->qualifiedClassName !== null) {
+                        $knownClasses[$supplemental->candidate->qualifiedClassName] = true;
+                    }
+                    $scanProgress?->advance();
                 }
 
-                $supplemental = $this->supplementalResolver->resolve(
-                    $missingClass,
-                    $candidate,
-                    $modules,
-                    $includePaths,
-                    $knownClasses,
-                    (string) ($result->reasonCode ?? 'missing_dependency'),
-                );
-                if ($supplemental === null) {
-                    continue;
+                if ($scanProgress !== null) {
+                    $scanProgress->finish();
+                    $output->write(PHP_EOL);
                 }
-
-                $queuedThisPass[$supplemental->candidate->identityKey()] = $supplemental;
-                $knownClasses[$supplemental->candidate->identityKey()] = true;
             }
 
-            if ($queuedThisPass === []) {
-                foreach ($this->discoverTypeDrivenSupplementalCandidates(
-                    $candidateMap,
+            if ($queuedThisPass === [] && $pendingTypeScan !== []) {
+                $typeScanPass++;
+                /** @var array<string, HeaderCandidate> $typeScanCandidates */
+                $typeScanCandidates = [];
+                foreach (array_keys($pendingTypeScan) as $candidateKey) {
+                    unset($pendingTypeScan[$candidateKey]);
+                    if (isset($candidateMap[$candidateKey])) {
+                        $typeScanCandidates[$candidateKey] = $candidateMap[$candidateKey];
+                    }
+                }
+
+                $typeScanProgress = $this->createProgressBar(
+                    $output,
+                    count($typeScanCandidates),
+                    'qt_discovery',
+                    'Type-driven supplemental scan pass ' . $typeScanPass,
+                );
+                $typeScanProgress?->start();
+                $missingTypeOrigins = $this->collectTypeDrivenMissingDependencies(
+                    $typeScanCandidates,
                     $preparedClassDataByClass,
+                    $knownClasses,
+                    $dependencyTypeCache,
+                    static function () use ($typeScanProgress): void {
+                        $typeScanProgress?->advance();
+                    },
+                );
+                if ($typeScanProgress !== null) {
+                    $typeScanProgress->finish();
+                    $output->write(PHP_EOL);
+                }
+
+                $typeResolveProgress = $this->createProgressBar(
+                    $output,
+                    count($missingTypeOrigins),
+                    'qt_discovery',
+                    'Type-driven dependency resolution pass ' . $typeScanPass,
+                );
+                $typeResolveProgress?->start();
+                foreach ($this->resolveTypeDrivenSupplementalCandidates(
+                    $missingTypeOrigins,
                     $modules,
                     $includePaths,
                     $knownClasses,
+                    static function () use ($typeResolveProgress): void {
+                        $typeResolveProgress?->advance();
+                    },
                 ) as $supplemental) {
                     $queuedThisPass[$supplemental->candidate->identityKey()] = $supplemental;
                     $knownClasses[$supplemental->candidate->identityKey()] = true;
@@ -442,10 +535,18 @@ class BuildDiscoveryService
                         $knownClasses[$supplemental->candidate->qualifiedClassName] = true;
                     }
                 }
+                if ($typeResolveProgress !== null) {
+                    $typeResolveProgress->finish();
+                    $output->write(PHP_EOL);
+                }
             }
 
             if ($queuedThisPass === []) {
-                break;
+                if ($pendingParentScan === [] && $pendingTypeScan === []) {
+                    break;
+                }
+
+                continue;
             }
 
             $output->writeln(sprintf(
@@ -467,11 +568,18 @@ class BuildDiscoveryService
             );
 
             foreach ($prepared['accepted_candidates'] as $candidate) {
-                $candidateMap[$candidate->identityKey()] = $candidate;
+                $candidateKey = $candidate->identityKey();
+                $candidateMap[$candidateKey] = $candidate;
+                $pendingParentScan[$candidateKey] = true;
+                $pendingTypeScan[$candidateKey] = true;
             }
 
             foreach ($prepared['prepared_class_data'] as $className => $classData) {
                 $preparedClassDataByClass[$className] = $classData;
+            }
+
+            foreach ($prepared['signature_dependency_types_by_class'] as $className => $dependencyTypes) {
+                $dependencyTypeCache[$className] = $dependencyTypes;
             }
 
             foreach ($prepared['skipped_classes'] as $entry) {
@@ -488,8 +596,12 @@ class BuildDiscoveryService
                 }
             }
 
-            foreach ($queuedThisPass as $className => $candidate) {
+            foreach ($queuedThisPass as $candidate) {
                 $supplementalCandidates[$candidate->identityKey()] = $candidate;
+            }
+
+            if ($prepared['prepared_class_data'] !== []) {
+                $classTypeResolver = CppClassTypeResolver::fromPreparedClassData($preparedClassDataByClass);
             }
         } while ($errorsByClass === []);
 
@@ -507,6 +619,34 @@ class BuildDiscoveryService
                 $supplementalCandidates,
             )),
         ];
+    }
+
+    /**
+     * @param array<string, mixed> $classData
+     * @param array<string, bool> $allowedClasses
+     */
+    private function missingSupplementalParentClass(
+        array $classData,
+        array $allowedClasses,
+        CppClassTypeResolver $classTypeResolver,
+    ): ?string {
+        $parentClass = is_string($classData['bases'][0] ?? null) ? trim($classData['bases'][0]) : '';
+        if ($parentClass === '' || $parentClass === 'QIODeviceBase') {
+            return null;
+        }
+
+        $context = TypeResolutionContext::fromClassData($classData);
+        $resolvedParent = $classTypeResolver->canonicalizeType($parentClass, $context);
+
+        if (
+            isset($allowedClasses[$resolvedParent])
+            || isset($allowedClasses[$parentClass])
+            || isset($allowedClasses[CppName::unqualify($resolvedParent)])
+        ) {
+            return null;
+        }
+
+        return $resolvedParent !== '' ? $resolvedParent : $parentClass;
     }
 
     /**
@@ -582,6 +722,7 @@ class BuildDiscoveryService
      * @return array{
      *   accepted_candidates: list<HeaderCandidate>,
      *   prepared_class_data: array<string, array<string, mixed>>,
+     *   signature_dependency_types_by_class: array<string, list<string>>,
      *   skipped_classes: list<array<string, string|null>>,
      *   errors: list<array<string, string|null>>
      * }
@@ -601,6 +742,8 @@ class BuildDiscoveryService
         $skippedByClass = [];
         /** @var array<string, array{module: string|null, class: string, header: string, reason_code: string|null, reason_message: string|null}> $errorsByClass */
         $errorsByClass = [];
+        /** @var array<string, list<string>> $signatureDependencyTypesByClass */
+        $signatureDependencyTypesByClass = [];
         $cacheHits = 0;
         $cacheMisses = [];
         $cacheMissesByClass = [];
@@ -613,12 +756,19 @@ class BuildDiscoveryService
                 continue;
             }
 
+            if (!$this->hasSignatureDependencyTypesPayload($cachedPayload)) {
+                $cacheMisses[] = $candidate;
+                $cacheMissesByClass[$candidate->identityKey()] = $candidate;
+                continue;
+            }
+
             $cacheHits++;
             $this->recordClassStructurePayload(
                 $candidate,
                 $cachedPayload,
                 $preparedCandidates,
                 $preparedClassDataByClass,
+                $signatureDependencyTypesByClass,
                 $skippedByClass,
                 $errorsByClass,
             );
@@ -689,6 +839,7 @@ class BuildDiscoveryService
                     'header' => $result->headerPath,
                     'task_key' => $result->candidateKey,
                     'class_data' => $result->classData,
+                    'signature_dependency_types' => $result->signatureDependencyTypes,
                     'reason_code' => $result->reasonCode,
                     'reason_message' => $result->reasonMessage,
                 ];
@@ -699,6 +850,7 @@ class BuildDiscoveryService
                     $payload,
                     $preparedCandidates,
                     $preparedClassDataByClass,
+                    $signatureDependencyTypesByClass,
                     $skippedByClass,
                     $errorsByClass,
                 );
@@ -707,10 +859,12 @@ class BuildDiscoveryService
 
         ksort($preparedCandidates);
         ksort($preparedClassDataByClass);
+        ksort($signatureDependencyTypesByClass);
 
         return [
             'accepted_candidates' => array_values($preparedCandidates),
             'prepared_class_data' => $preparedClassDataByClass,
+            'signature_dependency_types_by_class' => $signatureDependencyTypesByClass,
             'skipped_classes' => array_values($skippedByClass),
             'errors' => array_values($errorsByClass),
         ];
@@ -840,187 +994,113 @@ class BuildDiscoveryService
         ];
     }
 
-    private function supplementalMissingClass(?string $reasonCode, ?string $reasonMessage): ?string
-    {
-        if (!in_array($reasonCode, ['unsupported_parent_class', 'unsupported_external_module_dependency'], true)) {
-            return null;
-        }
-
-        if (!is_string($reasonMessage) || preg_match('/^Parent class\s+(Q[A-Z][A-Za-z0-9_]*)\b/', $reasonMessage, $matches) !== 1) {
-            return null;
-        }
-
-        return $matches[1];
-    }
-
     /**
-     * Discover supplemental candidates by scanning class signatures for
-     * referenced class-like dependency types (container element/key/value
-     * types and owner-qualified nested types).
+     * Collect unresolved dependency types from class signatures (container
+     * element/key/value types and owner-qualified nested types).
      *
      * @param array<string, HeaderCandidate> $candidateMap
      * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @param array<string, bool> $knownClasses
+     * @param array<string, list<string>> $dependencyTypeCache
+     * @return array<string, HeaderCandidate>
+     */
+    private function collectTypeDrivenMissingDependencies(
+        array $candidateMap,
+        array $preparedClassDataByClass,
+        array $knownClasses,
+        array &$dependencyTypeCache = [],
+        ?callable $onCandidateScanned = null,
+    ): array {
+        /** @var array<string, HeaderCandidate> $missingTypeOrigins */
+        $missingTypeOrigins = [];
+
+        foreach ($candidateMap as $candidateKey => $candidate) {
+            $classData = $preparedClassDataByClass[$candidateKey] ?? null;
+            if (!is_array($classData)) {
+                $onCandidateScanned?->__invoke();
+                continue;
+            }
+
+            $dependencyTypes = $dependencyTypeCache[$candidateKey] ?? null;
+            if ($dependencyTypes === null) {
+                $dependencyTypes = $this->signatureDependencyCollector->collectFromClassData(
+                    $classData,
+                    is_string($classData['name'] ?? null) ? (string) $classData['name'] : $candidate->className,
+                );
+                $dependencyTypeCache[$candidateKey] = $dependencyTypes;
+            }
+
+            foreach ($dependencyTypes as $dependencyType) {
+                // Defensive pruning for stale cached payloads generated before
+                // owner-qualified fallback removal (e.g. `QWidget::QString`).
+                if ($candidate->className !== '' && str_starts_with($dependencyType, $candidate->className . '::')) {
+                    continue;
+                }
+
+                if (isset($known[$dependencyType]) || isset($known[CppName::unqualify($dependencyType)])) {
+                    continue;
+                }
+
+                if (!isset($missingTypeOrigins[$dependencyType])) {
+                    $missingTypeOrigins[$dependencyType] = $candidate;
+                }
+            }
+
+            $onCandidateScanned?->__invoke();
+        }
+
+        return $missingTypeOrigins;
+    }
+
+    /**
+     * @param array<string, HeaderCandidate> $missingTypeOrigins
      * @param list<string> $requestedModules
      * @param list<string> $includePaths
      * @param array<string, bool> $knownClasses
      * @return list<SupplementalClassCandidate>
      */
-    private function discoverTypeDrivenSupplementalCandidates(
-        array $candidateMap,
-        array $preparedClassDataByClass,
+    private function resolveTypeDrivenSupplementalCandidates(
+        array $missingTypeOrigins,
         array $requestedModules,
         array $includePaths,
         array $knownClasses,
+        ?callable $onDependencyResolved = null,
     ): array {
         /** @var array<string, SupplementalClassCandidate> $queued */
         $queued = [];
         $known = $knownClasses;
 
-        foreach ($candidateMap as $candidateKey => $candidate) {
-            $classData = $preparedClassDataByClass[$candidateKey] ?? null;
-            if (!is_array($classData)) {
+        foreach ($missingTypeOrigins as $dependencyType => $originCandidate) {
+            if (isset($known[$dependencyType]) || isset($known[CppName::unqualify($dependencyType)])) {
+                $onDependencyResolved?->__invoke();
                 continue;
             }
 
-            foreach ($this->candidateDependencyTypesFromClassData($classData, $candidate->className) as $dependencyType) {
-                if (isset($known[$dependencyType]) || isset($known[CppName::unqualify($dependencyType)])) {
-                    continue;
-                }
-
-                $supplemental = $this->supplementalResolver->resolve(
-                    $dependencyType,
-                    $candidate,
-                    $requestedModules,
-                    $includePaths,
-                    $known,
-                    'unsupported_signature_dependency',
-                );
-                if ($supplemental === null) {
-                    continue;
-                }
-
-                $identity = $supplemental->candidate->identityKey();
-                $queued[$identity] = $supplemental;
-                $known[$identity] = true;
-                $known[$supplemental->candidate->className] = true;
-                if ($supplemental->candidate->qualifiedClassName !== null) {
-                    $known[$supplemental->candidate->qualifiedClassName] = true;
-                }
+            $supplemental = $this->supplementalResolver->resolve(
+                $dependencyType,
+                $originCandidate,
+                $requestedModules,
+                $includePaths,
+                $known,
+                'unsupported_signature_dependency',
+            );
+            if ($supplemental === null) {
+                $onDependencyResolved?->__invoke();
+                continue;
             }
+
+            $identity = $supplemental->candidate->identityKey();
+            $queued[$identity] = $supplemental;
+            $known[$identity] = true;
+            $known[$supplemental->candidate->className] = true;
+            if ($supplemental->candidate->qualifiedClassName !== null) {
+                $known[$supplemental->candidate->qualifiedClassName] = true;
+            }
+
+            $onDependencyResolved?->__invoke();
         }
 
         return array_values($queued);
-    }
-
-    /**
-     * @param array<string, mixed> $classData
-     * @return list<string>
-     */
-    private function candidateDependencyTypesFromClassData(array $classData, string $ownerClass): array
-    {
-        $types = [];
-        foreach (['methods', 'signals'] as $bucket) {
-            $methods = $classData[$bucket] ?? [];
-            if (!is_array($methods)) {
-                continue;
-            }
-
-            foreach ($methods as $method) {
-                if (!is_array($method)) {
-                    continue;
-                }
-
-                if (is_string($method['return_type'] ?? null)) {
-                    foreach ($this->extractTypeDependencies((string) $method['return_type'], $ownerClass) as $dependency) {
-                        $types[$dependency] = true;
-                    }
-                }
-
-                $parameters = $method['parameters'] ?? [];
-                if (!is_array($parameters)) {
-                    continue;
-                }
-
-                foreach ($parameters as $parameter) {
-                    if (!is_array($parameter) || !is_string($parameter['type'] ?? null)) {
-                        continue;
-                    }
-
-                    foreach ($this->extractTypeDependencies((string) $parameter['type'], $ownerClass) as $dependency) {
-                        $types[$dependency] = true;
-                    }
-                }
-            }
-        }
-
-        return array_keys($types);
-    }
-
-    /**
-     * @return list<string>
-     */
-    private function extractTypeDependencies(string $cppType, string $ownerClass): array
-    {
-        static $parser;
-        static $mapper;
-        if (!$parser instanceof ContainerTypeParser) {
-            $parser = new ContainerTypeParser();
-        }
-        if (!$mapper instanceof CppToPhpTypeMapper) {
-            $mapper = new CppToPhpTypeMapper();
-        }
-
-        $normalized = $this->normalizeDependencyType($cppType);
-        if ($normalized === '') {
-            return [];
-        }
-
-        $container = $parser->parse($normalized);
-        if ($container !== null) {
-            $deps = [];
-            foreach (array_filter([$container->elementType, $container->keyType, $container->valueType]) as $memberType) {
-                foreach ($this->extractTypeDependencies((string) $memberType, $ownerClass) as $dependency) {
-                    $deps[$dependency] = true;
-                }
-            }
-
-            return array_keys($deps);
-        }
-
-        if (str_contains($normalized, '<') || str_starts_with($normalized, 'std::') || str_starts_with($normalized, 'QFlags<')) {
-            return [];
-        }
-
-        $phpType = $mapper->map($normalized);
-        if (in_array($phpType, ['int', 'float', 'bool', 'string', 'array', 'mixed', 'void'], true)) {
-            return [];
-        }
-
-        $candidates = [$normalized];
-        if (!str_contains($normalized, '::') && $ownerClass !== '') {
-            $candidates[] = $ownerClass . '::' . $normalized;
-        }
-
-        return array_values(array_unique($candidates));
-    }
-
-    private function normalizeDependencyType(string $cppType): string
-    {
-        $type = trim($cppType);
-        if ($type === '') {
-            return '';
-        }
-
-        $type = preg_replace('/\bconst\b/', '', $type) ?? $type;
-        $type = trim(preg_replace('/\s+/', ' ', $type) ?? $type);
-        $type = rtrim($type, '& ');
-        if (!str_contains($type, '<')) {
-            while (str_ends_with($type, '*')) {
-                $type = rtrim(substr($type, 0, -1));
-            }
-        }
-
-        return trim($type);
     }
 
     private function createProgressBar(OutputInterface $output, int $total, string $formatName, string $label): ?ProgressBar
@@ -1182,6 +1262,7 @@ class BuildDiscoveryService
     /**
      * @param array<string, HeaderCandidate> $preparedCandidates
      * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @param array<string, list<string>> $signatureDependencyTypesByClass
      * @param array<string, array{module: string|null, class: string, header: string, reason_code: string|null, reason_message: string|null}> $skippedByClass
      * @param array<string, array{module: string|null, class: string, header: string, reason_code: string|null, reason_message: string|null}> $errorsByClass
      * @param array<string, mixed> $payload
@@ -1191,6 +1272,7 @@ class BuildDiscoveryService
         array $payload,
         array &$preparedCandidates,
         array &$preparedClassDataByClass,
+        array &$signatureDependencyTypesByClass,
         array &$skippedByClass,
         array &$errorsByClass,
     ): void {
@@ -1204,6 +1286,7 @@ class BuildDiscoveryService
             $candidateKey = $resolvedCandidate->identityKey();
             $preparedCandidates[$candidateKey] = $resolvedCandidate;
             $preparedClassDataByClass[$candidateKey] = $payload['class_data'];
+            $signatureDependencyTypesByClass[$candidateKey] = $this->normalizeDependencyTypesPayload($payload['signature_dependency_types'] ?? []);
             unset($skippedByClass[$candidateKey], $errorsByClass[$candidateKey]);
 
             return;
@@ -1229,6 +1312,29 @@ class BuildDiscoveryService
             'reason_code' => 'class_structure_error',
             'reason_message' => 'Class structure facts could not be loaded.',
         ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function normalizeDependencyTypesPayload(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+
+        return array_values(array_filter(
+            array_map(static fn(mixed $item): string => is_string($item) ? trim($item) : '', $value),
+            static fn(string $item): bool => $item !== '',
+        ));
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     */
+    private function hasSignatureDependencyTypesPayload(array $payload): bool
+    {
+        return is_array($payload['signature_dependency_types'] ?? null);
     }
 
     private function writeJsonFile(string $path, mixed $payload, string $fallback): void
