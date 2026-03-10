@@ -18,6 +18,20 @@ it('converts multimap containers through pair-array semantics', function (): voi
         ->toContain('_qt_ret.insert(_qt_ret_key, _qt_ret_value);');
 });
 
+it('uses distinct key/value zend_string temporaries for pair-sequence string conversions', function (): void {
+    $bridge = new TypeBridge();
+
+    $fromPhp = $bridge->nativeReturnFromZvalSetup('array', 'QMultiHash<QByteArray, QByteArray>', '_zv');
+    $generated = implode("\n", $fromPhp['lines']);
+
+    expect($generated)->toContain('zend_string *_qt_ret_key_str = zval_get_string(_qt_ret_key_entry);')
+        ->toContain('zend_string_release(_qt_ret_key_str);')
+        ->toContain('zend_string *_qt_ret_value_str = zval_get_string(_qt_ret_value_entry);')
+        ->toContain('zend_string_release(_qt_ret_value_str);')
+        ->not->toContain('zend_string *_qt_ret_str = zval_get_string(_qt_ret_key_entry);')
+        ->not->toContain('zend_string *_qt_ret_str = zval_get_string(_qt_ret_value_entry);');
+});
+
 it('converts int128 values through decimal strings', function (): void {
     $bridge = new TypeBridge();
 

@@ -2710,7 +2710,8 @@ class TypeBridge
         $valueEntryVar = $nativeVarName . '_value_entry';
         $keyVar = $nativeVarName . '_key';
         $valueVar = $nativeVarName . '_value';
-        $stringVar = $nativeVarName . '_str';
+        $keyStringVar = $nativeVarName . '_key_str';
+        $valueStringVar = $nativeVarName . '_value_str';
 
         $lines = [
             sprintf('%s %s;', $containerType, $nativeVarName),
@@ -2749,9 +2750,9 @@ class TypeBridge
             $lines[] = '            zend_type_error("Expected pair key type string.");';
             $lines[] = '            ' . $failureStatement;
             $lines[] = '        }';
-            $lines[] = sprintf('        zend_string *%s = zval_get_string(%s);', $stringVar, $keyEntryVar);
-            $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($keyType), $keyVar, $this->phpStringToNativeExpr($keyType, $stringVar));
-            $lines[] = sprintf('        zend_string_release(%s);', $stringVar);
+            $lines[] = sprintf('        zend_string *%s = zval_get_string(%s);', $keyStringVar, $keyEntryVar);
+            $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($keyType), $keyVar, $this->phpStringToNativeExpr($keyType, $keyStringVar));
+            $lines[] = sprintf('        zend_string_release(%s);', $keyStringVar);
         }
 
         if ($valueType === 'QVariant') {
@@ -2764,9 +2765,9 @@ class TypeBridge
             $lines[] = '            zend_type_error("Expected pair value type string.");';
             $lines[] = '            ' . $failureStatement;
             $lines[] = '        }';
-            $lines[] = sprintf('        zend_string *%s = zval_get_string(%s);', $stringVar, $valueEntryVar);
-            $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($valueType), $valueVar, $this->phpStringToNativeExpr($valueType, $stringVar));
-            $lines[] = sprintf('        zend_string_release(%s);', $stringVar);
+            $lines[] = sprintf('        zend_string *%s = zval_get_string(%s);', $valueStringVar, $valueEntryVar);
+            $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($valueType), $valueVar, $this->phpStringToNativeExpr($valueType, $valueStringVar));
+            $lines[] = sprintf('        zend_string_release(%s);', $valueStringVar);
         } elseif (in_array($valuePhpType, ['int', 'float', 'bool'], true)) {
             $lines[] = sprintf('        if (!(%s)) {', $this->zvalTypeMatchExpr($valueEntryVar, $valuePhpType));
             $lines[] = sprintf('            zend_type_error("Expected pair value type %s.");', $valuePhpType);
@@ -2977,45 +2978,79 @@ class TypeBridge
     private function phpStringToInt128Expr(string $baseType, string $zendStringVar): string
     {
         if ($baseType === 'qint128') {
-            return sprintf(
-                '([&]() -> qint128 {'
-                . ' #if defined(QT_SUPPORTS_INT128)'
-                . ' const char *_qt_s = ZSTR_VAL(%1$s); size_t _qt_len = (size_t)ZSTR_LEN(%1$s); size_t _qt_i = 0; bool _qt_neg = false;'
-                . ' if (_qt_len > 0 && (_qt_s[0] == \'+\' || _qt_s[0] == \'-\')) { _qt_neg = (_qt_s[0] == \'-\'); _qt_i = 1; }'
-                . ' quint128 _qt_acc = 0;'
-                . ' for (; _qt_i < _qt_len; ++_qt_i) { const char _qt_c = _qt_s[_qt_i]; if (_qt_c < \'0\' || _qt_c > \'9\') { break; } _qt_acc = (_qt_acc * (quint128)10) + (quint128)(_qt_c - \'0\'); }'
-                . ' return _qt_neg ? -(qint128)_qt_acc : (qint128)_qt_acc;'
-                . ' #else'
-                . ' return (qint128)0;'
-                . ' #endif'
-                . ' })()',
-                $zendStringVar,
-            );
+            $template = <<<'CPP'
+([&]() -> qint128 {
+#if defined(QT_SUPPORTS_INT128)
+    const char *_qt_s = ZSTR_VAL({{ZSTR}});
+    size_t _qt_len = (size_t)ZSTR_LEN({{ZSTR}});
+    size_t _qt_i = 0;
+    bool _qt_neg = false;
+    if (_qt_len > 0 && (_qt_s[0] == '+' || _qt_s[0] == '-')) {
+        _qt_neg = (_qt_s[0] == '-');
+        _qt_i = 1;
+    }
+    quint128 _qt_acc = 0;
+    for (; _qt_i < _qt_len; ++_qt_i) {
+        const char _qt_c = _qt_s[_qt_i];
+        if (_qt_c < '0' || _qt_c > '9') {
+            break;
+        }
+        _qt_acc = (_qt_acc * (quint128)10) + (quint128)(_qt_c - '0');
+    }
+    return _qt_neg ? -(qint128)_qt_acc : (qint128)_qt_acc;
+#else
+    return (qint128)0;
+#endif
+})()
+CPP;
+
+            return str_replace('{{ZSTR}}', $zendStringVar, $template);
         }
 
-        return sprintf(
-            '([&]() -> quint128 {'
-            . ' #if defined(QT_SUPPORTS_INT128)'
-            . ' const char *_qt_s = ZSTR_VAL(%1$s); size_t _qt_len = (size_t)ZSTR_LEN(%1$s); size_t _qt_i = 0;'
-            . ' if (_qt_len > 0 && _qt_s[0] == \'+\') { _qt_i = 1; }'
-            . ' quint128 _qt_acc = 0;'
-            . ' for (; _qt_i < _qt_len; ++_qt_i) { const char _qt_c = _qt_s[_qt_i]; if (_qt_c < \'0\' || _qt_c > \'9\') { break; } _qt_acc = (_qt_acc * (quint128)10) + (quint128)(_qt_c - \'0\'); }'
-            . ' return _qt_acc;'
-            . ' #else'
-            . ' quint128 _qt_value = {};'
-            . ' QByteArray _qt_text(ZSTR_VAL(%1$s), ZSTR_LEN(%1$s));'
-            . ' QByteArray _qt_hex = _qt_text.trimmed();'
-            . ' if (_qt_hex.startsWith("0x") || _qt_hex.startsWith("0X")) { _qt_hex = _qt_hex.mid(2); }'
-            . ' if ((_qt_hex.size() %% 2) != 0) { _qt_hex.prepend(\'0\'); }'
-            . ' QByteArray _qt_bin = QByteArray::fromHex(_qt_hex);'
-            . ' if (_qt_bin.size() > 16) { _qt_bin = _qt_bin.right(16); }'
-            . ' if (_qt_bin.size() < 16) { _qt_bin = QByteArray(16 - _qt_bin.size(), \'\\0\') + _qt_bin; }'
-            . ' for (int _qt_i = 0; _qt_i < 16; ++_qt_i) { _qt_value.data[_qt_i] = (quint8)_qt_bin.at(_qt_i); }'
-            . ' return _qt_value;'
-            . ' #endif'
-            . ' })()',
-            $zendStringVar,
-        );
+        $template = <<<'CPP'
+([&]() -> quint128 {
+#if defined(QT_SUPPORTS_INT128)
+    const char *_qt_s = ZSTR_VAL({{ZSTR}});
+    size_t _qt_len = (size_t)ZSTR_LEN({{ZSTR}});
+    size_t _qt_i = 0;
+    if (_qt_len > 0 && _qt_s[0] == '+') {
+        _qt_i = 1;
+    }
+    quint128 _qt_acc = 0;
+    for (; _qt_i < _qt_len; ++_qt_i) {
+        const char _qt_c = _qt_s[_qt_i];
+        if (_qt_c < '0' || _qt_c > '9') {
+            break;
+        }
+        _qt_acc = (_qt_acc * (quint128)10) + (quint128)(_qt_c - '0');
+    }
+    return _qt_acc;
+#else
+    quint128 _qt_value = {};
+    QByteArray _qt_text(ZSTR_VAL({{ZSTR}}), ZSTR_LEN({{ZSTR}}));
+    QByteArray _qt_hex = _qt_text.trimmed();
+    if (_qt_hex.startsWith("0x") || _qt_hex.startsWith("0X")) {
+        _qt_hex = _qt_hex.mid(2);
+    }
+    if ((_qt_hex.size() % 2) != 0) {
+        _qt_hex.prepend('0');
+    }
+    QByteArray _qt_bin = QByteArray::fromHex(_qt_hex);
+    if (_qt_bin.size() > 16) {
+        _qt_bin = _qt_bin.right(16);
+    }
+    if (_qt_bin.size() < 16) {
+        _qt_bin = QByteArray(16 - _qt_bin.size(), '\0') + _qt_bin;
+    }
+    for (int _qt_i = 0; _qt_i < 16; ++_qt_i) {
+        _qt_value.data[_qt_i] = (quint8)_qt_bin.at(_qt_i);
+    }
+    return _qt_value;
+#endif
+})()
+CPP;
+
+        return str_replace('{{ZSTR}}', $zendStringVar, $template);
     }
 
     /**
