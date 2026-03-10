@@ -19,17 +19,24 @@
                 "QtGui"
             ]
         },
-        "QtNetwork": {
-            "extension_name": "qtnetwork",
-            "dependencies": [
-                "QtCore"
-            ]
-        },
-        "QtSql": {
-            "extension_name": "qtsql",
-            "dependencies": [
-                "QtCore"
-            ]
+    "QtNetwork": {
+      "extension_name": "qtnetwork",
+      "dependencies": [
+        "QtCore"
+      ]
+    },
+    "QtBluetooth": {
+      "extension_name": "qtbluetooth",
+      "dependencies": [
+        "QtCore",
+        "QtNetwork"
+      ]
+    },
+    "QtSql": {
+      "extension_name": "qtsql",
+      "dependencies": [
+        "QtCore"
+      ]
         },
         "QtPrintSupport": {
             "extension_name": "qtprintsupport",

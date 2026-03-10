@@ -13,6 +13,7 @@ it('loads supported modules from the static manifest', function (): void {
         'QtGui',
         'QtWidgets',
         'QtNetwork',
+        'QtBluetooth',
         'QtSql',
         'QtPrintSupport',
         'QtMultimedia',
