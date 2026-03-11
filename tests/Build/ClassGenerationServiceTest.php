@@ -337,6 +337,94 @@ CPP);
         ->and($nestedQualified)->not->toContain('QNestedOwner::Unused');
 });
 
+it('extracts and keeps bare nested template argument classes for QList-based APIs', function (): void {
+    $fixtureDir = qt_temp_dir('qtbuilder-nested-template-facts-');
+    $headerPath = $fixtureDir . '/qnestedtemplateowner.h';
+
+    file_put_contents($headerPath, <<<'CPP'
+template <typename T>
+class QList
+{
+};
+
+class QNestedTemplateOwner
+{
+public:
+    class AddressInfo
+    {
+    public:
+        AddressInfo() {}
+    };
+
+    class Unused
+    {
+    public:
+        Unused() {}
+    };
+
+    void setWhiteList(const QList<AddressInfo> &list);
+    QList<AddressInfo> whiteList() const;
+};
+
+inline void QNestedTemplateOwner::setWhiteList(const QList<AddressInfo> &list) { (void) list; }
+inline QList<QNestedTemplateOwner::AddressInfo> QNestedTemplateOwner::whiteList() const { return QList<QNestedTemplateOwner::AddressInfo>(); }
+CPP);
+
+    $service = new ClassGenerationService();
+    $facts = $service->prepareDiscoveryFacts($headerPath, 'QNestedTemplateOwner', [$fixtureDir]);
+
+    expect($facts['status'] ?? null)->toBe('ok');
+    $ownerClassData = is_array($facts['class_data'] ?? null) ? $facts['class_data'] : [];
+    $nestedClassData = is_array($facts['referenced_nested_class_data'] ?? null)
+        ? $facts['referenced_nested_class_data']
+        : [];
+    foreach ([$ownerClassData, ...$nestedClassData] as &$classData) {
+        if (!is_array($classData)) {
+            continue;
+        }
+        $classData['module'] = 'QtBluetooth';
+    }
+    unset($classData);
+
+    $nestedQualified = array_values(array_filter(array_map(
+        static fn (mixed $entry): string => is_array($entry) && is_string($entry['qualified_name'] ?? null)
+            ? (string) $entry['qualified_name']
+            : '',
+        $nestedClassData,
+    )));
+    expect($nestedQualified)->toContain('QNestedTemplateOwner::AddressInfo')
+        ->and($nestedQualified)->not->toContain('QNestedTemplateOwner::Unused');
+
+    $prepared = [];
+    if (is_array($ownerClassData) && is_string($ownerClassData['qualified_name'] ?? null)) {
+        $prepared[(string) $ownerClassData['qualified_name']] = $ownerClassData;
+    }
+    foreach ($nestedClassData as $entry) {
+        if (!is_array($entry) || !is_string($entry['qualified_name'] ?? null)) {
+            continue;
+        }
+        $prepared[(string) $entry['qualified_name']] = $entry;
+    }
+
+    $result = $service->generateFromPreparedData(
+        $ownerClassData,
+        $headerPath,
+        ['QNestedTemplateOwner', 'QNestedTemplateOwner::AddressInfo'],
+        $prepared,
+    );
+
+    expect($result->status)->toBe('ok');
+    $methodNames = array_map(
+        static fn (\QtBuilder\Definition\PhpMethod $method): string => $method->name,
+        $result->phpClass?->methods ?? [],
+    );
+    expect($methodNames)->toContain('setWhiteList', 'whiteList')
+        ->and(array_column($result->skippedMethods, 'reason_message'))->not->toContain(
+            'Parameter type const QList<QNestedTemplateOwner::AddressInfo> & is not supported.',
+            'Return type QList<QNestedTemplateOwner::AddressInfo> is not supported.',
+        );
+});
+
 it('skips referenced non-public nested class facts from the owner parse payload', function (): void {
     $fixtureDir = qt_temp_dir('qtbuilder-nested-non-public-facts-');
     $headerPath = $fixtureDir . '/qnestedaccessowner.h';

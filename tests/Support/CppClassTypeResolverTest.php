@@ -90,6 +90,19 @@ it('resolves bare nested member names against the current owner class', function
     expect($resolver->canonicalizeType('Tag', $context))->toBe('QFont::Tag');
 });
 
+it('canonicalizes nested class references inside template arguments', function (): void {
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'QLowEnergyAdvertisingParameters', 'qualified_name' => 'QLowEnergyAdvertisingParameters', 'module' => 'QtBluetooth'],
+        ['name' => 'AddressInfo', 'qualified_name' => 'QLowEnergyAdvertisingParameters::AddressInfo', 'module' => 'QtBluetooth'],
+    ]);
+    $context = TypeResolutionContext::fromNames('QLowEnergyAdvertisingParameters', 'QLowEnergyAdvertisingParameters');
+
+    expect($resolver->canonicalizeType('QList<AddressInfo>', $context))
+        ->toBe('QList<QLowEnergyAdvertisingParameters::AddressInfo>')
+        ->and($resolver->canonicalizeType('const QList<AddressInfo> &', $context))
+        ->toBe('const QList<QLowEnergyAdvertisingParameters::AddressInfo> &');
+});
+
 it('does not downgrade unresolved qualified names to unrelated bare-name matches', function (): void {
     $resolver = new CppClassTypeResolver([
         ['name' => 'Key', 'qualified_name' => 'QPixmapCache::Key', 'module' => 'QtGui'],
@@ -113,4 +126,20 @@ it('does not bind non-q-prefixed bare names to unique classes from a different m
     );
 
     expect($resolver->resolveQualifiedClassName('Key', $context))->toBeNull();
+});
+
+it('does not bind non-q-prefixed bare nested names to a different owner in the same module', function (): void {
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'QByteArray', 'qualified_name' => 'QByteArray', 'module' => 'QtCore'],
+        ['name' => 'const_iterator', 'qualified_name' => 'QJsonObject::const_iterator', 'module' => 'QtCore'],
+    ]);
+    $context = new TypeResolutionContext(
+        className: 'QByteArray',
+        qualifiedClassName: 'QByteArray',
+        module: 'QtCore',
+        namespace: null,
+    );
+
+    expect($resolver->resolveQualifiedClassName('const_iterator', $context))->toBeNull()
+        ->and($resolver->canonicalizeType('const_iterator', $context))->toBe('const_iterator');
 });

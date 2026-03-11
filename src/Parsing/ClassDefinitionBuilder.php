@@ -41,7 +41,7 @@ class ClassDefinitionBuilder
         $qualifiedName = is_string($classData['qualified_name'] ?? null)
             ? trim((string) $classData['qualified_name'])
             : '';
-        $resolutionContext = TypeResolutionContext::fromNames($className, $qualifiedName);
+        $resolutionContext = TypeResolutionContext::fromClassData($classData);
         $smartPointerAliases = $this->canonicalizeSmartPointerAliases(
             is_array($classData['smart_pointer_aliases'] ?? null) ? $classData['smart_pointer_aliases'] : [],
             $classTypeResolver,

@@ -2813,6 +2813,7 @@ class TypeBridge
         $valueType = (string) $container->valueType;
         $keyPhpType = $this->containerBridge()->elementPhpType($keyType);
         $valuePhpType = $this->containerBridge()->elementPhpType($valueType);
+        $keyNullable = $this->isPointerType($keyType);
         $valueNullable = $this->isPointerType($valueType);
         $pairVar = $nativeVarName . '_pair';
         $keyEntryVar = $nativeVarName . '_key_entry';
@@ -2854,7 +2855,7 @@ class TypeBridge
             $lines[] = '            ' . $failureStatement;
             $lines[] = '        }';
             $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($keyType), $keyVar, $this->zvalToNativeExpr('int', $keyType, $keyEntryVar, false));
-        } else {
+        } elseif ($keyPhpType === 'string') {
             $lines[] = sprintf('        if (Z_TYPE_P(%s) != IS_STRING) {', $keyEntryVar);
             $lines[] = '            zend_type_error("Expected pair key type string.");';
             $lines[] = '            ' . $failureStatement;
@@ -2862,6 +2863,18 @@ class TypeBridge
             $lines[] = sprintf('        zend_string *%s = zval_get_string(%s);', $keyStringVar, $keyEntryVar);
             $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($keyType), $keyVar, $this->phpStringToNativeExpr($keyType, $keyStringVar));
             $lines[] = sprintf('        zend_string_release(%s);', $keyStringVar);
+        } else {
+            $keyCheck = $keyNullable
+                ? sprintf('(Z_TYPE_P(%1$s) == IS_NULL || (Z_TYPE_P(%1$s) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s), %2$s)))', $keyEntryVar, $this->ceVarName($keyPhpType))
+                : sprintf('(Z_TYPE_P(%1$s) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s), %2$s))', $keyEntryVar, $this->ceVarName($keyPhpType));
+            $lines[] = sprintf('        if (!(%s)) {', $keyCheck);
+            $lines[] = sprintf('            zend_type_error("Expected pair key type %s.");', addslashes($keyPhpType));
+            $lines[] = '            ' . $failureStatement;
+            $lines[] = '        }';
+            $keyNativeExpr = $keyNullable
+                ? sprintf('(Z_TYPE_P(%1$s) == IS_NULL ? NULL : %2$s(Z_OBJ_P(%1$s))->native_ptr)', $keyEntryVar, $this->fromObjFuncName($keyPhpType))
+                : $this->phpObjectToNativeExpr($keyPhpType, $keyType, $keyEntryVar, false);
+            $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($keyType), $keyVar, $keyNativeExpr);
         }
 
         if ($valueType === 'QVariant') {

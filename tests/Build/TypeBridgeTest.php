@@ -32,6 +32,25 @@ it('uses distinct key/value zend_string temporaries for pair-sequence string con
         ->not->toContain('zend_string *_qt_ret_str = zval_get_string(_qt_ret_value_entry);');
 });
 
+it('accepts object keys for pair-sequence container conversions', function (): void {
+    $bridge = new TypeBridge();
+    $bridge->setTypeResolutionMetadata('Qt\\Bluetooth', [
+        'qbluetoothuuid' => [
+            'name' => 'QBluetoothUuid',
+            'namespace' => 'Qt\\Bluetooth',
+            'generation_id' => 'qbluetoothuuid',
+            'qualified_name' => 'QBluetoothUuid',
+        ],
+    ], [], 'QBluetoothDeviceInfo');
+
+    $fromPhp = $bridge->nativeReturnFromZvalSetup('array', 'QMultiHash<QBluetoothUuid, QByteArray>', '_zv');
+    $generated = implode("\n", $fromPhp['lines']);
+
+    expect($generated)->toContain('instanceof_function(Z_OBJCE_P(_qt_ret_key_entry), qt_ce_qbluetoothuuid)')
+        ->toContain('_qt_ret_key = *qt_qbluetoothuuid_from_obj(Z_OBJ_P(_qt_ret_key_entry))->native_ptr;')
+        ->toContain('Expected pair key type QBluetoothUuid.');
+});
+
 it('converts int128 values through decimal strings', function (): void {
     $bridge = new TypeBridge();
 
@@ -71,7 +90,7 @@ it('qualifies bare nested container element types using the current owner contex
     expect($block)->toContain('new QFont::Tag(_qt_item)');
 });
 
-it('resolves nested container class references to module-correct php fqcns', function (): void {
+it('resolves nested container class references to canonical c++ class keys', function (): void {
     $bridge = new TypeBridge();
     $bridge->setTypeResolutionMetadata('Qt\\Gui', [
         'qfont' => [
@@ -88,7 +107,7 @@ it('resolves nested container class references to module-correct php fqcns', fun
         ],
     ], [], 'QFont');
 
-    expect($bridge->containerClassRefs('QList<Tag>'))->toBe(['\\Qt\\Gui\\QFont\\Tag']);
+    expect($bridge->containerClassRefs('QList<Tag>'))->toBe(['QFont::Tag']);
 });
 
 it('resolves generation ids for nested php fqcns via class metadata', function (): void {

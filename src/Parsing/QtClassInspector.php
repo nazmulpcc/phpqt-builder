@@ -518,7 +518,7 @@ class QtClassInspector
                 $trimmedType,
                 $matches,
                 PREG_SET_ORDER,
-            ) === 1) {
+            ) > 0) {
                 foreach ($matches as $match) {
                     $owner = ltrim(trim((string) ($match['owner'] ?? '')), ':');
                     $member = trim((string) ($match['member'] ?? ''));
@@ -534,6 +534,16 @@ class QtClassInspector
             $base = rtrim($base, '&* ');
             if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $base) === 1) {
                 $referenced[$base] = true;
+            }
+
+            if (str_contains($base, '<') && preg_match_all('/\b(?<name>[A-Za-z_][A-Za-z0-9_]*)\b/', $base, $tokenMatches) > 0) {
+                foreach ((array) ($tokenMatches['name'] ?? []) as $token) {
+                    $name = is_string($token) ? trim($token) : '';
+                    if ($name === '' || in_array($name, ['const', 'volatile', 'unsigned', 'signed', 'short', 'long'], true)) {
+                        continue;
+                    }
+                    $referenced[$name] = true;
+                }
             }
         }
 

@@ -32,7 +32,7 @@ it('resolves container element object types using type-resolution context', func
     );
 
     expect($bridge->elementPhpType('QAction *'))->toBe('\Qt\Qt3DInput\QAction');
-    expect($bridge->classRefs('QList<QAction *>'))->toBe(['\Qt\Qt3DInput\QAction']);
+    expect($bridge->classRefs('QList<QAction *>'))->toBe(['Qt3DInput::QAction']);
 });
 
 it('supports multi map/hash containers as pair sequences', function (): void {
@@ -42,4 +42,12 @@ it('supports multi map/hash containers as pair sequences', function (): void {
         ->and($bridge->isSupported('QMultiMap<QString, int>'))->toBeTrue()
         ->and($bridge->classRefs('QMultiHash<int, QString>'))->toBe([])
         ->and($bridge->classRefs('QMultiMap<QString, int>'))->toBe([]);
+});
+
+it('supports object keys for pair-sequence containers only', function (): void {
+    $bridge = new ContainerBridge();
+
+    expect($bridge->isSupported('QMultiHash<QBluetoothUuid, QByteArray>'))->toBeTrue()
+        ->and($bridge->isSupported('QHash<QBluetoothUuid, QByteArray>'))->toBeFalse()
+        ->and($bridge->classRefs('QMultiHash<QBluetoothUuid, QByteArray>'))->toBe(['QBluetoothUuid']);
 });

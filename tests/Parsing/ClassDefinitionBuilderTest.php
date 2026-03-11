@@ -273,3 +273,53 @@ it('adds php string unions for qstring-like parameters when class types are avai
         ->and($class->methods[0]->parameters)->toHaveCount(1)
         ->and($class->methods[0]->parameters[0]->phpType)->toBe('string');
 });
+
+it('keeps owner-scoped bare key-like types unresolved when module context excludes cross-module matches', function (): void {
+    $builder = new ClassDefinitionBuilder();
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'Key', 'qualified_name' => 'QPixmapCache::Key', 'module' => 'QtGui'],
+    ]);
+
+    $class = $builder->build([
+        'name' => 'QMediaMetaData',
+        'qualified_name' => 'QMediaMetaData',
+        'module' => 'QtMultimedia',
+        'is_abstract' => false,
+        'is_struct' => false,
+        'bases' => [],
+        'properties' => [],
+        'methods' => [
+            [
+                'name' => 'keys',
+                'return_type' => 'QList<Key>',
+                'access' => 'public',
+                'parameters' => [],
+                'is_static' => false,
+                'is_const' => true,
+                'is_virtual' => false,
+                'is_pure_virtual' => false,
+                'is_override' => false,
+            ],
+            [
+                'name' => 'value',
+                'return_type' => 'void',
+                'access' => 'public',
+                'parameters' => [
+                    ['name' => 'key', 'type' => 'Key', 'has_default' => false],
+                ],
+                'is_static' => false,
+                'is_const' => true,
+                'is_virtual' => false,
+                'is_pure_virtual' => false,
+                'is_override' => false,
+            ],
+        ],
+        'signals' => [],
+    ], $resolver);
+
+    expect($class->methods)->toHaveCount(2)
+        ->and($class->methods[0]->returnType)->toBe('array')
+        ->and($class->methods[0]->overloads[0]->returnType)->toBe('QList<Key>')
+        ->and($class->methods[1]->parameters[0]->phpType)->toBe('int')
+        ->and($class->methods[1]->overloads[0]->parameters[0]->cppType)->toBe('Key');
+});

@@ -293,3 +293,28 @@ it('filters canonicalized namespaced copy constructors for noncopyable classes',
     Assert::assertSame([], $result['selected_methods']);
     Assert::assertContains('copy_constructor_filtered', array_column($result['skipped_methods'], 'reason_code'));
 });
+
+it('accepts pair-sequence containers with object keys when key classes are allowed', function (): void {
+    $policy = new MethodExposurePolicy();
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'QBluetoothDeviceInfo', 'qualified_name' => 'QBluetoothDeviceInfo', 'module' => 'QtBluetooth'],
+        ['name' => 'QBluetoothUuid', 'qualified_name' => 'QBluetoothUuid', 'module' => 'QtBluetooth'],
+    ]);
+
+    $classData = [
+        'name' => 'QBluetoothDeviceInfo',
+        'qualified_name' => 'QBluetoothDeviceInfo',
+        'methods' => [[
+            'name' => 'serviceDataMap',
+            'return_type' => 'QMultiHash<QBluetoothUuid, QByteArray>',
+            'access' => 'public',
+            'parameters' => [],
+            'is_static' => false,
+        ]],
+    ];
+
+    $result = $policy->filter($classData, ['QBluetoothDeviceInfo', 'QBluetoothUuid'], false, null, $resolver);
+
+    Assert::assertSame(['serviceDataMap'], array_column($result['selected_methods'], 'name'));
+    Assert::assertSame([], $result['skipped_methods']);
+});
