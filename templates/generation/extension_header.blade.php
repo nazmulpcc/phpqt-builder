@@ -36,6 +36,7 @@ bool qt_runtime_enqueue_owner_task(std::function<void()> task);
 void qt_runtime_schedule_owner_drain(void);
 void qt_runtime_drain_owner_tasks(zend_long max_items);
 void qt_runtime_owner_safe_point(void);
+void qt_runtime_record_virtual_timeout(void);
 # endif
 
 #endif /* PHP_{!! strtoupper($ctx->extensionName) !!}_H */

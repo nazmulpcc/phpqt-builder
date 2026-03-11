@@ -428,6 +428,7 @@ class BuildPipeline
                 ...($request->importedAbi?->includeDirs() ?? []),
             ])),
             includeBuildInfoSupport: true,
+            includeThreadRuntimeSupport: true,
             runtimeManifest: $runtimeManifest,
             buildMode: RuntimeManifest::MODE_MONOLITHIC,
         );
@@ -1618,6 +1619,11 @@ class BuildPipeline
 
         if ($context->includeSignalConnectionSupport) {
             $generator->generateSignalConnectionSupport($outputDir);
+            $fileWriteStats->merge($generator->lastWriteStats());
+        }
+
+        if ($context->includeThreadRuntimeSupport) {
+            $generator->generateThreadRuntimeSupport($outputDir);
             $fileWriteStats->merge($generator->lastWriteStats());
         }
 

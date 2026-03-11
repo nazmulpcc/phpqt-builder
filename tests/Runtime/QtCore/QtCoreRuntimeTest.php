@@ -101,3 +101,32 @@ it('dispatches qthread signals without requiring a qcoreapplication event loop',
         ->and($payload['wait_ok'])->toBeTrue()
         ->and($payload['connections_are_objects'])->toBeTrue();
 });
+
+it('dispatches qthread virtual overrides back to owner thread', function (): void {
+    $payload = qt_runtime_payload('QtCore/thread_virtual_dispatch.php');
+
+    expect($payload['wait_ok'])->toBeTrue()
+        ->and($payload['run_hits'])->toBe(1)
+        ->and($payload['finished_hits'])->toBe(1)
+        ->and($payload['timed_out'])->toBeFalse();
+});
+
+it('handles burst cross-thread signal dispatch without timing out', function (): void {
+    $payload = qt_runtime_payload('QtCore/thread_signal_burst_stress.php');
+
+    expect($payload['timed_out'])->toBeFalse()
+        ->and($payload['wait_all_ok'])->toBeTrue()
+        ->and($payload['started_hits'])->toBe($payload['thread_count'])
+        ->and($payload['finished_hits'])->toBe($payload['thread_count']);
+});
+
+it('runs blocking worker jobs in parallel isolated runtimes', function (): void {
+    $payload = qt_runtime_payload('QtCore/thread_runtime_parallel.php');
+
+    expect($payload['parallel_window_ok'])->toBeTrue()
+        ->and($payload['error_propagated'])->toBeTrue()
+        ->and($payload['runtime_a_enqueued'])->toBeGreaterThanOrEqual(1)
+        ->and($payload['runtime_b_enqueued'])->toBeGreaterThanOrEqual(1)
+        ->and($payload['stop_a'])->toBeTrue()
+        ->and($payload['stop_b'])->toBeTrue();
+});

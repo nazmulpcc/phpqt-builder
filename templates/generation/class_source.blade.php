@@ -10,7 +10,9 @@
 
 #include "{!! $ctx->filePrefix !!}.h"
 #include "{!! $ctx->filePrefix !!}_arginfo.h"
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <filesystem>
 #include <functional>
@@ -41,6 +43,7 @@
 #include "qt_qmetaobjectconnection.h"
 #include <QCoreApplication>
 #include <QMetaObject>
+#include <QPointer>
 #include <QThread>
 @endif
 @if($ctx->hasPreventDestroy && !$ctx->hasSignals())
@@ -61,7 +64,12 @@ bool qt_runtime_can_call_zend(void);
 @endif
 @if($ctx->hasSignals())
 bool qt_runtime_is_owner_thread(void);
+@endif
+@if($ctx->hasSignals() || $ctx->requiresVirtualTrampoline)
 bool qt_runtime_enqueue_owner_task(std::function<void()> task);
+@endif
+@if($ctx->requiresVirtualTrampoline)
+void qt_runtime_record_virtual_timeout(void);
 @endif
 void qt_runtime_owner_safe_point(void);
 @if($ctx->isQObjectDerived)
@@ -199,6 +207,60 @@ static zend_always_inline bool qt_call_php_method(zend_object *object, const cha
 
     return !EG(exception);
 }
+
+@if($ctx->requiresVirtualTrampoline)
+template <typename InvokeCallback>
+static inline bool qt_runtime_dispatch_owner_sync(InvokeCallback invoke, zend_long timeout_ms)
+{
+    if (qt_runtime_can_call_zend()) {
+        invoke();
+        return true;
+    }
+
+    struct DispatchState {
+        std::mutex mutex;
+        std::condition_variable cv;
+        std::atomic_bool canceled{false};
+        bool done{false};
+        bool ok{false};
+    };
+
+    auto state = std::make_shared<DispatchState>();
+    if (!qt_runtime_enqueue_owner_task([state, invoke]() mutable {
+        if (state->canceled.load(std::memory_order_acquire)) {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            state->done = true;
+            state->cv.notify_one();
+            return;
+        }
+
+        if (qt_runtime_can_call_zend()) {
+            invoke();
+            state->ok = true;
+        }
+
+        std::lock_guard<std::mutex> lock(state->mutex);
+        state->done = true;
+        state->cv.notify_one();
+    })) {
+        return false;
+    }
+
+    std::unique_lock<std::mutex> lock(state->mutex);
+    if (timeout_ms <= 0) {
+        state->cv.wait(lock, [state]() { return state->done; });
+        return state->ok;
+    }
+
+    if (!state->cv.wait_for(lock, std::chrono::milliseconds(timeout_ms), [state]() { return state->done; })) {
+        state->canceled.store(true, std::memory_order_release);
+        qt_runtime_record_virtual_timeout();
+        return false;
+    }
+
+    return state->ok;
+}
+@endif
 
 @if($ctx->hasPostCallOwnershipHandling())
 template <typename T>
@@ -1063,12 +1125,15 @@ public:
 @php
     $paramDecls = [];
     $paramArgs = [];
+    $dispatchCaptures = ['this'];
     foreach ($overload->params as $paramIndex => $param) {
         $paramDecls[] = sprintf('%s _qt_p%d', $param->cppType, $paramIndex);
         $paramArgs[] = sprintf('_qt_p%d', $paramIndex);
+        $dispatchCaptures[] = sprintf('&_qt_p%d', $paramIndex);
     }
     $overrideSignature = implode(', ', $paramDecls);
     $overrideArgs = implode(', ', $paramArgs);
+    $dispatchCaptureList = implode(', ', $dispatchCaptures);
     $declaringClass = $overload->declaringClass !== '' ? $overload->declaringClass : $ctx->nativeCppType;
     $constQualifier = $overload->isConst ? ' const' : '';
     $baseCall = sprintf('%s::%s(%s)', $declaringClass, $method->cppName, $overrideArgs);
@@ -1089,6 +1154,24 @@ public:
     $overrideField = $entryMap[$method->name] ?? null;
 @endphp
         if (!qt_runtime_can_call_zend()) {
+            bool _qt_dispatched = false;
+            constexpr zend_long _qt_virtual_timeout_ms = 2000;
+@if($overload->returnStrategy === 'void')
+            _qt_dispatched = qt_runtime_dispatch_owner_sync([{!! $dispatchCaptureList !!}]() mutable {
+                this->{!! $method->cppName !!}({!! $overrideArgs !!});
+            }, _qt_virtual_timeout_ms);
+            if (_qt_dispatched) {
+                return;
+            }
+@else
+            {!! $overload->cppReturnType !!} _qt_dispatch_result = {!! $ctx->typeBridge->defaultNativeReturnExpr($overload->phpReturnType, $overload->cppReturnType) !!};
+            _qt_dispatched = qt_runtime_dispatch_owner_sync([{!! $dispatchCaptureList !!}, &_qt_dispatch_result]() mutable {
+                _qt_dispatch_result = this->{!! $method->cppName !!}({!! $overrideArgs !!});
+            }, _qt_virtual_timeout_ms);
+            if (_qt_dispatched) {
+                return _qt_dispatch_result;
+            }
+@endif
 @if($overload->isPureVirtual)
 @if($overload->returnStrategy === 'void')
             return;

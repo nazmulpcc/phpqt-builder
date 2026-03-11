@@ -21,6 +21,7 @@ $buildInfoDependencies = $buildInfoModule !== null && $buildInfoModule->dependen
 #include <deque>
 #include <functional>
 #include <mutex>
+#include <string>
 #include "{!! $ctx->phpHeaderFilename() !!}"
 @foreach($ctx->classHeaders() as $header)
 #include "{!! $header !!}"
@@ -31,10 +32,16 @@ $buildInfoDependencies = $buildInfoModule !== null && $buildInfoModule->dependen
 
 static std::atomic_bool qt_shutdown_in_progress{false};
 static std::atomic_bool qt_about_to_quit_hooked{false};
+static constexpr size_t QT_OWNER_TASK_QUEUE_MAX_DEPTH = 4096;
 static std::mutex qt_owner_task_mutex;
 static std::deque<std::function<void()>> qt_owner_task_queue;
 static std::atomic_uint32_t qt_owner_task_pending{0};
 static std::atomic_bool qt_owner_drain_scheduled{false};
+static std::atomic_uint64_t qt_owner_task_enqueued{0};
+static std::atomic_uint64_t qt_owner_task_drained{0};
+static std::atomic_uint64_t qt_owner_task_dropped_full{0};
+static std::atomic_uint64_t qt_owner_task_dropped_shutdown{0};
+static std::atomic_uint64_t qt_owner_virtual_timeouts{0};
 static thread_local bool qt_owner_drain_active = false;
 ZEND_DECLARE_MODULE_GLOBALS({!! $ctx->extensionName !!})
 
@@ -88,12 +95,17 @@ bool qt_runtime_is_shutdown_in_progress(void)
     return qt_shutdown_in_progress.load(std::memory_order_acquire);
 }
 
-static inline void qt_runtime_drop_owner_tasks(void)
+static inline void qt_runtime_drop_owner_tasks(bool count_as_shutdown = false)
 {
+    size_t dropped = 0;
     std::lock_guard<std::mutex> lock(qt_owner_task_mutex);
+    dropped = qt_owner_task_queue.size();
     qt_owner_task_queue.clear();
     qt_owner_task_pending.store(0, std::memory_order_release);
     qt_owner_drain_scheduled.store(false, std::memory_order_release);
+    if (count_as_shutdown && dropped > 0) {
+        qt_owner_task_dropped_shutdown.fetch_add((uint64_t) dropped, std::memory_order_acq_rel);
+    }
 }
 
 bool qt_runtime_enqueue_owner_task(std::function<void()> task)
@@ -103,17 +115,25 @@ bool qt_runtime_enqueue_owner_task(std::function<void()> task)
     }
 
     if (qt_runtime_is_shutdown_in_progress()) {
+        qt_owner_task_dropped_shutdown.fetch_add(1, std::memory_order_acq_rel);
         return false;
     }
 
     {
         std::lock_guard<std::mutex> lock(qt_owner_task_mutex);
         if (qt_runtime_is_shutdown_in_progress()) {
+            qt_owner_task_dropped_shutdown.fetch_add(1, std::memory_order_acq_rel);
+            return false;
+        }
+
+        if (qt_owner_task_queue.size() >= QT_OWNER_TASK_QUEUE_MAX_DEPTH) {
+            qt_owner_task_dropped_full.fetch_add(1, std::memory_order_acq_rel);
             return false;
         }
 
         qt_owner_task_queue.emplace_back(std::move(task));
         qt_owner_task_pending.fetch_add(1, std::memory_order_acq_rel);
+        qt_owner_task_enqueued.fetch_add(1, std::memory_order_acq_rel);
     }
 
     qt_runtime_schedule_owner_drain();
@@ -185,6 +205,7 @@ void qt_runtime_drain_owner_tasks(zend_long max_items)
         }
 
         qt_owner_task_pending.fetch_sub(1, std::memory_order_acq_rel);
+        qt_owner_task_drained.fetch_add(1, std::memory_order_acq_rel);
         processed++;
 
         if (task) {
@@ -192,7 +213,7 @@ void qt_runtime_drain_owner_tasks(zend_long max_items)
         }
 
         if (qt_runtime_is_shutdown_in_progress()) {
-            qt_runtime_drop_owner_tasks();
+            qt_runtime_drop_owner_tasks(true);
             break;
         }
     }
@@ -211,6 +232,11 @@ void qt_runtime_owner_safe_point(void)
     }
 
     qt_runtime_drain_owner_tasks(-1);
+}
+
+void qt_runtime_record_virtual_timeout(void)
+{
+    qt_owner_virtual_timeouts.fetch_add(1, std::memory_order_acq_rel);
 }
 
 void qt_runtime_mark_shutdown_in_progress(void)
@@ -282,6 +308,12 @@ PHP_MINFO_FUNCTION({!! $ctx->extensionName !!})
     zend_string_release(qt_buildinfo_built_modules);
     zend_string_release(qt_buildinfo_loaded_modules);
 @endif
+    php_info_print_table_row(2, "owner queue max depth", "4096");
+    php_info_print_table_row(2, "owner queue enqueued", std::to_string(qt_owner_task_enqueued.load(std::memory_order_acquire)).c_str());
+    php_info_print_table_row(2, "owner queue drained", std::to_string(qt_owner_task_drained.load(std::memory_order_acquire)).c_str());
+    php_info_print_table_row(2, "owner queue dropped (full)", std::to_string(qt_owner_task_dropped_full.load(std::memory_order_acquire)).c_str());
+    php_info_print_table_row(2, "owner queue dropped (shutdown)", std::to_string(qt_owner_task_dropped_shutdown.load(std::memory_order_acquire)).c_str());
+    php_info_print_table_row(2, "virtual dispatch timeouts", std::to_string(qt_owner_virtual_timeouts.load(std::memory_order_acquire)).c_str());
     php_info_print_table_end();
 }
 
@@ -326,7 +358,12 @@ PHP_RSHUTDOWN_FUNCTION({!! $ctx->extensionName !!})
 {
     qt_runtime_mark_shutdown_in_progress();
     qt_runtime_drain_owner_tasks(256);
-    qt_runtime_drop_owner_tasks();
+    qt_runtime_drop_owner_tasks(true);
+@if($ctx->includeThreadRuntimeSupport)
+    if (!qt_qthreadruntime_is_worker_request_context()) {
+        qt_qthreadruntime_shutdown_all(2000);
+    }
+@endif
     qt_runtime_shutdown_qcoreapplication();
     QT_RUNTIME_G(request_active) = false;
 

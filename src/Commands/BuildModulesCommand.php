@@ -170,6 +170,7 @@ class BuildModulesCommand extends Command
                 linkModules: $nativeModules,
                 importIncludeRoots: [$sharedRoot, $sharedClassesDir],
                 includeBuildInfoSupport: $module === 'QtCore',
+                includeThreadRuntimeSupport: $module === 'QtCore',
                 runtimeManifest: $runtimeManifest,
                 currentQtModule: $module,
                 buildMode: RuntimeManifest::MODE_MODULAR,

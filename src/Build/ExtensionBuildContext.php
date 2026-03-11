@@ -35,6 +35,7 @@ readonly class ExtensionBuildContext
         public array $linkModules = [],
         public array $importIncludeRoots = [],
         public bool $includeBuildInfoSupport = false,
+        public bool $includeThreadRuntimeSupport = false,
         public ?RuntimeManifest $runtimeManifest = null,
         public ?string $currentQtModule = null,
         public string $buildMode = RuntimeManifest::MODE_MONOLITHIC,
@@ -66,6 +67,7 @@ readonly class ExtensionBuildContext
             $this->linkModules,
             $this->importIncludeRoots,
             $this->includeBuildInfoSupport,
+            $this->includeThreadRuntimeSupport,
             $this->runtimeManifest,
             $this->currentQtModule,
             $this->buildMode,
@@ -165,6 +167,7 @@ readonly class ExtensionBuildContext
             ...$this->generatedClasses,
             ...($this->includeSignalConnectionSupport ? ['QMetaObjectConnection'] : []),
             ...($this->includeBuildInfoSupport ? ['BuildInfo'] : []),
+            ...($this->includeThreadRuntimeSupport ? ['QThreadRuntime'] : []),
         ]));
         if ($classes === []) {
             return [];
