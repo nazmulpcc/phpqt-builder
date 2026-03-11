@@ -1556,6 +1556,7 @@ class BuildPipeline
                 'generation_id' => $phpClass->resolvedGenerationId(),
                 'qualified_name' => $phpClass->nativeCppType ?? $phpClass->name,
                 'module' => $this->moduleFromPhpNamespace($classNamespaces[$name] ?? 'Qt\\Core'),
+                'is_qobject_derived' => $phpClass->isQObjectDerived,
             ];
         }
         $this->removeStaleEnumHolderFiles($outputDir, $context->enumHolders);

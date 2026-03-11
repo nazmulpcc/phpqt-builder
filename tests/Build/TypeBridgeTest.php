@@ -51,6 +51,29 @@ it('accepts object keys for pair-sequence container conversions', function (): v
         ->toContain('Expected pair key type QBluetoothUuid.');
 });
 
+it('borrows signal refs only for qobject-derived class types', function (): void {
+    $bridge = new TypeBridge();
+    $bridge->setTypeResolutionMetadata('Qt\\Bluetooth', [
+        'qbluetoothdeviceinfo' => [
+            'name' => 'QBluetoothDeviceInfo',
+            'namespace' => 'Qt\\Bluetooth',
+            'generation_id' => 'qbluetoothdeviceinfo',
+            'qualified_name' => 'QBluetoothDeviceInfo',
+            'is_qobject_derived' => false,
+        ],
+        'qobject' => [
+            'name' => 'QObject',
+            'namespace' => 'Qt\\Core',
+            'generation_id' => 'qobject',
+            'qualified_name' => 'QObject',
+            'is_qobject_derived' => true,
+        ],
+    ], [], 'QBluetoothDeviceDiscoveryAgent');
+
+    expect($bridge->signalArgUsesBorrowedWrap('\\Qt\\Bluetooth\\QBluetoothDeviceInfo', 'const QBluetoothDeviceInfo &'))->toBeFalse()
+        ->and($bridge->signalArgUsesBorrowedWrap('\\Qt\\Core\\QObject', 'QObject &'))->toBeTrue();
+});
+
 it('converts int128 values through decimal strings', function (): void {
     $bridge = new TypeBridge();
 

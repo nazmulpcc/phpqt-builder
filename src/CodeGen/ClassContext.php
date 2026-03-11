@@ -187,7 +187,7 @@ class ClassContext
     /** @var array<string, string> */
     public readonly array $classNamespaces;
 
-    /** @var array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string, module?: string}> */
+    /** @var array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string, module?: string, is_qobject_derived?: bool}> */
     public readonly array $classMetadata;
 
     public readonly CppClassTypeResolver $classTypeResolver;
@@ -377,7 +377,7 @@ class ClassContext
 
     /**
      * @param array<string, string> $classNativeTypes
-     * @param array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string, module?: string}> $classMetadata
+     * @param array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string, module?: string, is_qobject_derived?: bool}> $classMetadata
      */
     private function buildClassTypeResolver(PhpClass $phpClass, array $classNativeTypes, array $classMetadata): CppClassTypeResolver
     {

@@ -25,7 +25,7 @@ use QtBuilder\Support\TypeResolutionContext;
 class TypeBridge
 {
     private ?ContainerBridge $containerBridge = null;
-    /** @var array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string, module?: string}> */
+    /** @var array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string, module?: string, is_qobject_derived?: bool}> */
     private array $currentClassMetadata = [];
     /** @var array<string, string> */
     private array $currentSmartPointerAliases = [];
@@ -169,7 +169,7 @@ class TypeBridge
     ];
 
     /**
-     * @param array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string, module?: string}> $classMetadata
+     * @param array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string, module?: string, is_qobject_derived?: bool}> $classMetadata
      */
     public function setTypeResolutionMetadata(?string $phpNamespace, array $classMetadata, array $smartPointerAliases = [], ?string $ownerPhpType = null): void
     {
@@ -1815,7 +1815,34 @@ class TypeBridge
             return false;
         }
 
-        return str_contains(trim($cppType), '&');
+        if (!str_contains(trim($cppType), '&')) {
+            return false;
+        }
+
+        return $this->isQObjectDerivedPhpType($phpType);
+    }
+
+    private function isQObjectDerivedPhpType(string $phpType): bool
+    {
+        $typeName = $this->phpTypeBaseName($phpType);
+        if ($typeName === '') {
+            return false;
+        }
+
+        foreach ($this->currentClassMetadata as $metadata) {
+            if (!is_array($metadata)) {
+                continue;
+            }
+
+            $name = is_string($metadata['name'] ?? null) ? trim((string) $metadata['name']) : '';
+            if ($name !== $typeName) {
+                continue;
+            }
+
+            return (bool) ($metadata['is_qobject_derived'] ?? false);
+        }
+
+        return false;
     }
 
     public function zvalToNativeReturnExpr(string $phpType, string $cppType, string $zvalPtrExpr, bool $nullable = false): string
