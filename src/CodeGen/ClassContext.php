@@ -512,6 +512,28 @@ class ClassContext
             return array_key_first($uniqueMatches);
         }
 
+        $resolvedQualified = $this->classTypeResolver->resolveQualifiedClassName(
+            $type,
+            TypeResolutionContext::fromNames($this->phpClassName, $this->nativeCppType),
+        );
+        if (is_string($resolvedQualified) && $resolvedQualified !== '') {
+            foreach ($this->classMetadata as $metadata) {
+                if (!is_array($metadata)) {
+                    continue;
+                }
+
+                $qualifiedName = is_string($metadata['qualified_name'] ?? null) ? trim($metadata['qualified_name']) : '';
+                $generationId = is_string($metadata['generation_id'] ?? null) ? $metadata['generation_id'] : '';
+                if ($qualifiedName === '' || $generationId === '') {
+                    continue;
+                }
+
+                if ($qualifiedName === $resolvedQualified) {
+                    return $generationId;
+                }
+            }
+        }
+
         return $this->typeBridge->generationIdForQualifiedName($type);
     }
 
@@ -653,6 +675,7 @@ class ClassContext
             $includes[] = $typeBridge->minitNameForId($this->resolveGenerationIdForPhpType($className)) . '.h';
         }
 
+        $includes = array_values(array_unique($includes));
         sort($includes);
 
         return $includes;

@@ -31,12 +31,12 @@ if (!$overload->isPureVirtual) {
 @endforeach
 @if($overload->access === 'protected' && !$overload->isStatic && !$overload->isPureVirtual)
 {!! $indent !!}if (!intern->native_is_generated_subclass) {
-{!! $indent !!}    zend_throw_error(NULL, "Protected method {!! $ctx->phpClassName !!}::{!! $method->name !!}() requires a PHP-created native instance.");
+{!! $indent !!}    zend_throw_error(NULL, "Protected method {!! addslashes($ctx->phpClassName) !!}::{!! $method->name !!}() requires a PHP-created native instance.");
 {!! $indent !!}    RETURN_THROWS();
 {!! $indent !!}}
 @endif
 @if($overload->isPureVirtual)
-{!! $indent !!}zend_throw_error(NULL, "Pure virtual method {!! $ctx->phpClassName !!}::{!! $method->name !!}() cannot be called directly.");
+{!! $indent !!}zend_throw_error(NULL, "Pure virtual method {!! addslashes($ctx->phpClassName) !!}::{!! $method->name !!}() cannot be called directly.");
 {!! $indent !!}RETURN_THROWS();
 @elseif($overload->returnStrategy === 'void')
 {!! $indent !!}{!! $callExpr !!};
@@ -80,7 +80,7 @@ if (!$overload->isPureVirtual) {
 {!! $indent !!}object_init_ex(return_value, {!! $returnCe !!});
 {!! $indent !!}if (UNEXPECTED(Z_TYPE_P(return_value) != IS_OBJECT)) {
 {!! $indent !!}    if (!EG(exception)) {
- {!! $indent !!}        zend_throw_error(NULL, "Failed to instantiate PHP wrapper for {!! $returnPhpClass !!}");
+ {!! $indent !!}        zend_throw_error(NULL, "Failed to instantiate PHP wrapper for {!! addslashes($returnPhpClass) !!}");
 {!! $indent !!}    }
 {!! $indent !!}    RETURN_THROWS();
 {!! $indent !!}}
@@ -114,7 +114,7 @@ if (!$overload->isPureVirtual) {
 {!! $indent !!}object_init_ex(return_value, {!! $returnCe !!});
 {!! $indent !!}if (UNEXPECTED(Z_TYPE_P(return_value) != IS_OBJECT)) {
 {!! $indent !!}    if (!EG(exception)) {
-{!! $indent !!}        zend_throw_error(NULL, "Failed to instantiate PHP wrapper for {!! $returnClass !!}");
+{!! $indent !!}        zend_throw_error(NULL, "Failed to instantiate PHP wrapper for {!! addslashes($returnClass) !!}");
 {!! $indent !!}    }
 {!! $indent !!}    RETURN_THROWS();
 {!! $indent !!}}

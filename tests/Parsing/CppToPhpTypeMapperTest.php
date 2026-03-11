@@ -86,6 +86,38 @@ it('maps nested class members to owner-scoped php fqcns when owner php namespace
         ->toBe('\\Qt\\Core\\QJsonObject\\const_iterator');
 });
 
+it('maps nested class members to php fqcns even without explicit owner php namespace', function (): void {
+    $mapper = new CppToPhpTypeMapper();
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'QTextFrame', 'qualified_name' => 'QTextFrame', 'module' => 'QtGui'],
+        ['name' => 'iterator', 'qualified_name' => 'QTextFrame::iterator', 'module' => 'QtGui'],
+    ]);
+    $context = TypeResolutionContext::fromNames('QTextTableCell', 'QTextTableCell');
+
+    expect($mapper->map('QTextFrame::iterator', 'QTextTableCell', $resolver, $context))
+        ->toBe('\\Qt\\Gui\\QTextFrame\\iterator');
+});
+
+it('treats unresolved owner-scoped non-q bare tokens as enums instead of cross-module classes', function (): void {
+    $mapper = new CppToPhpTypeMapper();
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'Key', 'qualified_name' => 'QPixmapCache::Key', 'module' => 'QtGui'],
+    ]);
+    $context = TypeResolutionContext::fromNames('QMediaMetaData', 'QMediaMetaData');
+
+    expect($mapper->map('Key', '\\Qt\\Multimedia\\QMediaMetaData', $resolver, $context))->toBe('int');
+});
+
+it('does not map unrelated unresolved non-q bare tokens to int', function (): void {
+    $mapper = new CppToPhpTypeMapper();
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'Key', 'qualified_name' => 'QPixmapCache::Key', 'module' => 'QtGui'],
+    ]);
+    $context = TypeResolutionContext::fromNames('QElapsedTimer', 'QElapsedTimer');
+
+    expect($mapper->map('Duration', '\\Qt\\Core\\QElapsedTimer', $resolver, $context))->toBe('Duration');
+});
+
 it('keeps explicit Qt enum qualifiers mapped as int even when a class has the same bare tail name', function (): void {
     $mapper = new CppToPhpTypeMapper();
     $resolver = new CppClassTypeResolver([

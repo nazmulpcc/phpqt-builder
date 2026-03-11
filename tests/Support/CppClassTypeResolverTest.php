@@ -100,3 +100,17 @@ it('does not downgrade unresolved qualified names to unrelated bare-name matches
         ->and($resolver->resolvePhpType('Qt::Key', $context, 'Qt\\Core'))->toBeNull()
         ->and($resolver->canonicalizeType('Qt::Key', $context))->toBe('Qt::Key');
 });
+
+it('does not bind non-q-prefixed bare names to unique classes from a different module', function (): void {
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'Key', 'qualified_name' => 'QPixmapCache::Key', 'module' => 'QtGui'],
+    ]);
+    $context = new TypeResolutionContext(
+        className: 'QMediaMetaData',
+        qualifiedClassName: 'QMediaMetaData',
+        module: 'QtMultimedia',
+        namespace: null,
+    );
+
+    expect($resolver->resolveQualifiedClassName('Key', $context))->toBeNull();
+});

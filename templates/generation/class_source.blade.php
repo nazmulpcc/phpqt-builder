@@ -738,7 +738,7 @@ static zval *{!! $ctx->filePrefix !!}_read_property(zend_object *object, zend_st
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
     QObject *_qt_obj = qt_native_qobject(intern);
     if (_qt_obj == NULL) {
-        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
         return &EG(uninitialized_zval);
     }
 
@@ -758,7 +758,7 @@ static zval *{!! $ctx->filePrefix !!}_write_property(zend_object *object, zend_s
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
     QObject *_qt_obj = qt_native_qobject(intern);
     if (_qt_obj == NULL) {
-        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
         return &EG(uninitialized_zval);
     }
 
@@ -1109,7 +1109,7 @@ public:
     $overrideField = $entryMap[$method->name] ?? null;
 @endphp
         if (this->php_object == nullptr) {
-            zend_throw_error(NULL, "Missing PHP object for {!! $ctx->phpClassName !!}::{!! $method->name !!}() virtual dispatch.");
+            zend_throw_error(NULL, "Missing PHP object for {!! addslashes($ctx->phpClassName) !!}::{!! $method->name !!}() virtual dispatch.");
 @if($overload->returnStrategy === 'void')
             return;
 @else
@@ -1123,7 +1123,7 @@ public:
 
         if (!this->{!! $overrideField !!}) {
 @if($overload->isPureVirtual)
-            zend_throw_error(NULL, "Pure virtual method {!! $ctx->phpClassName !!}::{!! $method->name !!}() must be overridden in PHP.");
+            zend_throw_error(NULL, "Pure virtual method {!! addslashes($ctx->phpClassName) !!}::{!! $method->name !!}() must be overridden in PHP.");
 @if($overload->returnStrategy === 'void')
             return;
 @else
@@ -1155,7 +1155,7 @@ public:
         zval_ptr_dtor(&_qt_params[{!! $paramIndex !!}]);
 @endforeach
 @if($overload->isPureVirtual)
-            zend_throw_error(NULL, "Pure virtual method {!! $ctx->phpClassName !!}::{!! $method->name !!}() failed during PHP override dispatch.");
+            zend_throw_error(NULL, "Pure virtual method {!! addslashes($ctx->phpClassName) !!}::{!! $method->name !!}() failed during PHP override dispatch.");
 @if($overload->returnStrategy === 'void')
             return;
 @else
@@ -1467,7 +1467,7 @@ PHP_QT_API void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativ
     object_init_ex(return_value, ce);
     if (UNEXPECTED(Z_TYPE_P(return_value) != IS_OBJECT)) {
         if (!EG(exception)) {
-            zend_throw_error(NULL, "Failed to instantiate PHP wrapper for {!! $ctx->phpClassName !!}");
+            zend_throw_error(NULL, "Failed to instantiate PHP wrapper for {!! addslashes($ctx->phpClassName) !!}");
         }
         return;
     }
@@ -1535,7 +1535,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, property)
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
     QObject *_qt_obj = qt_native_qobject(intern);
     if (_qt_obj == NULL) {
-        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
         RETURN_THROWS();
     }
 
@@ -1559,7 +1559,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, setProperty)
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
     QObject *_qt_obj = qt_native_qobject(intern);
     if (_qt_obj == NULL) {
-        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
         RETURN_THROWS();
     }
 
@@ -1582,7 +1582,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, hasProperty)
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
     QObject *_qt_obj = qt_native_qobject(intern);
     if (_qt_obj == NULL) {
-        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
         RETURN_THROWS();
     }
 
@@ -1597,7 +1597,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, propertyNames)
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
     QObject *_qt_obj = qt_native_qobject(intern);
     if (_qt_obj == NULL) {
-        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
         RETURN_THROWS();
     }
 
@@ -1616,7 +1616,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, propertyInfo)
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
     QObject *_qt_obj = qt_native_qobject(intern);
     if (_qt_obj == NULL) {
-        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
         RETURN_THROWS();
     }
 
@@ -1640,7 +1640,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connectPropertyNotify)
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
     QObject *_qt_obj = qt_native_qobject(intern);
     if (_qt_obj == NULL) {
-        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
         RETURN_THROWS();
     }
 
@@ -1703,7 +1703,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connect)
 
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
     if (intern->native_ptr == NULL) {
-        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
         RETURN_THROWS();
     }
 
@@ -1713,7 +1713,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connect)
     }
 @endforeach
 
-    zend_throw_error(NULL, "Unknown signal signature for {!! $ctx->phpClassName !!}::connect().");
+    zend_throw_error(NULL, "Unknown signal signature for {!! addslashes($ctx->phpClassName) !!}::connect().");
     RETURN_THROWS();
 }
 
@@ -1728,7 +1728,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, disconnect)
 
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
     if (intern->native_ptr == NULL) {
-        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
         RETURN_THROWS();
     }
 
@@ -1757,7 +1757,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $signal->phpMethodName !!})
 
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
     if (intern->native_ptr == NULL) {
-        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
         RETURN_THROWS();
     }
 

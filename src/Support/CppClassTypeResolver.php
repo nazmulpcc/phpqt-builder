@@ -150,6 +150,10 @@ final class CppClassTypeResolver
         }
 
         $targetPhpNamespace = ModuleNamespace::forQualifiedCppClass($module, $resolved);
+        if (str_contains($resolved, '::')) {
+            return '\\' . $targetPhpNamespace . '\\' . $bareName;
+        }
+
         if (str_starts_with($targetPhpNamespace, 'Qt\\Qt')) {
             return '\\' . $targetPhpNamespace . '\\' . $bareName;
         }
@@ -224,6 +228,18 @@ final class CppClassTypeResolver
 
         $matches = $this->qualifiedByBare[$bareName] ?? [];
         if (count($matches) === 1) {
+            if ($context !== null && $context->module !== null) {
+                $candidate = $matches[0];
+                $candidateModule = $this->moduleByQualified[$candidate] ?? TypeResolutionContext::moduleForQualifiedName($candidate);
+                if (
+                    $candidateModule !== null
+                    && $candidateModule !== $context->module
+                    && !str_starts_with($bareName, 'Q')
+                ) {
+                    return null;
+                }
+            }
+
             return $matches[0];
         }
 

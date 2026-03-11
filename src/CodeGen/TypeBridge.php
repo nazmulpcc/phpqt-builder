@@ -2172,6 +2172,31 @@ class TypeBridge
             return array_key_first($uniqueMatches);
         }
 
+        if ($this->currentClassTypeResolver !== null && $this->currentTypeResolutionContext !== null) {
+            $resolvedQualified = $this->currentClassTypeResolver->resolveQualifiedClassName($trimmed, $this->currentTypeResolutionContext);
+            if (is_string($resolvedQualified) && $resolvedQualified !== '') {
+                foreach ($this->currentClassMetadata as $candidate) {
+                    if (!is_array($candidate)) {
+                        continue;
+                    }
+
+                    $candidateQualified = is_string($candidate['qualified_name'] ?? null)
+                        ? trim((string) $candidate['qualified_name'])
+                        : '';
+                    $generationId = is_string($candidate['generation_id'] ?? null)
+                        ? trim((string) $candidate['generation_id'])
+                        : '';
+                    if ($candidateQualified === '' || $generationId === '') {
+                        continue;
+                    }
+
+                    if ($candidateQualified === $resolvedQualified) {
+                        return $generationId;
+                    }
+                }
+            }
+        }
+
         return GeneratedTypeIdentity::fromNames(CppName::unqualify($trimmed), str_contains($trimmed, '::') ? $trimmed : null)->generationId;
     }
 
@@ -2578,7 +2603,7 @@ class TypeBridge
             $matchExpr = $this->zvalTypeMatchExpr($entryVar, $phpType);
             $nativeExpr = $this->zvalToNativeExpr($phpType, $elementType, $entryVar, false);
             $lines[] = sprintf('        if (!(%s)) {', $matchExpr);
-            $lines[] = sprintf('            zend_type_error("Expected array of %ss.");', $phpType);
+            $lines[] = sprintf('            zend_type_error("Expected array of %ss.");', addslashes($phpType));
             $lines[] = '            ' . $failureStatement;
             $lines[] = '        }';
             $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($elementType), $valueVar, $nativeExpr);
@@ -2590,7 +2615,7 @@ class TypeBridge
             ? sprintf('(Z_TYPE_P(%1$s) == IS_NULL || (Z_TYPE_P(%1$s) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s), %2$s)))', $entryVar, $this->ceVarName($phpType))
             : sprintf('(Z_TYPE_P(%1$s) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s), %2$s))', $entryVar, $this->ceVarName($phpType));
         $lines[] = sprintf('        if (!(%s)) {', $objectCheck);
-        $lines[] = sprintf('            zend_type_error("Expected array of %s objects.");', $phpType);
+        $lines[] = sprintf('            zend_type_error("Expected array of %s objects.");', addslashes($phpType));
         $lines[] = '            ' . $failureStatement;
         $lines[] = '        }';
         $nativeExpr = $nullable
@@ -2751,7 +2776,7 @@ class TypeBridge
             $lines[] = sprintf('        zend_string_release(%s);', $stringVar);
         } elseif (in_array($valuePhpType, ['int', 'float', 'bool'], true)) {
             $lines[] = sprintf('        if (!(%s)) {', $this->zvalTypeMatchExpr(sprintf('%s_entry', $nativeVarName), $valuePhpType));
-            $lines[] = sprintf('            zend_type_error("Expected %s map values.");', $valuePhpType);
+            $lines[] = sprintf('            zend_type_error("Expected %s map values.");', addslashes($valuePhpType));
             $lines[] = '            ' . $failureStatement;
             $lines[] = '        }';
             $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($valueType), $valueVar, $this->zvalToNativeExpr($valuePhpType, $valueType, sprintf('%s_entry', $nativeVarName), false));
@@ -2760,7 +2785,7 @@ class TypeBridge
                 ? sprintf('(Z_TYPE_P(%1$s_entry) == IS_NULL || (Z_TYPE_P(%1$s_entry) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s_entry), %2$s)))', $nativeVarName, $this->ceVarName($valuePhpType))
                 : sprintf('(Z_TYPE_P(%1$s_entry) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s_entry), %2$s))', $nativeVarName, $this->ceVarName($valuePhpType));
             $lines[] = sprintf('        if (!(%s)) {', $valueCheck);
-            $lines[] = sprintf('            zend_type_error("Expected %s map values.");', $valuePhpType);
+            $lines[] = sprintf('            zend_type_error("Expected %s map values.");', addslashes($valuePhpType));
             $lines[] = '            ' . $failureStatement;
             $lines[] = '        }';
             $nativeExpr = $valueNullable
@@ -2854,7 +2879,7 @@ class TypeBridge
             $lines[] = sprintf('        zend_string_release(%s);', $valueStringVar);
         } elseif (in_array($valuePhpType, ['int', 'float', 'bool'], true)) {
             $lines[] = sprintf('        if (!(%s)) {', $this->zvalTypeMatchExpr($valueEntryVar, $valuePhpType));
-            $lines[] = sprintf('            zend_type_error("Expected pair value type %s.");', $valuePhpType);
+            $lines[] = sprintf('            zend_type_error("Expected pair value type %s.");', addslashes($valuePhpType));
             $lines[] = '            ' . $failureStatement;
             $lines[] = '        }';
             $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($valueType), $valueVar, $this->zvalToNativeExpr($valuePhpType, $valueType, $valueEntryVar, false));
@@ -2863,7 +2888,7 @@ class TypeBridge
                 ? sprintf('(Z_TYPE_P(%1$s) == IS_NULL || (Z_TYPE_P(%1$s) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s), %2$s)))', $valueEntryVar, $this->ceVarName($valuePhpType))
                 : sprintf('(Z_TYPE_P(%1$s) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s), %2$s))', $valueEntryVar, $this->ceVarName($valuePhpType));
             $lines[] = sprintf('        if (!(%s)) {', $valueCheck);
-            $lines[] = sprintf('            zend_type_error("Expected pair value type %s.");', $valuePhpType);
+            $lines[] = sprintf('            zend_type_error("Expected pair value type %s.");', addslashes($valuePhpType));
             $lines[] = '            ' . $failureStatement;
             $lines[] = '        }';
             $nativeExpr = $valueNullable

@@ -110,3 +110,71 @@ it('resolves generation ids for nested php fqcns via class metadata', function (
 
     expect($bridge->ceVarName('\\Qt\\Gui\\QFont\\Tag'))->toBe('qt_ce_tag__qfont');
 });
+
+it('resolves ambiguous bare nested type helpers against the current owner context', function (): void {
+    $bridge = new TypeBridge();
+    $bridge->setTypeResolutionMetadata('Qt\\Core', [
+        'qjsonarray' => [
+            'name' => 'QJsonArray',
+            'namespace' => 'Qt\\Core',
+            'generation_id' => 'qjsonarray',
+            'qualified_name' => 'QJsonArray',
+        ],
+        'iterator__qjsonarray' => [
+            'name' => 'iterator',
+            'namespace' => 'Qt\\Core\\QJsonArray',
+            'generation_id' => 'iterator__qjsonarray',
+            'qualified_name' => 'QJsonArray::iterator',
+        ],
+        'iterator__qdirlisting' => [
+            'name' => 'iterator',
+            'namespace' => 'Qt\\Core\\QDirListing',
+            'generation_id' => 'iterator__qdirlisting',
+            'qualified_name' => 'QDirListing::iterator',
+        ],
+    ], [], 'QJsonArray');
+
+    expect($bridge->fromObjFuncName('iterator'))->toBe('qt_iterator__qjsonarray_from_obj');
+});
+
+it('maps owner-scoped enum-like container elements to scalar arrays', function (): void {
+    $bridge = new TypeBridge();
+    $bridge->setTypeResolutionMetadata('Qt\\Multimedia', [
+        'qmediametadata' => [
+            'name' => 'QMediaMetaData',
+            'namespace' => 'Qt\\Multimedia',
+            'generation_id' => 'qmediametadata',
+            'qualified_name' => 'QMediaMetaData',
+        ],
+        'key__qpixmapcache' => [
+            'name' => 'Key',
+            'namespace' => 'Qt\\Gui\\QPixmapCache',
+            'generation_id' => 'key__qpixmapcache',
+            'qualified_name' => 'QPixmapCache::Key',
+        ],
+    ], [], 'QMediaMetaData');
+
+    expect($bridge->containerClassRefs('QList<Key>'))->toBe([]);
+    $block = $bridge->nativeContainerToPhpZvalBlock('return_value', 'QList<Key>', '_result');
+    expect($block)->toContain('ZVAL_LONG(&_qt_value, (zend_long)(_qt_item));')
+        ->toContain('add_next_index_zval(return_value, &_qt_value);')
+        ->not->toContain('object_init_ex');
+});
+
+it('escapes fqcn backslashes in generated container type-error strings', function (): void {
+    $bridge = new TypeBridge();
+    $bridge->setTypeResolutionMetadata('Qt\\WebSockets', [
+        'qsslerror' => [
+            'name' => 'QSslError',
+            'namespace' => 'Qt\\Network',
+            'generation_id' => 'qsslerror',
+            'qualified_name' => 'QSslError',
+        ],
+    ], [], 'QWebSocket');
+
+    $fromPhp = $bridge->nativeReturnFromZvalSetup('array', 'QList<QSslError>', 'errors');
+    $generated = implode("\n", $fromPhp['lines']);
+
+    expect($generated)->toContain('Expected array of \\\\Qt\\\\Network\\\\QSslError objects.')
+        ->not->toContain('Expected array of \\Qt\\Network\\QSslError objects.');
+});
