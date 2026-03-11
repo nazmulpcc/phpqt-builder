@@ -78,3 +78,25 @@ it('maps nested class types to owner-scoped php namespaces', function (): void {
         ->and($resolver->resolvePhpType('QBluetoothServiceInfo', $context, 'Qt\\Bluetooth'))
         ->toBe('QBluetoothServiceInfo');
 });
+
+it('resolves bare nested member names against the current owner class', function (): void {
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'QFont', 'qualified_name' => 'QFont', 'module' => 'QtGui'],
+        ['name' => 'Tag', 'qualified_name' => 'QFont::Tag', 'module' => 'QtGui'],
+        ['name' => 'Tag', 'qualified_name' => 'QOther::Tag', 'module' => 'QtGui'],
+    ]);
+    $context = TypeResolutionContext::fromNames('QFont', 'QFont');
+
+    expect($resolver->canonicalizeType('Tag', $context))->toBe('QFont::Tag');
+});
+
+it('does not downgrade unresolved qualified names to unrelated bare-name matches', function (): void {
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'Key', 'qualified_name' => 'QPixmapCache::Key', 'module' => 'QtGui'],
+    ]);
+    $context = TypeResolutionContext::fromNames('QKeyCombination', 'QKeyCombination');
+
+    expect($resolver->resolvePhpClassIdentity('Qt::Key', $context))->toBeNull()
+        ->and($resolver->resolvePhpType('Qt::Key', $context, 'Qt\\Core'))->toBeNull()
+        ->and($resolver->canonicalizeType('Qt::Key', $context))->toBe('Qt::Key');
+});

@@ -651,11 +651,20 @@ class ClassGenerationService
         }
 
         $referencedNestedClassData = [];
-        $nestedAccessByName = $this->nestedDeclarationAccessMap(
+        $nestedAccessContext = $this->nestedDeclarationAccessContext(
             $headerPath,
             $resolvedName !== '' ? $resolvedName : $className,
             (bool) ($classData['is_struct'] ?? false),
         );
+        $nestedAccessByName = is_array($nestedAccessContext['name_access'] ?? null)
+            ? $nestedAccessContext['name_access']
+            : [];
+        $nestedAccessByLine = is_array($nestedAccessContext['line_access'] ?? null)
+            ? $nestedAccessContext['line_access']
+            : [];
+        $nestedSourcePath = is_string($nestedAccessContext['source_path'] ?? null)
+            ? trim((string) $nestedAccessContext['source_path'])
+            : '';
         foreach ((array) ($inspection['referenced_nested_class_data'] ?? []) as $nestedClassData) {
             if (!is_array($nestedClassData)) {
                 continue;
@@ -673,6 +682,22 @@ class ClassGenerationService
             }
 
             $declarationAccess = $nestedAccessByName[$nestedLookupName] ?? null;
+            if ($declarationAccess === null) {
+                $declarationFile = is_string($nestedClassData['declaration_file'] ?? null)
+                    ? trim((string) $nestedClassData['declaration_file'])
+                    : '';
+                $declarationLine = $nestedClassData['declaration_line'] ?? null;
+                $sameSourceFile = $declarationFile === '' || $nestedSourcePath === '' || $declarationFile === $nestedSourcePath;
+                if ($sameSourceFile && is_int($declarationLine) && $declarationLine > 0) {
+                    $declarationAccess = is_string($nestedAccessByLine[$declarationLine] ?? null)
+                        ? $nestedAccessByLine[$declarationLine]
+                        : null;
+                }
+
+                if ($declarationAccess === null && $declarationFile !== '' && $nestedSourcePath !== '' && $declarationFile !== $nestedSourcePath) {
+                    continue;
+                }
+            }
             if ($declarationAccess !== null && $declarationAccess !== 'public') {
                 continue;
             }
@@ -3570,7 +3595,7 @@ class ClassGenerationService
     }
 
     /**
-     * @return array{path: string, contents: string, body: array{kind: string, body: string}|null}|null
+     * @return array{path: string, contents: string, body: array{kind: string, body: string, body_start_line: int}|null}|null
      */
     private function resolveClassDefinitionSource(string $headerPath, string $className): ?array
     {
@@ -3670,16 +3695,17 @@ class ClassGenerationService
     }
 
     /**
-     * @return array{kind: string, body: string}|null
+     * @return array{kind: string, body: string, body_start_line: int}|null
      */
     private function extractClassBody(string $contents, string $className): ?array
     {
+        $scanSource = $this->stripCommentsPreservingOffsets($contents);
         $pattern = sprintf(
             '/(?:^|\n)\s*(class|struct)\s+(?:[A-Za-z_][A-Za-z0-9_]*(?:\s*\([^)]*\))?\s+)*%s\b(?:\s+final)?(?:\s*:[^{]+)?\s*\{/s',
             preg_quote($className, '/'),
         );
 
-        if (preg_match($pattern, $contents, $matches, PREG_OFFSET_CAPTURE) !== 1) {
+        if (preg_match($pattern, $scanSource, $matches, PREG_OFFSET_CAPTURE) !== 1) {
             return null;
         }
 
@@ -3696,6 +3722,7 @@ class ClassGenerationService
         }
 
         $bodyStart = $matchOffset + $braceOffset + 1;
+        $bodyStartLine = substr_count(substr($contents, 0, $bodyStart), "\n") + 1;
         $depth = 1;
         $length = strlen($contents);
 
@@ -3713,12 +3740,41 @@ class ClassGenerationService
                     return [
                         'kind' => $kind,
                         'body' => substr($contents, $bodyStart, $index - $bodyStart),
+                        'body_start_line' => $bodyStartLine,
                     ];
                 }
             }
         }
 
         return null;
+    }
+
+    private function stripCommentsPreservingOffsets(string $source): string
+    {
+        $withoutBlockComments = preg_replace_callback(
+            '/\/\*.*?\*\//s',
+            static function (array $match): string {
+                $comment = is_string($match[0] ?? null) ? $match[0] : '';
+
+                return preg_replace('/[^\n]/', ' ', $comment) ?? $comment;
+            },
+            $source,
+        );
+        if (!is_string($withoutBlockComments)) {
+            $withoutBlockComments = $source;
+        }
+
+        $withoutLineComments = preg_replace_callback(
+            '/\/\/[^\n]*/',
+            static function (array $match): string {
+                $comment = is_string($match[0] ?? null) ? $match[0] : '';
+
+                return str_repeat(' ', strlen($comment));
+            },
+            $withoutBlockComments,
+        );
+
+        return is_string($withoutLineComments) ? $withoutLineComments : $withoutBlockComments;
     }
 
     /**
@@ -3769,26 +3825,38 @@ class ClassGenerationService
     }
 
     /**
-     * @return array<string, string>
+     * @return array{
+     *   name_access: array<string, string>,
+     *   line_access: array<int, string>,
+     *   source_path: string
+     * }
      */
-    private function nestedDeclarationAccessMap(string $headerPath, string $ownerClassName, bool $ownerIsStruct): array
+    private function nestedDeclarationAccessContext(string $headerPath, string $ownerClassName, bool $ownerIsStruct): array
     {
         $resolved = $this->resolveClassDefinitionSource($headerPath, $ownerClassName);
         if ($resolved === null) {
-            return [];
+            return ['name_access' => [], 'line_access' => [], 'source_path' => ''];
         }
 
         $classBody = is_array($resolved['body'] ?? null) && is_string($resolved['body']['body'] ?? null)
             ? $resolved['body']['body']
             : null;
         if ($classBody === null) {
-            return [];
+            return [
+                'name_access' => [],
+                'line_access' => [],
+                'source_path' => is_string($resolved['path'] ?? null) ? (string) $resolved['path'] : '',
+            ];
         }
+        $bodyStartLine = is_array($resolved['body'] ?? null) && is_int($resolved['body']['body_start_line'] ?? null)
+            ? (int) $resolved['body']['body_start_line']
+            : 1;
 
         $defaultAccess = $resolved['body'] !== null && $resolved['body']['kind'] === 'struct'
             ? 'public'
             : ($ownerIsStruct ? 'public' : 'private');
         $segments = $this->topLevelClassSegments($classBody, $defaultAccess);
+        $lineAccess = $this->topLevelClassAccessByLine($classBody, $defaultAccess, $bodyStartLine);
 
         $accessByName = [];
         foreach ($segments as $segmentInfo) {
@@ -3805,7 +3873,11 @@ class ClassGenerationService
             }
         }
 
-        return $accessByName;
+        return [
+            'name_access' => $accessByName,
+            'line_access' => $lineAccess,
+            'source_path' => is_string($resolved['path'] ?? null) ? (string) $resolved['path'] : '',
+        ];
     }
 
     /**
@@ -3826,6 +3898,34 @@ class ClassGenerationService
             static fn(mixed $name): string => is_string($name) ? trim($name) : '',
             $matches['name'] ?? [],
         ), static fn(string $name): bool => $name !== '')));
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function topLevelClassAccessByLine(string $body, string $defaultAccess, int $bodyStartLine): array
+    {
+        $accessByLine = [];
+        $access = $defaultAccess;
+        $braceDepth = 0;
+        $lineNumber = $bodyStartLine;
+
+        foreach (preg_split("/(\r?\n)/", $body) ?: [] as $line) {
+            if ($braceDepth === 0 && preg_match('/^\s*(public|protected|private)\s*:\s*(.*)$/', $line, $matches) === 1) {
+                $access = $matches[1];
+                $line = (string) ($matches[2] ?? '');
+            }
+
+            if (!isset($accessByLine[$lineNumber])) {
+                $accessByLine[$lineNumber] = $access;
+            }
+
+            $braceDepth += substr_count($line, '{');
+            $braceDepth -= substr_count($line, '}');
+            $lineNumber++;
+        }
+
+        return $accessByLine;
     }
 
     private function isPhpReservedIdentifier(string $name): bool

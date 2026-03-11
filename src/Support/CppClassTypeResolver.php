@@ -178,8 +178,18 @@ final class CppClassTypeResolver
             return null;
         }
 
-        if (str_contains($trimmed, '::') && isset($this->qualifiedByExact[$trimmed])) {
-            return $this->qualifiedByExact[$trimmed];
+        if (str_contains($trimmed, '::')) {
+            if (isset($this->qualifiedByExact[$trimmed])) {
+                return $this->qualifiedByExact[$trimmed];
+            }
+
+            $globalTrimmed = ltrim($trimmed, ':');
+            if ($globalTrimmed !== '' && isset($this->qualifiedByExact[$globalTrimmed])) {
+                return $this->qualifiedByExact[$globalTrimmed];
+            }
+
+            // Explicitly-qualified C++ types should not be guessed via bare-name fallback.
+            return null;
         }
 
         $bareName = CppName::unqualify($trimmed);
@@ -189,6 +199,13 @@ final class CppClassTypeResolver
 
         if ($context !== null && $context->qualifiedClassName !== null && $context->className === $bareName) {
             return $context->qualifiedClassName;
+        }
+
+        if ($context !== null && $context->qualifiedClassName !== null) {
+            $ownerNestedMatch = $this->qualifiedByNamespaceAndBare[$context->qualifiedClassName][$bareName] ?? null;
+            if (is_string($ownerNestedMatch) && $ownerNestedMatch !== '') {
+                return $ownerNestedMatch;
+            }
         }
 
         if ($context !== null && $context->namespace !== null) {

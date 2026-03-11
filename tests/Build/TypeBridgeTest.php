@@ -42,3 +42,71 @@ it('converts int128 values through decimal strings', function (): void {
     $fromPhp = $bridge->nativeReturnFromZvalSetup('string', 'quint128', '_zv');
     expect($fromPhp['expr'])->toContain('([&]() -> quint128');
 });
+
+it('converts php strings to qanystringview with an explicit qanystringview wrapper', function (): void {
+    $bridge = new TypeBridge();
+
+    $setup = $bridge->nativeArgumentSetup('string', 'QAnyStringView', 'text', '_qt_arg_0');
+    expect($setup['expr'])->toContain('QAnyStringView(QString::fromUtf8(ZSTR_VAL(text), (int)ZSTR_LEN(text)))');
+});
+
+it('qualifies bare nested container element types using the current owner context', function (): void {
+    $bridge = new TypeBridge();
+    $bridge->setTypeResolutionMetadata('Qt\\Gui', [
+        'qfont' => [
+            'name' => 'QFont',
+            'namespace' => 'Qt\\Gui',
+            'generation_id' => 'qfont',
+            'qualified_name' => 'QFont',
+        ],
+        'tag' => [
+            'name' => 'Tag',
+            'namespace' => 'Qt\\Gui\\QFont',
+            'generation_id' => 'tag__qfont',
+            'qualified_name' => 'QFont::Tag',
+        ],
+    ], [], 'QFont');
+
+    $block = $bridge->nativeContainerToPhpZvalBlock('return_value', 'QList<Tag>', '_result');
+    expect($block)->toContain('new QFont::Tag(_qt_item)');
+});
+
+it('resolves nested container class references to module-correct php fqcns', function (): void {
+    $bridge = new TypeBridge();
+    $bridge->setTypeResolutionMetadata('Qt\\Gui', [
+        'qfont' => [
+            'name' => 'QFont',
+            'namespace' => 'Qt\\Gui',
+            'generation_id' => 'qfont',
+            'qualified_name' => 'QFont',
+        ],
+        'tag' => [
+            'name' => 'Tag',
+            'namespace' => 'Qt\\Gui\\QFont',
+            'generation_id' => 'tag__qfont',
+            'qualified_name' => 'QFont::Tag',
+        ],
+    ], [], 'QFont');
+
+    expect($bridge->containerClassRefs('QList<Tag>'))->toBe(['\\Qt\\Gui\\QFont\\Tag']);
+});
+
+it('resolves generation ids for nested php fqcns via class metadata', function (): void {
+    $bridge = new TypeBridge();
+    $bridge->setTypeResolutionMetadata('Qt\\Gui', [
+        'qfont' => [
+            'name' => 'QFont',
+            'namespace' => 'Qt\\Gui',
+            'generation_id' => 'qfont',
+            'qualified_name' => 'QFont',
+        ],
+        'tag' => [
+            'name' => 'Tag',
+            'namespace' => 'Qt\\Gui\\QFont',
+            'generation_id' => 'tag__qfont',
+            'qualified_name' => 'QFont::Tag',
+        ],
+    ], [], 'QFont');
+
+    expect($bridge->ceVarName('\\Qt\\Gui\\QFont\\Tag'))->toBe('qt_ce_tag__qfont');
+});

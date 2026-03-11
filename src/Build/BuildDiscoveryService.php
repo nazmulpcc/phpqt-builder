@@ -15,7 +15,8 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class BuildDiscoveryService
 {
-    private const CLASS_CACHE_SCHEMA_VERSION = 10;
+    private const CLASS_CACHE_SCHEMA_VERSION = 13;
+    private const DISCOVERY_CACHE_SCHEMA_VERSION = 1;
 
     public function __construct(
         private readonly GenerateWorkerPool $workerPool = new GenerateWorkerPool(__DIR__ . '/../..'),
@@ -163,6 +164,8 @@ class BuildDiscoveryService
     public function writeCache(string $metadataDir, array $modules, string $qtRootPath, BuildDiscoveryResult $result): void
     {
         $payload = [
+            'schema_version' => self::DISCOVERY_CACHE_SCHEMA_VERSION,
+            'class_cache_schema_version' => self::CLASS_CACHE_SCHEMA_VERSION,
             'modules' => array_values($modules),
             'qt_path' => $qtRootPath,
             'candidate_count' => $result->candidateCount,
@@ -248,6 +251,14 @@ class BuildDiscoveryService
 
         $decoded = json_decode((string) file_get_contents($cacheFile), true);
         if (!is_array($decoded)) {
+            return null;
+        }
+
+        if ((int) ($decoded['schema_version'] ?? 0) !== self::DISCOVERY_CACHE_SCHEMA_VERSION) {
+            return null;
+        }
+
+        if ((int) ($decoded['class_cache_schema_version'] ?? 0) !== self::CLASS_CACHE_SCHEMA_VERSION) {
             return null;
         }
 

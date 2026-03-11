@@ -149,6 +149,8 @@ class QtClassInspector
      *   referenced_nested_class_data: list<array{
      *     name: string,
      *     qualified_name: string,
+     *     declaration_file?: string,
+     *     declaration_line?: int,
      *     is_abstract: bool,
      *     is_struct: bool,
      *     bases: list<string>,
@@ -419,6 +421,8 @@ class QtClassInspector
      * @return list<array{
      *   name: string,
      *   qualified_name: string,
+     *   declaration_file?: string,
+     *   declaration_line?: int,
      *   is_abstract: bool,
      *   is_struct: bool,
      *   bases: list<string>,
@@ -460,6 +464,16 @@ class QtClassInspector
                 : '';
             if ($qualifiedName === '' || isset($seenQualified[$qualifiedName])) {
                 continue;
+            }
+
+            $declarationFile = $child->getLocation()['file'] ?? null;
+            if (is_string($declarationFile) && trim($declarationFile) !== '') {
+                $data['declaration_file'] = $this->normalizePath($declarationFile) ?? $declarationFile;
+            }
+
+            $declarationLine = $child->getLocation()['line'] ?? null;
+            if (is_int($declarationLine) && $declarationLine > 0) {
+                $data['declaration_line'] = $declarationLine;
             }
 
             $seenQualified[$qualifiedName] = true;

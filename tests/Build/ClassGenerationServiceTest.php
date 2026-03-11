@@ -385,6 +385,103 @@ CPP);
         ->and($nestedQualified)->not->toContain('QNestedAccessOwner::ProtectedType');
 });
 
+it('skips referenced macro-declared nested class facts from non-public sections', function (): void {
+    $fixtureDir = qt_temp_dir('qtbuilder-nested-macro-access-facts-');
+    $headerPath = $fixtureDir . '/qnestedmacroowner.h';
+
+    file_put_contents($headerPath, <<<'CPP'
+#define DECL_TAG(name) struct name {}
+class QNestedMacroOwner
+{
+private:
+    DECL_TAG(HiddenPrivate);
+protected:
+    DECL_TAG(HiddenProtected);
+public:
+    class PublicType
+    {
+    public:
+        PublicType() {}
+    };
+
+    void usePrivate(const QNestedMacroOwner::HiddenPrivate &value);
+    void useProtected(const QNestedMacroOwner::HiddenProtected &value);
+    void usePublic(const QNestedMacroOwner::PublicType &value);
+};
+
+inline void QNestedMacroOwner::usePrivate(const QNestedMacroOwner::HiddenPrivate &value) { (void) value; }
+inline void QNestedMacroOwner::useProtected(const QNestedMacroOwner::HiddenProtected &value) { (void) value; }
+inline void QNestedMacroOwner::usePublic(const QNestedMacroOwner::PublicType &value) { (void) value; }
+CPP);
+
+    $service = new ClassGenerationService();
+    $facts = $service->prepareDiscoveryFacts($headerPath, 'QNestedMacroOwner', [$fixtureDir]);
+
+    expect($facts['status'] ?? null)->toBe('ok');
+    $nested = is_array($facts['referenced_nested_class_data'] ?? null)
+        ? $facts['referenced_nested_class_data']
+        : [];
+    $nestedQualified = array_values(array_filter(array_map(
+        static fn (mixed $entry): string => is_array($entry) && is_string($entry['qualified_name'] ?? null)
+            ? (string) $entry['qualified_name']
+            : '',
+        $nested,
+    )));
+
+    expect($nestedQualified)->toContain('QNestedMacroOwner::PublicType')
+        ->and($nestedQualified)->not->toContain('QNestedMacroOwner::HiddenPrivate')
+        ->and($nestedQualified)->not->toContain('QNestedMacroOwner::HiddenProtected');
+});
+
+it('skips referenced macro-declared nested class facts when declaration location is in a foreign header', function (): void {
+    $fixtureDir = qt_temp_dir('qtbuilder-nested-foreign-macro-facts-');
+    $macroHeaderPath = $fixtureDir . '/qmacro_tags.h';
+    $headerPath = $fixtureDir . '/qnestedforeignmacroowner.h';
+
+    file_put_contents($macroHeaderPath, <<<'CPP'
+#define DECL_FOREIGN_TAG(name) struct name {}
+CPP);
+
+    file_put_contents($headerPath, <<<'CPP'
+#include "qmacro_tags.h"
+
+class QNestedForeignMacroOwner
+{
+private:
+    DECL_FOREIGN_TAG(HiddenPrivate);
+public:
+    class PublicType
+    {
+    public:
+        PublicType() {}
+    };
+
+    void usePrivate(const QNestedForeignMacroOwner::HiddenPrivate &value);
+    void usePublic(const QNestedForeignMacroOwner::PublicType &value);
+};
+
+inline void QNestedForeignMacroOwner::usePrivate(const QNestedForeignMacroOwner::HiddenPrivate &value) { (void) value; }
+inline void QNestedForeignMacroOwner::usePublic(const QNestedForeignMacroOwner::PublicType &value) { (void) value; }
+CPP);
+
+    $service = new ClassGenerationService();
+    $facts = $service->prepareDiscoveryFacts($headerPath, 'QNestedForeignMacroOwner', [$fixtureDir]);
+
+    expect($facts['status'] ?? null)->toBe('ok');
+    $nested = is_array($facts['referenced_nested_class_data'] ?? null)
+        ? $facts['referenced_nested_class_data']
+        : [];
+    $nestedQualified = array_values(array_filter(array_map(
+        static fn (mixed $entry): string => is_array($entry) && is_string($entry['qualified_name'] ?? null)
+            ? (string) $entry['qualified_name']
+            : '',
+        $nested,
+    )));
+
+    expect($nestedQualified)->toContain('QNestedForeignMacroOwner::PublicType')
+        ->and($nestedQualified)->not->toContain('QNestedForeignMacroOwner::HiddenPrivate');
+});
+
 it('skips referenced nested class facts whose class name is a php reserved identifier', function (): void {
     $fixtureDir = qt_temp_dir('qtbuilder-nested-reserved-facts-');
     $headerPath = $fixtureDir . '/qnestedreservedowner.h';

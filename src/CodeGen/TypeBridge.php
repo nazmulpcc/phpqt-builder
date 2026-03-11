@@ -25,7 +25,7 @@ use QtBuilder\Support\TypeResolutionContext;
 class TypeBridge
 {
     private ?ContainerBridge $containerBridge = null;
-    /** @var array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string}> */
+    /** @var array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string, module?: string}> */
     private array $currentClassMetadata = [];
     /** @var array<string, string> */
     private array $currentSmartPointerAliases = [];
@@ -169,9 +169,9 @@ class TypeBridge
     ];
 
     /**
-     * @param array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string}> $classMetadata
+     * @param array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string, module?: string}> $classMetadata
      */
-    public function setTypeResolutionMetadata(?string $phpNamespace, array $classMetadata, array $smartPointerAliases = []): void
+    public function setTypeResolutionMetadata(?string $phpNamespace, array $classMetadata, array $smartPointerAliases = [], ?string $ownerPhpType = null): void
     {
         $this->currentPhpNamespace = $phpNamespace !== null ? ltrim(trim($phpNamespace), '\\') : null;
         $this->currentClassMetadata = $classMetadata;
@@ -184,6 +184,12 @@ class TypeBridge
 
             $name = is_string($metadata['name'] ?? null) ? $metadata['name'] : '';
             $qualifiedName = is_string($metadata['qualified_name'] ?? null) ? $metadata['qualified_name'] : '';
+            $metadataNamespace = is_string($metadata['namespace'] ?? null)
+                ? ltrim(trim((string) $metadata['namespace']), '\\')
+                : '';
+            $metadataModule = is_string($metadata['module'] ?? null)
+                ? trim((string) $metadata['module'])
+                : '';
             if ($name === '') {
                 continue;
             }
@@ -191,23 +197,58 @@ class TypeBridge
             $classUniverse[] = [
                 'name' => $name,
                 'qualified_name' => $qualifiedName !== '' ? $qualifiedName : null,
-                'module' => TypeResolutionContext::moduleForQualifiedName($qualifiedName),
+                'module' => $metadataModule !== ''
+                    ? $metadataModule
+                    : ($this->moduleFromPhpNamespace($metadataNamespace) ?? TypeResolutionContext::moduleForQualifiedName($qualifiedName)),
             ];
         }
         $this->currentClassTypeResolver = $classUniverse !== [] ? new CppClassTypeResolver($classUniverse) : null;
 
-        $module = null;
-        if ($this->currentPhpNamespace !== null && $this->currentPhpNamespace !== '') {
-            $parts = array_values(array_filter(explode('\\', $this->currentPhpNamespace), static fn(string $part): bool => $part !== ''));
-            $last = $parts !== [] ? $parts[array_key_last($parts)] : null;
-            if (is_string($last) && str_starts_with($last, 'Qt')) {
-                $module = $last;
+        $ownerPhpType = is_string($ownerPhpType) ? trim($ownerPhpType) : '';
+        $ownerQualifiedName = null;
+        $ownerModule = null;
+        if ($ownerPhpType !== '') {
+            foreach ($classMetadata as $metadata) {
+                if (!is_array($metadata)) {
+                    continue;
+                }
+
+                $name = is_string($metadata['name'] ?? null) ? trim((string) $metadata['name']) : '';
+                if ($name !== $ownerPhpType) {
+                    continue;
+                }
+
+                $metadataNamespace = is_string($metadata['namespace'] ?? null)
+                    ? ltrim(trim((string) $metadata['namespace']), '\\')
+                    : '';
+                if (
+                    $this->currentPhpNamespace !== null
+                    && $this->currentPhpNamespace !== ''
+                    && $metadataNamespace !== ''
+                    && $metadataNamespace !== $this->currentPhpNamespace
+                ) {
+                    continue;
+                }
+
+                $qualifiedName = is_string($metadata['qualified_name'] ?? null)
+                    ? trim((string) $metadata['qualified_name'])
+                    : '';
+                if ($qualifiedName === '') {
+                    continue;
+                }
+
+                $ownerQualifiedName = $qualifiedName;
+                $ownerModule = TypeResolutionContext::moduleForQualifiedName($qualifiedName);
+                break;
             }
         }
-        $namespace = $module !== null && $module !== 'Qt' ? $module : null;
+
+        $module = $ownerModule ?? $this->moduleFromPhpNamespace($this->currentPhpNamespace);
+        $namespace = TypeResolutionContext::namespaceForQualifiedName($ownerQualifiedName)
+            ?? ($module !== null && $module !== 'Qt' ? $module : null);
         $this->currentTypeResolutionContext = new TypeResolutionContext(
-            className: '',
-            qualifiedClassName: null,
+            className: $ownerPhpType,
+            qualifiedClassName: $ownerQualifiedName,
             module: $module,
             namespace: $namespace,
         );
@@ -226,6 +267,28 @@ class TypeBridge
     public function smartPointerAliases(): array
     {
         return $this->currentSmartPointerAliases;
+    }
+
+    private function moduleFromPhpNamespace(?string $phpNamespace): ?string
+    {
+        if (!is_string($phpNamespace) || $phpNamespace === '') {
+            return null;
+        }
+
+        $parts = array_values(array_filter(
+            explode('\\', ltrim($phpNamespace, '\\')),
+            static fn(string $part): bool => $part !== '',
+        ));
+        if (count($parts) < 2 || $parts[0] !== 'Qt') {
+            return null;
+        }
+
+        $suffix = $parts[1];
+        if ($suffix === '') {
+            return null;
+        }
+
+        return str_starts_with($suffix, 'Qt') ? $suffix : ('Qt' . $suffix);
     }
 
     // ------------------------------------------------------------------
@@ -2042,6 +2105,23 @@ class TypeBridge
         }
 
         if (str_contains($trimmed, '\\')) {
+            foreach ($this->currentClassMetadata as $candidate) {
+                if (!is_array($candidate)) {
+                    continue;
+                }
+
+                $namespace = is_string($candidate['namespace'] ?? null) ? ltrim($candidate['namespace'], '\\') : '';
+                $name = is_string($candidate['name'] ?? null) ? $candidate['name'] : '';
+                $generationId = is_string($candidate['generation_id'] ?? null) ? $candidate['generation_id'] : '';
+                if ($namespace === '' || $name === '' || $generationId === '') {
+                    continue;
+                }
+
+                if ($trimmed === ltrim($namespace . '\\' . $name, '\\')) {
+                    return $generationId;
+                }
+            }
+
             $parts = array_values(array_filter(explode('\\', $trimmed), static fn(string $part): bool => $part !== ''));
             $bareName = array_pop($parts) ?: $trimmed;
             $moduleSegment = $parts[1] ?? null;
@@ -2283,6 +2363,10 @@ class TypeBridge
 
         if ($base === 'std::filesystem::path') {
             return sprintf('std::filesystem::path(std::string(ZSTR_VAL(%s), ZSTR_LEN(%s)))', $varName, $varName);
+        }
+
+        if ($base === 'QAnyStringView') {
+            return sprintf('QAnyStringView(QString::fromUtf8(ZSTR_VAL(%s), (int)ZSTR_LEN(%s)))', $varName, $varName);
         }
 
         if ($base === 'qint128' || $base === 'quint128') {
@@ -2907,7 +2991,7 @@ class TypeBridge
             $generationId = $this->generationIdForPhpAndCppType($phpType, $cppType);
             return [
                 sprintf('object_init_ex(%s, %s);', $zvalPtrExpr, $this->ceVarNameForId($generationId)),
-                sprintf('%s(%s)->native_ptr = new %s(%s);', $this->zMacroNameForId($generationId), $zvalPtrExpr, $this->normalizeCppType($cppType), $sourceExpr),
+                sprintf('%s(%s)->native_ptr = new %s(%s);', $this->zMacroNameForId($generationId), $zvalPtrExpr, $this->localContainerNativeType($cppType), $sourceExpr),
             ];
         }
 
@@ -2917,7 +3001,7 @@ class TypeBridge
                 return [
                     sprintf('if (%s != NULL) {', $sourceExpr),
                     sprintf('    object_init_ex(%s, %s);', $zvalPtrExpr, $this->ceVarNameForId($generationId)),
-                    sprintf('    %s(%s)->native_ptr = new %s(*%s);', $this->zMacroNameForId($generationId), $zvalPtrExpr, $this->normalizeCppType($cppType), $sourceExpr),
+                    sprintf('    %s(%s)->native_ptr = new %s(*%s);', $this->zMacroNameForId($generationId), $zvalPtrExpr, $this->localContainerNativeType($cppType), $sourceExpr),
                     '} else {',
                     sprintf('    ZVAL_NULL(%s);', $zvalPtrExpr),
                     '}',
