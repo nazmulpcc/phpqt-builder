@@ -82,3 +82,12 @@ it('exits cleanly on qcoreapplication quit with qobject signal callbacks', funct
         ->and($payload['notify_hits'])->toBe(1)
         ->and($payload['connections_are_objects'])->toBeTrue();
 });
+
+it('dispatches qthread signals safely back to request thread', function (): void {
+    $payload = qt_runtime_payload('QtCore/thread_signal_dispatch_safety.php');
+
+    expect($payload['started_hits'])->toBe(1)
+        ->and($payload['finished_hits'])->toBe(1)
+        ->and($payload['timed_out'])->toBeFalse()
+        ->and($payload['connections_are_objects'])->toBeTrue();
+});

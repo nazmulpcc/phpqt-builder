@@ -81,8 +81,11 @@ it('generates protected virtual methods with native trampolines', function (): v
         Assert::assertStringContainsString('intern->native_is_virtual_trampoline = false;', $cpp);
         Assert::assertStringContainsString('int value() const override', $cpp);
         Assert::assertStringContainsString('QProtectedVirtualThing::value()', $cpp);
+        Assert::assertStringContainsString('if (!qt_runtime_can_call_zend()) {', $cpp);
         Assert::assertStringContainsString('zend_hash_str_find_ptr_lc(&ce->function_table, function_name, strlen(function_name))', $cpp);
         Assert::assertStringContainsString('zend_call_known_function(method, object, object->ce, retval, param_count, params, NULL);', $cpp);
+        Assert::assertStringNotContainsString('qt_override_cache_key', $cpp);
+        Assert::assertStringNotContainsString('static std::unordered_map<qt_override_cache_key', $cpp);
 });
 
 it('generates static protected access helpers', function (): void {

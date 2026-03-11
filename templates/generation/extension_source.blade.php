@@ -15,6 +15,8 @@ $buildInfoDependencies = $buildInfoModule !== null && $buildInfoModule->dependen
 #include <QtCore/QCoreApplication>
 #include <QtCore/QObject>
 #include <atomic>
+#include <cstdint>
+#include <cstring>
 #include "{!! $ctx->phpHeaderFilename() !!}"
 @foreach($ctx->classHeaders() as $header)
 #include "{!! $header !!}"
@@ -25,6 +27,52 @@ $buildInfoDependencies = $buildInfoModule !== null && $buildInfoModule->dependen
 
 static std::atomic_bool qt_shutdown_in_progress{false};
 static std::atomic_bool qt_about_to_quit_hooked{false};
+ZEND_DECLARE_MODULE_GLOBALS({!! $ctx->extensionName !!})
+
+static void php_{!! $ctx->extensionName !!}_init_globals(zend_{!! $ctx->extensionName !!}_globals *globals)
+{
+    memset(globals, 0, sizeof(*globals));
+}
+
+bool qt_runtime_is_owner_thread(void)
+{
+#if defined(ZTS)
+    if (!tsrm_is_managed_thread()) {
+        return false;
+    }
+
+    if (!QT_RUNTIME_G(request_active)) {
+        return false;
+    }
+
+    return (zend_ulong) (uintptr_t) tsrm_thread_id() == QT_RUNTIME_G(owner_thread_id);
+#else
+    if (!QT_RUNTIME_G(request_active)) {
+        return false;
+    }
+
+    return true;
+#endif
+}
+
+bool qt_runtime_can_call_zend(void)
+{
+#if defined(ZTS)
+    if (!tsrm_is_managed_thread()) {
+        return false;
+    }
+#endif
+
+    if (!QT_RUNTIME_G(request_active)) {
+        return false;
+    }
+
+    if (qt_runtime_is_shutdown_in_progress()) {
+        return false;
+    }
+
+    return qt_runtime_is_owner_thread();
+}
 
 bool qt_runtime_is_shutdown_in_progress(void)
 {
@@ -105,6 +153,8 @@ PHP_MINFO_FUNCTION({!! $ctx->extensionName !!})
 
 PHP_MINIT_FUNCTION({!! $ctx->extensionName !!})
 {
+    ZEND_INIT_MODULE_GLOBALS({!! $ctx->extensionName !!}, php_{!! $ctx->extensionName !!}_init_globals, NULL);
+
 @foreach($ctx->classMinits() as $minit)
     if (PHP_MINIT({!! $minit !!})(INIT_FUNC_ARGS_PASSTHRU) != SUCCESS) {
         return FAILURE;
@@ -125,6 +175,12 @@ PHP_RINIT_FUNCTION({!! $ctx->extensionName !!})
 #if defined(ZTS) && defined(COMPILE_DL_{!! strtoupper($ctx->extensionName) !!})
     ZEND_TSRMLS_CACHE_UPDATE();
 #endif
+#if defined(ZTS)
+    QT_RUNTIME_G(owner_thread_id) = (zend_ulong) (uintptr_t) tsrm_thread_id();
+#else
+    QT_RUNTIME_G(owner_thread_id) = 0;
+#endif
+    QT_RUNTIME_G(request_active) = true;
     qt_shutdown_in_progress.store(false, std::memory_order_release);
     qt_about_to_quit_hooked.store(false, std::memory_order_release);
 
@@ -135,6 +191,7 @@ PHP_RSHUTDOWN_FUNCTION({!! $ctx->extensionName !!})
 {
     qt_runtime_shutdown_qcoreapplication();
     qt_runtime_mark_shutdown_in_progress();
+    QT_RUNTIME_G(request_active) = false;
 
     return SUCCESS;
 }

@@ -58,6 +58,13 @@ it('generates signal apis and retains protected slots', function (): void {
         Assert::assertStringContainsString('qt_should_delete_native', $cpp);
         Assert::assertStringContainsString('if (qt_should_delete_native(intern->native_ptr, intern->prevent_destroy)) {', $cpp);
         Assert::assertStringContainsString('if (qt_runtime_is_shutdown_in_progress()) {', $cpp);
+        Assert::assertStringContainsString('if (!qt_runtime_can_call_zend()) {', $cpp);
+        Assert::assertStringContainsString('if (qt_runtime_can_call_zend()) {', $cpp);
+        Assert::assertStringContainsString('if (_qt_app == NULL) {', $cpp);
+        Assert::assertStringContainsString('if (QThread::currentThread() == _qt_app->thread()) {', $cpp);
+        Assert::assertStringContainsString('QMetaObject::invokeMethod(_qt_app, [invoke]() mutable {', $cpp);
+        Assert::assertStringContainsString('qt_signal_dispatch([_qt_handle]() mutable {', $cpp);
+        Assert::assertStringNotContainsString('qt_signal_callback_clear(handle);', $cpp);
         Assert::assertStringContainsString('zend_string_equals_literal(signalSignature, "triggered()")', $cpp);
         Assert::assertStringContainsString('static_cast<void (QSignalFixture::*)(int)>(&QSignalFixture::valueChanged)', $cpp);
         Assert::assertStringContainsString('ZEND_ME(Qt_Core_QSignalFixture, onTriggered,', $cpp);

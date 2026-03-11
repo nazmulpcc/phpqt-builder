@@ -146,6 +146,10 @@ it('registers parents before children in extension source', function (): void {
         ->and($source)->toContain(
             'static std::atomic_bool qt_shutdown_in_progress{false};',
             'static std::atomic_bool qt_about_to_quit_hooked{false};',
+            'ZEND_DECLARE_MODULE_GLOBALS(qt)',
+            'static void php_qt_init_globals(zend_qt_globals *globals)',
+            'bool qt_runtime_is_owner_thread(void)',
+            'bool qt_runtime_can_call_zend(void)',
             'bool qt_runtime_is_shutdown_in_progress(void)',
             'void qt_runtime_mark_shutdown_in_progress(void)',
             'void qt_runtime_try_hook_about_to_quit(void)',
@@ -154,12 +158,24 @@ it('registers parents before children in extension source', function (): void {
             'PHP_RSHUTDOWN_FUNCTION(qt)',
             'PHP_RINIT(qt)',
             'PHP_RSHUTDOWN(qt)',
+            'ZEND_INIT_MODULE_GLOBALS(qt, php_qt_init_globals, NULL);',
+            'QT_RUNTIME_G(owner_thread_id) = (zend_ulong) (uintptr_t) tsrm_thread_id();',
+            'QT_RUNTIME_G(request_active) = true;',
+            'QT_RUNTIME_G(request_active) = false;',
             '&QCoreApplication::aboutToQuit',
             'qt_runtime_shutdown_qcoreapplication();',
         );
 
     $header = (string) file_get_contents($outputDir . '/php_qt.h');
     expect($header)->toContain(
+        'ZEND_BEGIN_MODULE_GLOBALS(qt)',
+        'zend_ulong owner_thread_id;',
+        'bool request_active;',
+        'ZEND_END_MODULE_GLOBALS(qt)',
+        'ZEND_EXTERN_MODULE_GLOBALS(qt)',
+        '# define QT_RUNTIME_G(v) ZEND_MODULE_GLOBALS_ACCESSOR(qt, v)',
+        'bool qt_runtime_is_owner_thread(void);',
+        'bool qt_runtime_can_call_zend(void);',
         'bool qt_runtime_is_shutdown_in_progress(void);',
         'void qt_runtime_mark_shutdown_in_progress(void);',
         'void qt_runtime_try_hook_about_to_quit(void);',

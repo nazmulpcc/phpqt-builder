@@ -18,7 +18,6 @@
 #include <new>
 #include <string>
 #include <type_traits>
-#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -55,6 +54,12 @@
 
 @if($ctx->hasPreventDestroy || $ctx->isQObjectDerived)
 bool qt_runtime_is_shutdown_in_progress(void);
+@endif
+@if($ctx->hasSignals() || $ctx->requiresVirtualTrampoline)
+bool qt_runtime_can_call_zend(void);
+@endif
+@if($ctx->hasSignals())
+bool qt_runtime_is_owner_thread(void);
 @endif
 @if($ctx->isQObjectDerived)
 void qt_runtime_try_hook_about_to_quit(void);
@@ -152,27 +157,6 @@ static zend_always_inline bool qt_method_is_overridden_in_ce(zend_class_entry *a
     return child_fn->common.scope != base_fn->common.scope;
 }
 
-struct qt_override_cache_key {
-    zend_class_entry *actual_ce;
-    zend_class_entry *base_ce;
-};
-
-struct qt_override_cache_key_hash {
-    size_t operator()(const qt_override_cache_key &key) const
-    {
-        auto left = reinterpret_cast<size_t>(key.actual_ce);
-        auto right = reinterpret_cast<size_t>(key.base_ce);
-        return left ^ (right + 0x9e3779b97f4a7c15ULL + (left << 6) + (left >> 2));
-    }
-};
-
-struct qt_override_cache_key_equal {
-    bool operator()(const qt_override_cache_key &left, const qt_override_cache_key &right) const
-    {
-        return left.actual_ce == right.actual_ce && left.base_ce == right.base_ce;
-    }
-};
-
 static zend_always_inline bool qt_any_virtual_method_overridden_in_ce(
     zend_class_entry *actual_ce,
     zend_class_entry *base_ce,
@@ -188,32 +172,13 @@ static zend_always_inline bool qt_any_virtual_method_overridden_in_ce(
         return false;
     }
 
-    static std::unordered_map<qt_override_cache_key, bool, qt_override_cache_key_hash, qt_override_cache_key_equal> _qt_cache;
-    static std::mutex _qt_cache_mutex;
-
-    qt_override_cache_key _qt_key{actual_ce, base_ce};
-    {
-        std::lock_guard<std::mutex> _qt_lock(_qt_cache_mutex);
-        auto _qt_it = _qt_cache.find(_qt_key);
-        if (_qt_it != _qt_cache.end()) {
-            return _qt_it->second;
-        }
-    }
-
-    bool _qt_has_override = false;
     for (size_t _qt_i = 0; _qt_i < method_count; ++_qt_i) {
         if (qt_method_is_overridden_in_ce(actual_ce, base_ce, method_names[_qt_i])) {
-            _qt_has_override = true;
-            break;
+            return true;
         }
     }
 
-    {
-        std::lock_guard<std::mutex> _qt_lock(_qt_cache_mutex);
-        _qt_cache.emplace(_qt_key, _qt_has_override);
-    }
-
-    return _qt_has_override;
+    return false;
 }
 
 static zend_always_inline bool qt_call_php_method(zend_object *object, const char *function_name, zval *retval, uint32_t param_count, zval *params)
@@ -900,9 +865,39 @@ struct qt_signal_callback_t {
     zend_fcall_info_cache fci_cache;
 };
 
+template <typename InvokeCallback>
+static inline bool qt_signal_dispatch(InvokeCallback invoke)
+{
+    if (qt_runtime_can_call_zend()) {
+        invoke();
+        return true;
+    }
+
+    QCoreApplication *_qt_app = QCoreApplication::instance();
+    if (_qt_app == NULL) {
+        return false;
+    }
+
+    if (QThread::currentThread() == _qt_app->thread()) {
+        return false;
+    }
+
+    QMetaObject::invokeMethod(_qt_app, [invoke]() mutable {
+        if (qt_runtime_can_call_zend()) {
+            invoke();
+        }
+    }, Qt::QueuedConnection);
+
+    return true;
+}
+
 static inline void qt_signal_callback_clear(const std::shared_ptr<qt_signal_callback_t> &callback)
 {
     if (!callback) {
+        return;
+    }
+
+    if (!qt_runtime_can_call_zend()) {
         return;
     }
 
@@ -937,7 +932,10 @@ static inline std::shared_ptr<qt_signal_callback_t> qt_signal_callback_create(co
 
     if (sender != NULL) {
         QObject::connect(sender, &QObject::destroyed, [handle]() {
-            qt_signal_callback_clear(handle);
+            auto _qt_handle = handle;
+            qt_signal_dispatch([_qt_handle]() mutable {
+                qt_signal_callback_clear(_qt_handle);
+            });
         });
     }
 
@@ -946,6 +944,10 @@ static inline std::shared_ptr<qt_signal_callback_t> qt_signal_callback_create(co
 
 static inline bool qt_signal_callback_invoke(const std::shared_ptr<qt_signal_callback_t> &callback, uint32_t param_count, zval *params)
 {
+    if (!callback || !qt_runtime_can_call_zend()) {
+        return false;
+    }
+
 @if($ctx->isQObjectDerived)
     if (qt_runtime_is_shutdown_in_progress()) {
         return false;
@@ -970,20 +972,6 @@ static inline bool qt_signal_callback_invoke(const std::shared_ptr<qt_signal_cal
     zval_ptr_dtor(&retval);
 
     return ok;
-}
-
-template <typename InvokeCallback>
-static inline void qt_signal_dispatch(InvokeCallback invoke)
-{
-    QCoreApplication *_qt_app = QCoreApplication::instance();
-    if (_qt_app != NULL && QThread::currentThread() != _qt_app->thread()) {
-        QMetaObject::invokeMethod(_qt_app, [invoke]() mutable {
-            invoke();
-        }, Qt::QueuedConnection);
-        return;
-    }
-
-    invoke();
 }
 
 @endif
@@ -1108,6 +1096,23 @@ public:
     }
     $overrideField = $entryMap[$method->name] ?? null;
 @endphp
+        if (!qt_runtime_can_call_zend()) {
+@if($overload->isPureVirtual)
+@if($overload->returnStrategy === 'void')
+            return;
+@else
+            return {!! $ctx->typeBridge->defaultNativeReturnExpr($overload->phpReturnType, $overload->cppReturnType) !!};
+@endif
+@else
+@if($overload->returnStrategy === 'void')
+            {!! $baseCall !!};
+            return;
+@else
+            return {!! $baseCall !!};
+@endif
+@endif
+        }
+
         if (this->php_object == nullptr) {
             zend_throw_error(NULL, "Missing PHP object for {!! addslashes($ctx->phpClassName) !!}::{!! $method->name !!}() virtual dispatch.");
 @if($overload->returnStrategy === 'void')
