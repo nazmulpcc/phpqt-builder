@@ -337,6 +337,100 @@ CPP);
         ->and($nestedQualified)->not->toContain('QNestedOwner::Unused');
 });
 
+it('skips referenced non-public nested class facts from the owner parse payload', function (): void {
+    $fixtureDir = qt_temp_dir('qtbuilder-nested-non-public-facts-');
+    $headerPath = $fixtureDir . '/qnestedaccessowner.h';
+
+    file_put_contents($headerPath, <<<'CPP'
+class QNestedAccessOwner
+{
+public:
+    class PublicType
+    {
+    public:
+        PublicType() {}
+    };
+
+protected:
+    class ProtectedType
+    {
+    public:
+        ProtectedType() {}
+    };
+
+public:
+    void usePublic(const QNestedAccessOwner::PublicType &value);
+    void useProtected(const QNestedAccessOwner::ProtectedType &value);
+};
+
+inline void QNestedAccessOwner::usePublic(const QNestedAccessOwner::PublicType &value) { (void) value; }
+inline void QNestedAccessOwner::useProtected(const QNestedAccessOwner::ProtectedType &value) { (void) value; }
+CPP);
+
+    $service = new ClassGenerationService();
+    $facts = $service->prepareDiscoveryFacts($headerPath, 'QNestedAccessOwner', [$fixtureDir]);
+
+    expect($facts['status'] ?? null)->toBe('ok');
+    $nested = is_array($facts['referenced_nested_class_data'] ?? null)
+        ? $facts['referenced_nested_class_data']
+        : [];
+    $nestedQualified = array_values(array_filter(array_map(
+        static fn (mixed $entry): string => is_array($entry) && is_string($entry['qualified_name'] ?? null)
+            ? (string) $entry['qualified_name']
+            : '',
+        $nested,
+    )));
+
+    expect($nestedQualified)->toContain('QNestedAccessOwner::PublicType')
+        ->and($nestedQualified)->not->toContain('QNestedAccessOwner::ProtectedType');
+});
+
+it('skips referenced nested class facts whose class name is a php reserved identifier', function (): void {
+    $fixtureDir = qt_temp_dir('qtbuilder-nested-reserved-facts-');
+    $headerPath = $fixtureDir . '/qnestedreservedowner.h';
+
+    file_put_contents($headerPath, <<<'CPP'
+class QNestedReservedOwner
+{
+public:
+    class NormalType
+    {
+    public:
+        NormalType() {}
+    };
+
+    class Private
+    {
+    public:
+        Private() {}
+    };
+
+    void useNormal(const QNestedReservedOwner::NormalType &value);
+    void useReserved(const QNestedReservedOwner::Private &value);
+};
+
+inline void QNestedReservedOwner::useNormal(const QNestedReservedOwner::NormalType &value) { (void) value; }
+inline void QNestedReservedOwner::useReserved(const QNestedReservedOwner::Private &value) { (void) value; }
+CPP);
+
+    $service = new ClassGenerationService();
+    $facts = $service->prepareDiscoveryFacts($headerPath, 'QNestedReservedOwner', [$fixtureDir]);
+
+    expect($facts['status'] ?? null)->toBe('ok');
+    $nested = is_array($facts['referenced_nested_class_data'] ?? null)
+        ? $facts['referenced_nested_class_data']
+        : [];
+    $nestedQualified = array_values(array_filter(array_map(
+        static fn (mixed $entry): string => is_array($entry) && is_string($entry['qualified_name'] ?? null)
+            ? (string) $entry['qualified_name']
+            : '',
+        $nested,
+    )));
+
+    expect($nestedQualified)->toContain('QNestedReservedOwner::NormalType')
+        ->and($nestedQualified)->not->toContain('QNestedReservedOwner::Private');
+});
+
 it('keeps owner methods that depend on nested classes when nested class data is available', function (): void {
     $fixtureDir = qt_temp_dir('qtbuilder-nested-generate-');
     $headerPath = $fixtureDir . '/qnestedowner.h';

@@ -651,6 +651,11 @@ class ClassGenerationService
         }
 
         $referencedNestedClassData = [];
+        $nestedAccessByName = $this->nestedDeclarationAccessMap(
+            $headerPath,
+            $resolvedName !== '' ? $resolvedName : $className,
+            (bool) ($classData['is_struct'] ?? false),
+        );
         foreach ((array) ($inspection['referenced_nested_class_data'] ?? []) as $nestedClassData) {
             if (!is_array($nestedClassData)) {
                 continue;
@@ -660,6 +665,15 @@ class ClassGenerationService
                 ? trim((string) $nestedClassData['name'])
                 : '';
             if ($nestedLookupName === '') {
+                continue;
+            }
+
+            if ($this->isPhpReservedIdentifier($nestedLookupName)) {
+                continue;
+            }
+
+            $declarationAccess = $nestedAccessByName[$nestedLookupName] ?? null;
+            if ($declarationAccess !== null && $declarationAccess !== 'public') {
                 continue;
             }
 
@@ -3752,6 +3766,157 @@ class ClassGenerationService
         }
 
         return $segments;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function nestedDeclarationAccessMap(string $headerPath, string $ownerClassName, bool $ownerIsStruct): array
+    {
+        $resolved = $this->resolveClassDefinitionSource($headerPath, $ownerClassName);
+        if ($resolved === null) {
+            return [];
+        }
+
+        $classBody = is_array($resolved['body'] ?? null) && is_string($resolved['body']['body'] ?? null)
+            ? $resolved['body']['body']
+            : null;
+        if ($classBody === null) {
+            return [];
+        }
+
+        $defaultAccess = $resolved['body'] !== null && $resolved['body']['kind'] === 'struct'
+            ? 'public'
+            : ($ownerIsStruct ? 'public' : 'private');
+        $segments = $this->topLevelClassSegments($classBody, $defaultAccess);
+
+        $accessByName = [];
+        foreach ($segments as $segmentInfo) {
+            $access = is_string($segmentInfo['access'] ?? null) ? $segmentInfo['access'] : 'private';
+            $segment = is_string($segmentInfo['segment'] ?? null) ? $segmentInfo['segment'] : '';
+            if ($segment === '') {
+                continue;
+            }
+
+            foreach ($this->declaredTopLevelNestedClassNames($segment) as $nestedName) {
+                if (!isset($accessByName[$nestedName])) {
+                    $accessByName[$nestedName] = $access;
+                }
+            }
+        }
+
+        return $accessByName;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function declaredTopLevelNestedClassNames(string $segment): array
+    {
+        $matchCount = preg_match_all(
+            '/\b(?:class|struct)\s+(?:[A-Za-z_][A-Za-z0-9_]*(?:\s*\([^)]*\))?\s+)*(?<name>[A-Za-z_][A-Za-z0-9_]*)\b(?:\s+final)?(?:\s*:[^{;]+)?\s*(?:\{|;)/s',
+            $segment,
+            $matches,
+        );
+        if (!is_int($matchCount) || $matchCount === 0) {
+            return [];
+        }
+
+        return array_values(array_unique(array_filter(array_map(
+            static fn(mixed $name): string => is_string($name) ? trim($name) : '',
+            $matches['name'] ?? [],
+        ), static fn(string $name): bool => $name !== '')));
+    }
+
+    private function isPhpReservedIdentifier(string $name): bool
+    {
+        static $reserved = [
+            'abstract' => true,
+            'and' => true,
+            'array' => true,
+            'as' => true,
+            'break' => true,
+            'callable' => true,
+            'case' => true,
+            'catch' => true,
+            'class' => true,
+            'clone' => true,
+            'const' => true,
+            'continue' => true,
+            'declare' => true,
+            'default' => true,
+            'do' => true,
+            'echo' => true,
+            'else' => true,
+            'elseif' => true,
+            'empty' => true,
+            'enddeclare' => true,
+            'endfor' => true,
+            'endforeach' => true,
+            'endif' => true,
+            'endswitch' => true,
+            'endwhile' => true,
+            'enum' => true,
+            'eval' => true,
+            'exit' => true,
+            'extends' => true,
+            'final' => true,
+            'finally' => true,
+            'fn' => true,
+            'for' => true,
+            'foreach' => true,
+            'function' => true,
+            'global' => true,
+            'goto' => true,
+            'if' => true,
+            'implements' => true,
+            'include' => true,
+            'include_once' => true,
+            'instanceof' => true,
+            'insteadof' => true,
+            'interface' => true,
+            'isset' => true,
+            'list' => true,
+            'match' => true,
+            'namespace' => true,
+            'new' => true,
+            'or' => true,
+            'print' => true,
+            'private' => true,
+            'protected' => true,
+            'public' => true,
+            'readonly' => true,
+            'require' => true,
+            'require_once' => true,
+            'return' => true,
+            'static' => true,
+            'switch' => true,
+            'throw' => true,
+            'trait' => true,
+            'try' => true,
+            'unset' => true,
+            'use' => true,
+            'var' => true,
+            'while' => true,
+            'xor' => true,
+            'yield' => true,
+            'bool' => true,
+            'false' => true,
+            'float' => true,
+            'int' => true,
+            'iterable' => true,
+            'mixed' => true,
+            'never' => true,
+            'null' => true,
+            'object' => true,
+            'parent' => true,
+            'self' => true,
+            'string' => true,
+            'true' => true,
+            'void' => true,
+        ];
+
+        return isset($reserved[strtolower($name)]);
     }
 
     private function containsCopyDisablingMacro(string $segment, string $className): bool
