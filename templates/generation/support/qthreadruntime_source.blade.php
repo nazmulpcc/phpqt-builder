@@ -10,8 +10,6 @@
 #include <QtCore/QThread>
 #include <TSRM.h>
 #include <Zend/zend_exceptions.h>
-#include <Zend/zend_smart_str.h>
-#include <ext/standard/php_var.h>
 #include <main/php_main.h>
 #include <algorithm>
 #include <atomic>
@@ -275,23 +273,33 @@ public:
 
     static bool serializeValue(zval *value, std::string *out)
     {
-        if (out == nullptr) {
+        if (value == nullptr || out == nullptr) {
             return false;
         }
 
-        smart_str buffer = {0};
-        php_serialize_data_t var_hash;
-        PHP_VAR_SERIALIZE_INIT(var_hash);
-        php_var_serialize(&buffer, value, &var_hash);
-        PHP_VAR_SERIALIZE_DESTROY(var_hash);
-        smart_str_0(&buffer);
+        zval serializer;
+        zval retval;
+        zval param;
+        ZVAL_STRINGL(&serializer, "serialize", sizeof("serialize") - 1);
+        ZVAL_COPY(&param, value);
+        ZVAL_UNDEF(&retval);
 
-        if (buffer.s == NULL) {
+        int status = call_user_function(EG(function_table), NULL, &serializer, &retval, 1, &param);
+        zval_ptr_dtor(&param);
+        zval_ptr_dtor(&serializer);
+
+        if (status != SUCCESS || EG(exception) != NULL || Z_TYPE(retval) != IS_STRING) {
+            if (EG(exception) != NULL) {
+                zend_clear_exception();
+            }
+            if (!Z_ISUNDEF(retval)) {
+                zval_ptr_dtor(&retval);
+            }
             return false;
         }
 
-        out->assign(ZSTR_VAL(buffer.s), ZSTR_LEN(buffer.s));
-        smart_str_free(&buffer);
+        out->assign(Z_STRVAL(retval), Z_STRLEN(retval));
+        zval_ptr_dtor(&retval);
         return true;
     }
 
@@ -301,15 +309,29 @@ public:
             return false;
         }
 
-        const unsigned char *ptr = (const unsigned char *) payload.data();
-        const unsigned char *max = ptr + payload.size();
-        php_unserialize_data_t var_hash;
-        PHP_VAR_UNSERIALIZE_INIT(var_hash);
-        ZVAL_NULL(out);
-        bool ok = php_var_unserialize(out, &ptr, max, &var_hash) != 0;
-        PHP_VAR_UNSERIALIZE_DESTROY(var_hash);
+        zval serializer;
+        zval arg;
+        zval retval;
+        ZVAL_STRINGL(&serializer, "unserialize", sizeof("unserialize") - 1);
+        ZVAL_STRINGL(&arg, payload.data(), payload.size());
+        ZVAL_UNDEF(&retval);
 
-        return ok && ptr == max;
+        int status = call_user_function(EG(function_table), NULL, &serializer, &retval, 1, &arg);
+        zval_ptr_dtor(&arg);
+        zval_ptr_dtor(&serializer);
+
+        if (status != SUCCESS || EG(exception) != NULL) {
+            if (EG(exception) != NULL) {
+                zend_clear_exception();
+            }
+            if (!Z_ISUNDEF(retval)) {
+                zval_ptr_dtor(&retval);
+            }
+            return false;
+        }
+
+        ZVAL_COPY_VALUE(out, &retval);
+        return true;
     }
 
     static qt_qthreadruntime_result makeErrorResult(std::string class_name, std::string message, zend_long code = 0, bool fatal = false)
