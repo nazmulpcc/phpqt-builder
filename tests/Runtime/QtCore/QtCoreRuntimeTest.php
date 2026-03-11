@@ -167,3 +167,21 @@ it('handles shutdown race with queued jobs without worker crashes', function ():
         ->and($payload['stats_worker_crash'])->toBe(0)
         ->and($payload['stats_canceled'])->toBeGreaterThanOrEqual(0);
 });
+
+it('accepts array callable descriptors and rejects closure callables deterministically', function (): void {
+    $payload = qt_runtime_payload('QtCore/thread_runtime_callable_forms.php', [], 10);
+
+    expect($payload['array_callable_object'])->toBeTrue()
+        ->and($payload['array_callable_class'])->toBe('DateTimeImmutable')
+        ->and($payload['closure_rejected'])->toBeTrue()
+        ->and($payload['stopped'])->toBeTrue();
+});
+
+it('loads worker bootstrap script into isolated runtime context', function (): void {
+    $payload = qt_runtime_payload('QtCore/thread_runtime_bootstrap_script.php', [], 10);
+
+    expect($payload['sum'])->toBe(42)
+        ->and($payload['worker_bootstrap_failed'])->toBeFalse()
+        ->and($payload['stopped'])->toBeTrue()
+        ->and($payload['main_has_function'])->toBeFalse();
+});

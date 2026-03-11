@@ -9,7 +9,9 @@
 
 #include <QtCore/QThread>
 #include <TSRM.h>
+#include <Zend/zend_compile.h>
 #include <Zend/zend_exceptions.h>
+#include <Zend/zend_stream.h>
 #include <ext/standard/info.h>
 #include <main/php_main.h>
 #include <algorithm>
@@ -71,7 +73,7 @@ struct qt_qthreadruntime_result {
 
 struct qt_qthreadruntime_job {
     uint64_t id{0};
-    std::string callable;
+    std::string callable_payload;
     std::string args_payload;
     std::atomic_bool canceled{false};
 };
@@ -99,6 +101,22 @@ private:
 
 class qt_qthreadruntime_state final : public std::enable_shared_from_this<qt_qthreadruntime_state> {
 public:
+    bool setBootstrapScript(const std::string &path, std::string *error)
+    {
+        if (error == nullptr) {
+            return false;
+        }
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (running_) {
+            *error = "Cannot change bootstrap script while worker runtime is running.";
+            return false;
+        }
+
+        bootstrap_script_ = path;
+        return true;
+    }
+
     bool start()
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -172,7 +190,7 @@ public:
         return running_;
     }
 
-    bool submit(std::string callable, std::string args_payload, uint64_t *job_id, std::string *error)
+    bool submit(std::string callable_payload, std::string args_payload, uint64_t *job_id, std::string *error)
     {
         if (job_id == nullptr || error == nullptr) {
             return false;
@@ -200,7 +218,7 @@ public:
 
         auto job = std::make_shared<qt_qthreadruntime_job>();
         job->id = next_job_id_++;
-        job->callable = std::move(callable);
+        job->callable_payload = std::move(callable_payload);
         job->args_payload = std::move(args_payload);
 
         jobs_[job->id] = job;
@@ -289,6 +307,46 @@ public:
             running_ = false;
             stopping_ = true;
             return;
+        }
+
+        std::string bootstrap_script;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            bootstrap_script = bootstrap_script_;
+        }
+        if (!bootstrap_script.empty()) {
+            std::string bootstrap_error;
+            if (!executeBootstrapScript(bootstrap_script, &bootstrap_error)) {
+                std::lock_guard<std::mutex> lock(mutex_);
+                worker_bootstrap_failed_ = true;
+                running_ = false;
+                stopping_ = true;
+                qt_qthreadruntime_total_worker_crash.fetch_add(1, std::memory_order_acq_rel);
+                qt_qthreadruntime_result failed;
+                failed.ready = true;
+                failed.success = false;
+                failed.canceled = false;
+                failed.error.class_name = "RuntimeException";
+                failed.error.message = bootstrap_error.empty()
+                    ? std::string("Worker bootstrap script failed.")
+                    : bootstrap_error;
+
+                while (!queue_.empty()) {
+                    std::shared_ptr<qt_qthreadruntime_job> job = queue_.front();
+                    queue_.pop_front();
+                    if (!job) {
+                        continue;
+                    }
+                    jobs_.erase(job->id);
+                    results_[job->id] = failed;
+                }
+                result_cv_.notify_all();
+                gc_collect_cycles();
+                php_request_shutdown(NULL);
+                ts_free_thread();
+                qt_qthreadruntime_tls_worker_request = false;
+                return;
+            }
         }
 
         while (true) {
@@ -428,7 +486,10 @@ public:
             }
 
             zval callable_zv;
-            ZVAL_STRINGL(&callable_zv, job->callable.c_str(), job->callable.size());
+            if (!unserializeValue(job->callable_payload, &callable_zv)) {
+                zval_ptr_dtor(&args_zv);
+                return makeErrorResult("RuntimeException", "Failed to unserialize worker callable.");
+            }
 
             uint32_t argc = (uint32_t) zend_hash_num_elements(Z_ARRVAL(args_zv));
             std::vector<zval> params;
@@ -530,6 +591,45 @@ public:
         return result;
     }
 
+    static bool executeBootstrapScript(const std::string &scriptPath, std::string *error)
+    {
+        if (scriptPath.empty()) {
+            return true;
+        }
+
+        zend_file_handle file_handle;
+        zend_stream_init_filename(&file_handle, scriptPath.c_str());
+        zend_result rc = zend_execute_scripts(ZEND_REQUIRE, NULL, 1, &file_handle);
+        if (rc == SUCCESS && EG(exception) == NULL) {
+            return true;
+        }
+
+        if (error != nullptr) {
+            if (EG(exception) != NULL) {
+                zval ex_zv;
+                ZVAL_OBJ_COPY(&ex_zv, EG(exception));
+                zend_clear_exception();
+
+                std::string message = "Worker bootstrap script threw an exception.";
+                zval rv;
+                zval *message_prop = zend_read_property_ex(Z_OBJCE_P(&ex_zv), Z_OBJ(ex_zv), ZSTR_KNOWN(ZEND_STR_MESSAGE), 1, &rv);
+                if (message_prop != NULL) {
+                    zend_string *msg = zval_get_string(message_prop);
+                    if (msg != NULL) {
+                        message.assign(ZSTR_VAL(msg), ZSTR_LEN(msg));
+                        zend_string_release(msg);
+                    }
+                }
+                zval_ptr_dtor(&ex_zv);
+                *error = message;
+            } else {
+                *error = "Worker bootstrap script could not be executed.";
+            }
+        }
+
+        return false;
+    }
+
 private:
     mutable std::mutex mutex_;
     std::condition_variable job_cv_;
@@ -547,6 +647,7 @@ private:
     uint64_t stats_timeouts_{0};
     uint64_t stats_worker_crash_{0};
     size_t max_queue_depth_{qt_qthreadruntime_env_queue_depth()};
+    std::string bootstrap_script_;
     bool running_{false};
     bool stopping_{false};
     bool worker_bootstrap_failed_{false};
@@ -712,13 +813,40 @@ PHP_METHOD(QThreadRuntime, start)
 #endif
 }
 
+PHP_METHOD(QThreadRuntime, setBootstrapScript)
+{
+    zend_string *path = NULL;
+    ZEND_PARSE_PARAMETERS_START(0, 1)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_STR_OR_NULL(path)
+    ZEND_PARSE_PARAMETERS_END();
+
+#if !defined(ZTS)
+    zend_throw_error(NULL, "Qt\\Core\\QThreadRuntime requires a ZTS PHP build.");
+    RETURN_THROWS();
+#else
+    qt_qthreadruntime_state *state = qt_qthreadruntime_fetch_state(ZEND_THIS);
+    if (state == NULL) {
+        zend_throw_error(NULL, "Invalid QThreadRuntime state.");
+        RETURN_THROWS();
+    }
+
+    std::string set_error;
+    std::string value = path != NULL ? std::string(ZSTR_VAL(path), ZSTR_LEN(path)) : std::string();
+    if (!state->setBootstrapScript(value, &set_error)) {
+        zend_throw_error(NULL, "%s", set_error.c_str());
+        RETURN_THROWS();
+    }
+#endif
+}
+
 PHP_METHOD(QThreadRuntime, submit)
 {
-    zend_string *callable = NULL;
+    zval *callable = NULL;
     zval *args = NULL;
 
     ZEND_PARSE_PARAMETERS_START(1, 2)
-        Z_PARAM_STR(callable)
+        Z_PARAM_ZVAL(callable)
         Z_PARAM_OPTIONAL
         Z_PARAM_ARRAY(args)
     ZEND_PARSE_PARAMETERS_END();
@@ -733,13 +861,30 @@ PHP_METHOD(QThreadRuntime, submit)
         RETURN_THROWS();
     }
 
-    if (ZSTR_LEN(callable) == 0) {
-        zend_argument_value_error(1, "must not be empty");
+    if (callable == NULL) {
+        zend_argument_value_error(1, "must be a callable");
         RETURN_THROWS();
     }
 
-    if (strstr(ZSTR_VAL(callable), "::") != NULL) {
-        zend_argument_value_error(1, "must be a global function name in phase 3A");
+    bool callable_supported = false;
+    if (Z_TYPE_P(callable) == IS_STRING) {
+        callable_supported = Z_STRLEN_P(callable) > 0;
+    } else if (Z_TYPE_P(callable) == IS_ARRAY && zend_hash_num_elements(Z_ARRVAL_P(callable)) == 2) {
+        zval *first = zend_hash_index_find(Z_ARRVAL_P(callable), 0);
+        zval *second = zend_hash_index_find(Z_ARRVAL_P(callable), 1);
+        callable_supported = first != NULL
+            && second != NULL
+            && Z_TYPE_P(first) == IS_STRING
+            && Z_TYPE_P(second) == IS_STRING
+            && Z_STRLEN_P(first) > 0
+            && Z_STRLEN_P(second) > 0;
+    }
+
+    if (!callable_supported) {
+        zend_argument_value_error(
+            1,
+            "must be a non-empty callable string or [class-string, method-string] pair; closures/object callables are not supported yet"
+        );
         RETURN_THROWS();
     }
 
@@ -747,6 +892,16 @@ PHP_METHOD(QThreadRuntime, submit)
         zend_throw_error(NULL, "Failed to start worker runtime.");
         RETURN_THROWS();
     }
+
+    zval callable_input;
+    ZVAL_COPY(&callable_input, callable);
+    std::string callable_payload;
+    if (!qt_qthreadruntime_state::serializeValue(&callable_input, &callable_payload)) {
+        zval_ptr_dtor(&callable_input);
+        zend_throw_error(NULL, "Failed to serialize worker callable.");
+        RETURN_THROWS();
+    }
+    zval_ptr_dtor(&callable_input);
 
     zval serialized_args_input;
     if (args != NULL) {
@@ -766,7 +921,7 @@ PHP_METHOD(QThreadRuntime, submit)
     uint64_t job_id = 0;
     std::string submit_error;
     if (!state->submit(
-        std::string(ZSTR_VAL(callable), ZSTR_LEN(callable)),
+        std::move(callable_payload),
         std::move(args_payload),
         &job_id,
         &submit_error
@@ -918,6 +1073,7 @@ PHP_METHOD(QThreadRuntime, stats)
 
 static const zend_function_entry qt_qthreadruntime_methods[] = {
     ZEND_ME(QThreadRuntime, __construct, arginfo_class_Qt_Core_QThreadRuntime___construct, ZEND_ACC_PUBLIC)
+    ZEND_ME(QThreadRuntime, setBootstrapScript, arginfo_class_Qt_Core_QThreadRuntime_setBootstrapScript, ZEND_ACC_PUBLIC)
     ZEND_ME(QThreadRuntime, start, arginfo_class_Qt_Core_QThreadRuntime_start, ZEND_ACC_PUBLIC)
     ZEND_ME(QThreadRuntime, submit, arginfo_class_Qt_Core_QThreadRuntime_submit, ZEND_ACC_PUBLIC)
     ZEND_ME(QThreadRuntime, await, arginfo_class_Qt_Core_QThreadRuntime_await, ZEND_ACC_PUBLIC)

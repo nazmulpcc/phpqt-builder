@@ -8,9 +8,11 @@ final class QThreadRuntime
 {
     public function __construct() {}
 
+    public function setBootstrapScript(?string $path): void {}
+
     public function start(): void {}
 
-    public function submit(string $callable, array $args = []): int {}
+    public function submit(mixed $callable, array $args = []): int {}
 
     public function await(int $jobId, int $timeoutMs = 0): mixed {}
 
