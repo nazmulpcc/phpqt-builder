@@ -42,6 +42,24 @@ function assert_classes_available(array $classes): void
     }
 }
 
+function guard_macos_cli_bluetooth_runtime(): void
+{
+    if (PHP_OS_FAMILY !== 'Darwin') {
+        return;
+    }
+
+    $binaryPath = (string) (realpath(PHP_BINARY) ?: PHP_BINARY);
+    $isAppBundleBinary = str_contains($binaryPath, '.app/Contents/MacOS/');
+    if ($isAppBundleBinary) {
+        return;
+    }
+
+    example_fail(
+        'macOS blocks Bluetooth access from plain CLI php (missing NSBluetoothAlwaysUsageDescription).' . PHP_EOL
+        . 'Run this demo from an app-bundled PHP host, or use a non-Bluetooth example.',
+    );
+}
+
 function bt_device_label(QBluetoothDeviceInfo $device): string
 {
     $name = trim($device->name());
@@ -113,6 +131,7 @@ function bt_supported_methods_label(int $methods): string
 }
 
 example_section('Bluetooth Scan & Connect');
+guard_macos_cli_bluetooth_runtime();
 
 try {
     assert_classes_available([

@@ -42,5 +42,7 @@ php qtb example bluetooth-scan-connect
 ## Notes
 
 - Results depend on host Bluetooth permissions and nearby device availability.
+- On macOS, running this from plain CLI `php` is blocked by system privacy policy and can abort the process.
+  Use an app-bundled PHP host with `NSBluetoothAlwaysUsageDescription` for real Bluetooth access.
 - Some devices expose no RFCOMM service; connection can still fail even after discovery.
 - This is a demo utility, not a full production pairing/client workflow.
