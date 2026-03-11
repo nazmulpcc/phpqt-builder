@@ -8,6 +8,8 @@ These examples are fuller, more product-like applications than the low-level `ma
 php qtb build QtCore,QtGui,QtWidgets,QtQml,QtQuick,QtOpenGL,QtOpenGLWidgets,Qt3DCore,Qt3DRender,Qt3DExtras,Qt3DInput
 ```
 
+For Bluetooth examples, include `QtBluetooth` as well.
+
 ## Run
 
 ```sh
@@ -44,6 +46,8 @@ php -dextension=$PWD/build/ext/.libs/qt.so examples/<example>/run.php
   A native QtQuick3D scene rendered from PHP via inline QML, with animated meshes, camera, and lighting.
 - `gpu-stress`
   An interactive QtQuick3D stress scene with presets, camera controls, dynamic instancing, and FPS HUD.
+- `bluetooth-scan-connect`
+  An easy Bluetooth demo to scan nearby devices, inspect services, and attempt a socket connection.
 
 ## Data model
 
