@@ -91,3 +91,13 @@ it('dispatches qthread signals safely back to request thread', function (): void
         ->and($payload['timed_out'])->toBeFalse()
         ->and($payload['connections_are_objects'])->toBeTrue();
 });
+
+it('dispatches qthread signals without requiring a qcoreapplication event loop', function (): void {
+    $payload = qt_runtime_payload('QtCore/thread_signal_dispatch_no_event_loop.php');
+
+    expect($payload['started_hits'])->toBeGreaterThanOrEqual(1)
+        ->and($payload['finished_hits'])->toBeGreaterThanOrEqual(1)
+        ->and($payload['timed_out'])->toBeFalse()
+        ->and($payload['wait_ok'])->toBeTrue()
+        ->and($payload['connections_are_objects'])->toBeTrue();
+});

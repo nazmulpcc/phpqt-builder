@@ -9,6 +9,8 @@
 /* {!! $method->name !!} */
 ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
 {
+    qt_runtime_owner_safe_point();
+
 @if($method->hasNoParams())
     ZEND_PARSE_PARAMETERS_NONE();
 @else

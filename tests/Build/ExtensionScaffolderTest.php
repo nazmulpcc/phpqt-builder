@@ -153,6 +153,10 @@ it('registers parents before children in extension source', function (): void {
             'bool qt_runtime_is_shutdown_in_progress(void)',
             'void qt_runtime_mark_shutdown_in_progress(void)',
             'void qt_runtime_try_hook_about_to_quit(void)',
+            'bool qt_runtime_enqueue_owner_task(std::function<void()> task)',
+            'void qt_runtime_schedule_owner_drain(void)',
+            'void qt_runtime_drain_owner_tasks(zend_long max_items)',
+            'void qt_runtime_owner_safe_point(void)',
             'static inline void qt_runtime_shutdown_qcoreapplication(void)',
             'PHP_RINIT_FUNCTION(qt)',
             'PHP_RSHUTDOWN_FUNCTION(qt)',
@@ -176,9 +180,13 @@ it('registers parents before children in extension source', function (): void {
         '# define QT_RUNTIME_G(v) ZEND_MODULE_GLOBALS_ACCESSOR(qt, v)',
         'bool qt_runtime_is_owner_thread(void);',
         'bool qt_runtime_can_call_zend(void);',
-        'bool qt_runtime_is_shutdown_in_progress(void);',
-        'void qt_runtime_mark_shutdown_in_progress(void);',
-        'void qt_runtime_try_hook_about_to_quit(void);',
+            'bool qt_runtime_is_shutdown_in_progress(void);',
+            'void qt_runtime_mark_shutdown_in_progress(void);',
+            'void qt_runtime_try_hook_about_to_quit(void);',
+            'bool qt_runtime_enqueue_owner_task(std::function<void()> task);',
+            'void qt_runtime_schedule_owner_drain(void);',
+            'void qt_runtime_drain_owner_tasks(zend_long max_items);',
+            'void qt_runtime_owner_safe_point(void);',
     );
 });
 

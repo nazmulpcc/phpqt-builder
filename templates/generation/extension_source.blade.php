@@ -13,10 +13,14 @@ $buildInfoDependencies = $buildInfoModule !== null && $buildInfoModule->dependen
 #include "php.h"
 #include "ext/standard/info.h"
 #include <QtCore/QCoreApplication>
+#include <QtCore/QMetaObject>
 #include <QtCore/QObject>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <deque>
+#include <functional>
+#include <mutex>
 #include "{!! $ctx->phpHeaderFilename() !!}"
 @foreach($ctx->classHeaders() as $header)
 #include "{!! $header !!}"
@@ -27,6 +31,11 @@ $buildInfoDependencies = $buildInfoModule !== null && $buildInfoModule->dependen
 
 static std::atomic_bool qt_shutdown_in_progress{false};
 static std::atomic_bool qt_about_to_quit_hooked{false};
+static std::mutex qt_owner_task_mutex;
+static std::deque<std::function<void()>> qt_owner_task_queue;
+static std::atomic_uint32_t qt_owner_task_pending{0};
+static std::atomic_bool qt_owner_drain_scheduled{false};
+static thread_local bool qt_owner_drain_active = false;
 ZEND_DECLARE_MODULE_GLOBALS({!! $ctx->extensionName !!})
 
 static void php_{!! $ctx->extensionName !!}_init_globals(zend_{!! $ctx->extensionName !!}_globals *globals)
@@ -77,6 +86,131 @@ bool qt_runtime_can_call_zend(void)
 bool qt_runtime_is_shutdown_in_progress(void)
 {
     return qt_shutdown_in_progress.load(std::memory_order_acquire);
+}
+
+static inline void qt_runtime_drop_owner_tasks(void)
+{
+    std::lock_guard<std::mutex> lock(qt_owner_task_mutex);
+    qt_owner_task_queue.clear();
+    qt_owner_task_pending.store(0, std::memory_order_release);
+    qt_owner_drain_scheduled.store(false, std::memory_order_release);
+}
+
+bool qt_runtime_enqueue_owner_task(std::function<void()> task)
+{
+    if (!task) {
+        return false;
+    }
+
+    if (qt_runtime_is_shutdown_in_progress()) {
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(qt_owner_task_mutex);
+        if (qt_runtime_is_shutdown_in_progress()) {
+            return false;
+        }
+
+        qt_owner_task_queue.emplace_back(std::move(task));
+        qt_owner_task_pending.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    qt_runtime_schedule_owner_drain();
+    return true;
+}
+
+void qt_runtime_schedule_owner_drain(void)
+{
+    if (qt_runtime_is_shutdown_in_progress()) {
+        return;
+    }
+
+    QCoreApplication *app = QCoreApplication::instance();
+    if (app == NULL) {
+        return;
+    }
+
+    bool expected = false;
+    if (!qt_owner_drain_scheduled.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        return;
+    }
+
+    QMetaObject::invokeMethod(
+        app,
+        []() {
+            qt_owner_drain_scheduled.store(false, std::memory_order_release);
+            qt_runtime_owner_safe_point();
+        },
+        Qt::QueuedConnection
+    );
+}
+
+void qt_runtime_drain_owner_tasks(zend_long max_items)
+{
+    if (!qt_runtime_is_owner_thread()) {
+        return;
+    }
+
+    if (qt_owner_drain_active) {
+        return;
+    }
+
+    if (max_items == 0) {
+        return;
+    }
+
+    if (qt_runtime_is_shutdown_in_progress()) {
+        qt_runtime_drop_owner_tasks();
+        return;
+    }
+
+    if (!qt_runtime_can_call_zend()) {
+        return;
+    }
+
+    qt_owner_drain_active = true;
+    zend_long processed = 0;
+
+    while (max_items < 0 || processed < max_items) {
+        std::function<void()> task;
+        {
+            std::lock_guard<std::mutex> lock(qt_owner_task_mutex);
+            if (qt_owner_task_queue.empty()) {
+                break;
+            }
+
+            task = std::move(qt_owner_task_queue.front());
+            qt_owner_task_queue.pop_front();
+        }
+
+        qt_owner_task_pending.fetch_sub(1, std::memory_order_acq_rel);
+        processed++;
+
+        if (task) {
+            task();
+        }
+
+        if (qt_runtime_is_shutdown_in_progress()) {
+            qt_runtime_drop_owner_tasks();
+            break;
+        }
+    }
+
+    qt_owner_drain_active = false;
+
+    if (qt_owner_task_pending.load(std::memory_order_acquire) > 0) {
+        qt_runtime_schedule_owner_drain();
+    }
+}
+
+void qt_runtime_owner_safe_point(void)
+{
+    if (!qt_runtime_can_call_zend()) {
+        return;
+    }
+
+    qt_runtime_drain_owner_tasks(-1);
 }
 
 void qt_runtime_mark_shutdown_in_progress(void)
@@ -183,14 +317,17 @@ PHP_RINIT_FUNCTION({!! $ctx->extensionName !!})
     QT_RUNTIME_G(request_active) = true;
     qt_shutdown_in_progress.store(false, std::memory_order_release);
     qt_about_to_quit_hooked.store(false, std::memory_order_release);
+    qt_runtime_drop_owner_tasks();
 
     return SUCCESS;
 }
 
 PHP_RSHUTDOWN_FUNCTION({!! $ctx->extensionName !!})
 {
-    qt_runtime_shutdown_qcoreapplication();
     qt_runtime_mark_shutdown_in_progress();
+    qt_runtime_drain_owner_tasks(256);
+    qt_runtime_drop_owner_tasks();
+    qt_runtime_shutdown_qcoreapplication();
     QT_RUNTIME_G(request_active) = false;
 
     return SUCCESS;

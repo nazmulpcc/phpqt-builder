@@ -60,9 +60,8 @@ it('generates signal apis and retains protected slots', function (): void {
         Assert::assertStringContainsString('if (qt_runtime_is_shutdown_in_progress()) {', $cpp);
         Assert::assertStringContainsString('if (!qt_runtime_can_call_zend()) {', $cpp);
         Assert::assertStringContainsString('if (qt_runtime_can_call_zend()) {', $cpp);
-        Assert::assertStringContainsString('if (_qt_app == NULL) {', $cpp);
-        Assert::assertStringContainsString('if (QThread::currentThread() == _qt_app->thread()) {', $cpp);
-        Assert::assertStringContainsString('QMetaObject::invokeMethod(_qt_app, [invoke]() mutable {', $cpp);
+        Assert::assertStringContainsString('return qt_runtime_enqueue_owner_task([invoke]() mutable {', $cpp);
+        Assert::assertStringContainsString('qt_runtime_owner_safe_point();', $cpp);
         Assert::assertStringContainsString('qt_signal_dispatch([_qt_handle]() mutable {', $cpp);
         Assert::assertStringNotContainsString('qt_signal_callback_clear(handle);', $cpp);
         Assert::assertStringContainsString('zend_string_equals_literal(signalSignature, "triggered()")', $cpp);

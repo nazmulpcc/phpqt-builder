@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -60,7 +61,9 @@ bool qt_runtime_can_call_zend(void);
 @endif
 @if($ctx->hasSignals())
 bool qt_runtime_is_owner_thread(void);
+bool qt_runtime_enqueue_owner_task(std::function<void()> task);
 @endif
+void qt_runtime_owner_safe_point(void);
 @if($ctx->isQObjectDerived)
 void qt_runtime_try_hook_about_to_quit(void);
 @endif
@@ -873,22 +876,11 @@ static inline bool qt_signal_dispatch(InvokeCallback invoke)
         return true;
     }
 
-    QCoreApplication *_qt_app = QCoreApplication::instance();
-    if (_qt_app == NULL) {
-        return false;
-    }
-
-    if (QThread::currentThread() == _qt_app->thread()) {
-        return false;
-    }
-
-    QMetaObject::invokeMethod(_qt_app, [invoke]() mutable {
+    return qt_runtime_enqueue_owner_task([invoke]() mutable {
         if (qt_runtime_can_call_zend()) {
             invoke();
         }
-    }, Qt::QueuedConnection);
-
-    return true;
+    });
 }
 
 static inline void qt_signal_callback_clear(const std::shared_ptr<qt_signal_callback_t> &callback)

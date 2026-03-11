@@ -9,6 +9,8 @@
 /* {!! $method->name !!} — {!! $method->overloadCount !!} C++ overloads */
 ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
 {
+    qt_runtime_owner_safe_point();
+
 @foreach($method->params as $param)
     {!! $param->cDeclaration() !!};
 @endforeach

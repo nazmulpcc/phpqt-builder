@@ -43,6 +43,9 @@ foreach ($signal->params as $index => $param) {
         [_qt_callback]({!! implode(', ', $lambdaParams) !!}) {
 @if($hasBorrowedSignalArg)
             if (!qt_runtime_is_owner_thread()) {
+#if defined(PHP_DEBUG)
+                php_error_docref(NULL, E_NOTICE, "Skipping borrowed signal callback off owner thread.");
+#endif
                 return;
             }
 @endif
