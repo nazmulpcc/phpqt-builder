@@ -33,6 +33,7 @@ readonly class BuildExecutionRequest
         public bool $writeAbiManifest = false,
         public bool $reuseDiscoveryCache = true,
         public bool $bootstrapEnabled = true,
+        public bool $useCcache = false,
     ) {}
 
     /**

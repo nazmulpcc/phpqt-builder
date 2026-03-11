@@ -416,3 +416,24 @@ it('builds split modules with static-manifest dependencies', function (): void {
         ->and($manifest['dependency_modules'])->toBe(['QtCore', 'QtGui'])
         ->and($manifest['classes'])->toBe(['QSvgPoint']);
 });
+
+it('fails when --ccache is requested but unavailable for split builds', function (): void {
+    $fixtureRoot = qt_fixture_path('module-split-qt');
+    $bootstrapper = new FakeExtensionBootstrapper();
+    $system = FakeSystemInformation::passing();
+    $system->setExecutable('ccache', null);
+
+    $result = qt_command_result(
+        new BuildModulesCommand($system, $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            'modules' => 'QtWidgets',
+            '--output' => sys_get_temp_dir() . '/qtbuilder-build-modules-ccache-missing-' . bin2hex(random_bytes(4)),
+            '--jobs' => '2',
+            '--ccache' => true,
+        ],
+    );
+
+    expect($result)->toBeFailureCommandResult()
+        ->and($result['display'])->toContain('The --ccache option was set but ccache is not available on PATH.');
+});

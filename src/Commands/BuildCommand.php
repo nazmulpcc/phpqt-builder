@@ -81,6 +81,7 @@ class BuildCommand extends Command
             ->addOption('output', 'o', InputOption::VALUE_REQUIRED, 'Build root directory; extension sources go under <output>/ext', 'build')
             ->addOption('force', 'F', InputOption::VALUE_NONE, 'Clear the selected build root before starting')
             ->addOption('no-build', null, InputOption::VALUE_NONE, 'Generate sources only and skip phpize/configure/make')
+            ->addOption('ccache', null, InputOption::VALUE_NEGATABLE, 'Use ccache for configure/make when available')
             ->addOption('jobs', 'j', InputOption::VALUE_REQUIRED, 'Number of parallel discovery/bootstrap workers');
     }
 
@@ -120,6 +121,12 @@ class BuildCommand extends Command
         }
 
         $pipeline = new BuildPipeline($this->bootstrapper, $this->discoveryService);
+        try {
+            $useCcache = $this->resolveCcacheUsage($input);
+        } catch (\RuntimeException $e) {
+            $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
+            return self::FAILURE;
+        }
         $result = $pipeline->build(
             new BuildExecutionRequest(
                 installation: $installation,
@@ -133,6 +140,7 @@ class BuildCommand extends Command
                 resolvedModuleGraph: $resolvedGraph,
                 dependencySource: $resolvedGraph->dependencySource,
                 bootstrapEnabled: !(bool) $input->getOption('no-build'),
+                useCcache: $useCcache,
             ),
             $output,
         );
@@ -283,6 +291,23 @@ class BuildCommand extends Command
         $detected = trim((string) shell_exec($command . ' 2>/dev/null'));
 
         return max(1, (int) $detected ?: 1);
+    }
+
+    private function resolveCcacheUsage(InputInterface $input): bool
+    {
+        $option = $input->getOption('ccache');
+        $ccachePath = $this->systemInformation->findExecutable('ccache');
+        $hasCcache = is_string($ccachePath) && $ccachePath !== '';
+
+        if ($option === false) {
+            return false;
+        }
+
+        if ($option === true && !$hasCcache) {
+            throw new \RuntimeException('The --ccache option was set but ccache is not available on PATH.');
+        }
+
+        return $hasCcache;
     }
 
     private function renderDependencyResolution(OutputInterface $output, ResolvedModuleGraph $graph): void

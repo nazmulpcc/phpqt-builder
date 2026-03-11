@@ -19,7 +19,7 @@ final class FakeExtensionBootstrapper implements ExtensionBootstrapper
     public ?string $failureMessage = null;
     public string $failureStep = 'configure';
 
-    public function bootstrap(ExtensionBuildContext $context, int $jobs, ?callable $onEvent = null): BootstrapResult
+    public function bootstrap(ExtensionBuildContext $context, int $jobs, bool $useCcache = false, ?callable $onEvent = null): BootstrapResult
     {
         $this->contexts[] = $context;
 
