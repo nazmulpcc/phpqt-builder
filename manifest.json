@@ -118,6 +118,14 @@
                 "QtQml"
             ]
         },
+        "QtQuickControls2": {
+            "extension_name": "qtquickcontrols2",
+            "dependencies": [
+                "QtCore",
+                "QtGui",
+                "QtQuick"
+            ]
+        },
         "QtQuick3D": {
             "extension_name": "qtquick3d",
             "dependencies": [
@@ -158,6 +166,16 @@
                 "QtQml",
                 "QtQuick",
                 "QtWebEngineCore"
+            ]
+        },
+        "QtWebEngineWidgets": {
+            "extension_name": "qtwebenginewidgets",
+            "dependencies": [
+                "QtCore",
+                "QtGui",
+                "QtWidgets",
+                "QtWebEngineCore",
+                "QtPrintSupport"
             ]
         },
         "QtXml": {
