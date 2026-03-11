@@ -64,3 +64,17 @@ it('prefers same-module matches over unqualified exact bare-name entries', funct
 
     expect($resolver->canonicalizeType('QBuffer *', $context))->toBe('Qt3DCore::QBuffer *');
 });
+
+it('maps nested class types to owner-scoped php namespaces', function (): void {
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'QBluetoothServiceInfo', 'qualified_name' => 'QBluetoothServiceInfo', 'module' => 'QtBluetooth'],
+        ['name' => 'Sequence', 'qualified_name' => 'QBluetoothServiceInfo::Sequence', 'module' => 'QtBluetooth'],
+    ]);
+
+    $context = TypeResolutionContext::fromNames('QBluetoothServiceInfo', 'QBluetoothServiceInfo');
+
+    expect($resolver->resolvePhpType('QBluetoothServiceInfo::Sequence', $context, 'Qt\\Bluetooth'))
+        ->toBe('\\Qt\\Bluetooth\\QBluetoothServiceInfo\\Sequence')
+        ->and($resolver->resolvePhpType('QBluetoothServiceInfo', $context, 'Qt\\Bluetooth'))
+        ->toBe('QBluetoothServiceInfo');
+});

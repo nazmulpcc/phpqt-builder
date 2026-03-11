@@ -128,6 +128,58 @@ class QtClassInspector
         return $this->extractClassDataFromTranslationUnit($classCursor);
     }
 
+    /**
+     * Parse a header and return both owner class data plus referenced nested class data
+     * discovered from the same owner cursor in a single translation-unit parse.
+     *
+     * @return array{
+     *   class_data: array{
+     *     name: string,
+     *     qualified_name: string,
+     *     is_abstract: bool,
+     *     is_struct: bool,
+     *     bases: list<string>,
+     *     base_specifiers?: list<array{type: string, access: string, is_virtual: bool}>,
+     *     properties: list<array<string, mixed>>,
+     *     methods: list<array<string, mixed>>,
+     *     enum_constants: list<array<string, mixed>>,
+     *     enum_names?: list<string>,
+     *     flag_aliases?: array<string, string>
+     *   },
+     *   referenced_nested_class_data: list<array{
+     *     name: string,
+     *     qualified_name: string,
+     *     is_abstract: bool,
+     *     is_struct: bool,
+     *     bases: list<string>,
+     *     base_specifiers?: list<array{type: string, access: string, is_virtual: bool}>,
+     *     properties: list<array<string, mixed>>,
+     *     methods: list<array<string, mixed>>,
+     *     enum_constants: list<array<string, mixed>>,
+     *     enum_names?: list<string>,
+     *     flag_aliases?: array<string, string>
+     *   }>
+     * }|null
+     */
+    public function inspectWithReferencedNestedClasses(string $headerPath, string $className): ?array
+    {
+        $this->parse($headerPath);
+
+        $classCursor = $this->findClass($className, $headerPath);
+        if ($classCursor === null) {
+            return null;
+        }
+
+        $classData = $this->hasDirectMembers($classCursor)
+            ? $this->extractClassData($classCursor)
+            : $this->extractClassDataFromTranslationUnit($classCursor);
+
+        return [
+            'class_data' => $classData,
+            'referenced_nested_class_data' => $this->extractReferencedNestedClassData($classCursor, $classData),
+        ];
+    }
+
     public function locateClassHeader(string $headerPath, string $className): ?string
     {
         $this->parse($headerPath);
@@ -355,6 +407,157 @@ class QtClassInspector
         $real = realpath($path);
 
         return $real !== false ? $real : $path;
+    }
+
+    /**
+     * @param array{
+     *   name: string,
+     *   qualified_name?: string,
+     *   properties?: list<array<string, mixed>>,
+     *   methods?: list<array<string, mixed>>
+     * } $ownerClassData
+     * @return list<array{
+     *   name: string,
+     *   qualified_name: string,
+     *   is_abstract: bool,
+     *   is_struct: bool,
+     *   bases: list<string>,
+     *   base_specifiers?: list<array{type: string, access: string, is_virtual: bool}>,
+     *   properties: list<array<string, mixed>>,
+     *   methods: list<array<string, mixed>>,
+     *   enum_constants: list<array<string, mixed>>,
+     *   enum_names?: list<string>,
+     *   flag_aliases?: array<string, string>
+     * }>
+     */
+    private function extractReferencedNestedClassData(ClassCursor $ownerCursor, array $ownerClassData): array
+    {
+        /** @var array<string, true> $referencedNestedNames */
+        $referencedNestedNames = $this->referencedNestedMemberNames($ownerClassData);
+        if ($referencedNestedNames === []) {
+            return [];
+        }
+
+        $nestedClassData = [];
+        /** @var array<string, true> $seenQualified */
+        $seenQualified = [];
+
+        foreach ($ownerCursor->getChildren() as $child) {
+            if (!$child instanceof ClassCursor || !$this->belongsToClass($child, $ownerCursor)) {
+                continue;
+            }
+
+            $nestedName = trim($child->getSpelling());
+            if ($nestedName === '' || !isset($referencedNestedNames[$nestedName])) {
+                continue;
+            }
+
+            $data = $this->hasDirectMembers($child)
+                ? $this->extractClassData($child)
+                : $this->extractClassDataFromTranslationUnit($child);
+            $qualifiedName = is_string($data['qualified_name'] ?? null)
+                ? trim((string) $data['qualified_name'])
+                : '';
+            if ($qualifiedName === '' || isset($seenQualified[$qualifiedName])) {
+                continue;
+            }
+
+            $seenQualified[$qualifiedName] = true;
+            $nestedClassData[] = $data;
+        }
+
+        return $nestedClassData;
+    }
+
+    /**
+     * @param array{
+     *   name: string,
+     *   qualified_name?: string,
+     *   properties?: list<array<string, mixed>>,
+     *   methods?: list<array<string, mixed>>
+     * } $ownerClassData
+     * @return array<string, true>
+     */
+    private function referencedNestedMemberNames(array $ownerClassData): array
+    {
+        $ownerName = trim((string) ($ownerClassData['name'] ?? ''));
+        $ownerQualifiedName = trim((string) ($ownerClassData['qualified_name'] ?? ''));
+        if ($ownerName === '') {
+            return [];
+        }
+
+        $ownerLookup = [$ownerName => true];
+        if ($ownerQualifiedName !== '') {
+            $ownerLookup[ltrim($ownerQualifiedName, ':')] = true;
+        }
+
+        /** @var array<string, true> $referenced */
+        $referenced = [];
+        foreach ($this->classTypeStrings($ownerClassData) as $type) {
+            $trimmedType = trim($type);
+            if ($trimmedType === '') {
+                continue;
+            }
+
+            if (preg_match_all(
+                '/(?<owner>(?:::)?(?:[A-Za-z_][A-Za-z0-9_]*::)*[A-Za-z_][A-Za-z0-9_]*)::(?<member>[A-Za-z_][A-Za-z0-9_]*)/',
+                $trimmedType,
+                $matches,
+                PREG_SET_ORDER,
+            ) === 1) {
+                foreach ($matches as $match) {
+                    $owner = ltrim(trim((string) ($match['owner'] ?? '')), ':');
+                    $member = trim((string) ($match['member'] ?? ''));
+                    if ($owner === '' || $member === '' || !isset($ownerLookup[$owner])) {
+                        continue;
+                    }
+                    $referenced[$member] = true;
+                }
+            }
+
+            $base = trim(preg_replace('/\bconst\b/', '', $trimmedType) ?? $trimmedType);
+            $base = trim(preg_replace('/\s+/', ' ', $base) ?? $base);
+            $base = rtrim($base, '&* ');
+            if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $base) === 1) {
+                $referenced[$base] = true;
+            }
+        }
+
+        return $referenced;
+    }
+
+    /**
+     * @param array{
+     *   properties?: list<array<string, mixed>>,
+     *   methods?: list<array<string, mixed>>
+     * } $ownerClassData
+     * @return list<string>
+     */
+    private function classTypeStrings(array $ownerClassData): array
+    {
+        $types = [];
+        foreach ((array) ($ownerClassData['properties'] ?? []) as $property) {
+            $type = is_string($property['type'] ?? null) ? trim((string) $property['type']) : '';
+            if ($type !== '') {
+                $types[] = $type;
+            }
+        }
+
+        foreach ((array) ($ownerClassData['methods'] ?? []) as $method) {
+            $returnType = is_string($method['return_type'] ?? null) ? trim((string) $method['return_type']) : '';
+            if ($returnType !== '') {
+                $types[] = $returnType;
+            }
+
+            foreach ((array) ($method['parameters'] ?? []) as $parameter) {
+                $type = is_string($parameter['type'] ?? null) ? trim((string) $parameter['type']) : '';
+                if ($type !== '') {
+                    $types[] = $type;
+                }
+            }
+        }
+
+        return $types;
     }
 
     /**

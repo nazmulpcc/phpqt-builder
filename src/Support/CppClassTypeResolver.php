@@ -11,6 +11,9 @@ final class CppClassTypeResolver
     /** @var array<string, string> */
     private array $qualifiedByExact = [];
 
+    /** @var array<string, string> */
+    private array $moduleByQualified = [];
+
     /** @var array<string, array<string, string>> */
     private array $qualifiedByNamespaceAndBare = [];
 
@@ -44,6 +47,9 @@ final class CppClassTypeResolver
             $namespace = TypeResolutionContext::namespaceForQualifiedName($qualifiedName) ?? '';
 
             $this->qualifiedByExact[$qualifiedName] = $qualifiedName;
+            if ($module !== '') {
+                $this->moduleByQualified[$qualifiedName] = $module;
+            }
             $this->qualifiedByBare[$bareName][] = $qualifiedName;
 
             if ($namespace !== '') {
@@ -77,9 +83,11 @@ final class CppClassTypeResolver
                 'qualified_name' => is_string($classData['qualified_name'] ?? null)
                     ? (string) $classData['qualified_name']
                     : null,
-                'module' => TypeResolutionContext::moduleForQualifiedName(
-                    is_string($classData['qualified_name'] ?? null) ? (string) $classData['qualified_name'] : null,
-                ),
+                'module' => is_string($classData['module'] ?? null) && trim((string) $classData['module']) !== ''
+                    ? (string) $classData['module']
+                    : TypeResolutionContext::moduleForQualifiedName(
+                        is_string($classData['qualified_name'] ?? null) ? (string) $classData['qualified_name'] : null,
+                    ),
             ];
         }
 
@@ -136,12 +144,12 @@ final class CppClassTypeResolver
         }
 
         $bareName = CppName::unqualify($resolved);
-        $module = TypeResolutionContext::moduleForQualifiedName($resolved);
+        $module = $this->moduleByQualified[$resolved] ?? TypeResolutionContext::moduleForQualifiedName($resolved);
         if ($module === null) {
             return $bareName;
         }
 
-        $targetPhpNamespace = ModuleNamespace::forQtModule($module);
+        $targetPhpNamespace = ModuleNamespace::forQualifiedCppClass($module, $resolved);
         if (str_starts_with($targetPhpNamespace, 'Qt\\Qt')) {
             return '\\' . $targetPhpNamespace . '\\' . $bareName;
         }

@@ -178,7 +178,11 @@ it('maps Qt module names to valid PHP namespaces', function (): void {
     expect(ModuleNamespace::forQtModule('QtCore'))->toBe('Qt\\Core')
         ->and(ModuleNamespace::forQtModule('QtQuick3D'))->toBe('Qt\\Quick3D')
         ->and(ModuleNamespace::forQtModule('Qt3DCore'))->toBe('Qt\\Qt3DCore')
-        ->and(ModuleNamespace::forQtModule('Qt3DRender'))->toBe('Qt\\Qt3DRender');
+        ->and(ModuleNamespace::forQtModule('Qt3DRender'))->toBe('Qt\\Qt3DRender')
+        ->and(ModuleNamespace::forQualifiedCppClass('QtBluetooth', 'QBluetoothServiceInfo::Sequence'))
+            ->toBe('Qt\\Bluetooth\\QBluetoothServiceInfo')
+        ->and(ModuleNamespace::forQualifiedCppClass('Qt3DInput', 'Qt3DInput::QInputSequence'))
+            ->toBe('Qt\\Qt3DInput');
 });
 
 it('derives constructor lifecycle and variant flags from cparser runtime metadata', function (): void {
@@ -287,4 +291,116 @@ CPP);
 
     expect($classData['enum_names'] ?? null)->toContain('Mode')
         ->and($classData['flag_aliases'] ?? null)->toBe(['Modes' => 'Mode']);
+});
+
+it('extracts only referenced nested class facts from the owner parse payload', function (): void {
+    $fixtureDir = qt_temp_dir('qtbuilder-nested-facts-');
+    $headerPath = $fixtureDir . '/qnestedowner.h';
+
+    file_put_contents($headerPath, <<<'CPP'
+class QNestedOwner
+{
+public:
+    class Used
+    {
+    public:
+        Used() {}
+    };
+
+    class Unused
+    {
+    public:
+        Unused() {}
+    };
+
+    void setUsed(const QNestedOwner::Used &value);
+};
+
+inline void QNestedOwner::setUsed(const QNestedOwner::Used &value) { (void) value; }
+CPP);
+
+    $service = new ClassGenerationService();
+    $facts = $service->prepareDiscoveryFacts($headerPath, 'QNestedOwner', [$fixtureDir]);
+
+    expect($facts['status'] ?? null)->toBe('ok');
+    $nested = is_array($facts['referenced_nested_class_data'] ?? null)
+        ? $facts['referenced_nested_class_data']
+        : [];
+    $nestedQualified = array_values(array_filter(array_map(
+        static fn (mixed $entry): string => is_array($entry) && is_string($entry['qualified_name'] ?? null)
+            ? (string) $entry['qualified_name']
+            : '',
+        $nested,
+    )));
+
+    expect($nestedQualified)->toContain('QNestedOwner::Used')
+        ->and($nestedQualified)->not->toContain('QNestedOwner::Unused');
+});
+
+it('keeps owner methods that depend on nested classes when nested class data is available', function (): void {
+    $fixtureDir = qt_temp_dir('qtbuilder-nested-generate-');
+    $headerPath = $fixtureDir . '/qnestedowner.h';
+
+    file_put_contents($headerPath, <<<'CPP'
+class QNestedOwner
+{
+public:
+    class Used
+    {
+    public:
+        Used() {}
+    };
+
+    void setUsed(const QNestedOwner::Used &value);
+    QNestedOwner::Used used() const;
+};
+
+inline void QNestedOwner::setUsed(const QNestedOwner::Used &value) { (void) value; }
+inline QNestedOwner::Used QNestedOwner::used() const { return QNestedOwner::Used(); }
+CPP);
+
+    $service = new ClassGenerationService();
+    $facts = $service->prepareDiscoveryFacts($headerPath, 'QNestedOwner', [$fixtureDir]);
+    expect($facts['status'] ?? null)->toBe('ok');
+
+    $ownerClassData = is_array($facts['class_data'] ?? null) ? $facts['class_data'] : [];
+    $nestedClassData = is_array($facts['referenced_nested_class_data'] ?? null)
+        ? $facts['referenced_nested_class_data']
+        : [];
+    foreach ([$ownerClassData, ...$nestedClassData] as &$classData) {
+        if (!is_array($classData)) {
+            continue;
+        }
+        $classData['module'] = 'QtCore';
+    }
+    unset($classData);
+
+    $prepared = [];
+    if (is_array($ownerClassData) && is_string($ownerClassData['qualified_name'] ?? null)) {
+        $prepared[(string) $ownerClassData['qualified_name']] = $ownerClassData;
+    }
+    foreach ($nestedClassData as $entry) {
+        if (!is_array($entry) || !is_string($entry['qualified_name'] ?? null)) {
+            continue;
+        }
+        $prepared[(string) $entry['qualified_name']] = $entry;
+    }
+
+    $result = $service->generateFromPreparedData(
+        $ownerClassData,
+        $headerPath,
+        ['QNestedOwner', 'QNestedOwner::Used'],
+        $prepared,
+    );
+
+    expect($result->status)->toBe('ok');
+    $methodNames = array_map(
+        static fn (\QtBuilder\Definition\PhpMethod $method): string => $method->name,
+        $result->phpClass?->methods ?? [],
+    );
+    expect($methodNames)->toContain('setUsed', 'used')
+        ->and(array_column($result->skippedMethods, 'reason_message'))->not->toContain(
+            'Parameter type const QNestedOwner::Used & is not supported.',
+            'Return type QNestedOwner::Used is not supported.',
+        );
 });

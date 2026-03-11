@@ -9,6 +9,7 @@ readonly class GenerateResult
     /**
      * @param list<string> $generatedFiles
      * @param list<array<string, string>> $skippedMethods
+     * @param list<array<string, mixed>> $referencedNestedClassData
      * @param array<string, int> $summary
      */
     public function __construct(
@@ -21,6 +22,7 @@ readonly class GenerateResult
         public array $classDependencies = [],
         public array $generatedFiles = [],
         public array $skippedMethods = [],
+        public array $referencedNestedClassData = [],
         public array $summary = [],
         public ?string $reasonCode = null,
         public ?string $reasonMessage = null,
@@ -48,6 +50,10 @@ readonly class GenerateResult
             )),
             generatedFiles: array_values($payload['generated_files'] ?? []),
             skippedMethods: array_values($payload['skipped_methods'] ?? []),
+            referencedNestedClassData: array_values(array_filter(
+                $payload['referenced_nested_class_data'] ?? [],
+                static fn(mixed $entry): bool => is_array($entry),
+            )),
             summary: $payload['summary'] ?? [],
             reasonCode: isset($payload['reason_code']) ? (string) $payload['reason_code'] : null,
             reasonMessage: isset($payload['reason_message']) ? (string) $payload['reason_message'] : null,
@@ -57,7 +63,7 @@ readonly class GenerateResult
 
     public static function error(string $className, string $headerPath, string $reasonMessage, string $stderr = ''): self
     {
-        return new self('error', $className, $headerPath, null, null, null, [], [], [], [], 'worker_error', $reasonMessage, $stderr);
+        return new self('error', $className, $headerPath, null, null, null, [], [], [], [], [], 'worker_error', $reasonMessage, $stderr);
     }
 
     public function isOk(): bool

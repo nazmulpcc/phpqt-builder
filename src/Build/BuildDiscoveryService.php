@@ -8,13 +8,14 @@ use QtBuilder\Filtering\ClassExposurePolicy;
 use QtBuilder\Qt\QtInstallation;
 use QtBuilder\Scanning\HeaderCandidate;
 use QtBuilder\Scanning\ModuleHeaderScanner;
+use QtBuilder\Support\GeneratedTypeIdentity;
 use QtBuilder\Support\ModuleNamespace;
 use Symfony\Component\Console\Helper\ProgressBar;
 use Symfony\Component\Console\Output\OutputInterface;
 
 class BuildDiscoveryService
 {
-    private const CLASS_CACHE_SCHEMA_VERSION = 7;
+    private const CLASS_CACHE_SCHEMA_VERSION = 8;
 
     public function __construct(
         private readonly GenerateWorkerPool $workerPool = new GenerateWorkerPool(__DIR__ . '/../..'),
@@ -703,6 +704,7 @@ class BuildDiscoveryService
                     'header' => $result->headerPath,
                     'task_key' => $result->candidateKey,
                     'class_data' => $result->classData,
+                    'referenced_nested_class_data' => $result->referencedNestedClassData,
                     'reason_code' => $result->reasonCode,
                     'reason_message' => $result->reasonMessage,
                 ];
@@ -1058,15 +1060,24 @@ class BuildDiscoveryService
     ): void {
         $status = (string) ($payload['status'] ?? 'error');
         if ($status === 'ok' && is_array($payload['class_data'] ?? null)) {
+            $classData = $this->withDiscoveryModule((array) $payload['class_data'], $candidate->module);
             $resolvedCandidate = $candidate->withQualifiedClassName(
-                is_string($payload['class_data']['qualified_name'] ?? null)
-                    ? (string) $payload['class_data']['qualified_name']
+                is_string($classData['qualified_name'] ?? null)
+                    ? (string) $classData['qualified_name']
                     : null,
             );
             $candidateKey = $resolvedCandidate->identityKey();
             $preparedCandidates[$candidateKey] = $resolvedCandidate;
-            $preparedClassDataByClass[$candidateKey] = $payload['class_data'];
+            $preparedClassDataByClass[$candidateKey] = $classData;
             unset($skippedByClass[$candidateKey], $errorsByClass[$candidateKey]);
+            $this->recordReferencedNestedClassPayloads(
+                $candidate,
+                $payload,
+                $preparedCandidates,
+                $preparedClassDataByClass,
+                $skippedByClass,
+                $errorsByClass,
+            );
 
             return;
         }
@@ -1091,6 +1102,67 @@ class BuildDiscoveryService
             'reason_code' => 'class_structure_error',
             'reason_message' => 'Class structure facts could not be loaded.',
         ];
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     * @param array<string, HeaderCandidate> $preparedCandidates
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @param array<string, array{module: string|null, class: string, header: string, reason_code: string|null, reason_message: string|null}> $skippedByClass
+     * @param array<string, array{module: string|null, class: string, header: string, reason_code: string|null, reason_message: string|null}> $errorsByClass
+     */
+    private function recordReferencedNestedClassPayloads(
+        HeaderCandidate $ownerCandidate,
+        array $payload,
+        array &$preparedCandidates,
+        array &$preparedClassDataByClass,
+        array &$skippedByClass,
+        array &$errorsByClass,
+    ): void {
+        foreach ((array) ($payload['referenced_nested_class_data'] ?? []) as $nestedClassData) {
+            if (!is_array($nestedClassData)) {
+                continue;
+            }
+
+            $nestedName = is_string($nestedClassData['name'] ?? null)
+                ? trim((string) $nestedClassData['name'])
+                : '';
+            $nestedQualifiedName = is_string($nestedClassData['qualified_name'] ?? null)
+                ? trim((string) $nestedClassData['qualified_name'])
+                : '';
+            if ($nestedName === '' || $nestedQualifiedName === '') {
+                continue;
+            }
+
+            $identity = GeneratedTypeIdentity::fromNames($nestedName, $nestedQualifiedName, $ownerCandidate->module);
+            $nestedCandidate = new HeaderCandidate(
+                module: $ownerCandidate->module,
+                className: $nestedName,
+                publicHeader: $ownerCandidate->publicHeader,
+                parseHeader: $ownerCandidate->parseHeader,
+                qualifiedClassName: $identity->canonicalKey,
+                generationId: $identity->generationId,
+            );
+            $nestedKey = $nestedCandidate->identityKey();
+            $preparedCandidates[$nestedKey] = $nestedCandidate;
+            $preparedClassDataByClass[$nestedKey] = $this->withDiscoveryModule($nestedClassData, $ownerCandidate->module);
+            unset($skippedByClass[$nestedKey], $errorsByClass[$nestedKey]);
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $classData
+     * @return array<string, mixed>
+     */
+    private function withDiscoveryModule(array $classData, string $module): array
+    {
+        if ($module === '') {
+            return $classData;
+        }
+
+        $classData['module'] = $module;
+
+        return $classData;
     }
 
     private function writeJsonFile(string $path, mixed $payload, string $fallback): void

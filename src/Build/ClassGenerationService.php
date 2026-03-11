@@ -605,17 +605,6 @@ class ClassGenerationService
      */
     public function prepareDiscoveryFacts(string $headerPath, string $className, array $includePaths): array
     {
-        $decision = $this->classPolicy->decideClassName($className);
-        if (!$decision->accepted) {
-            return [
-                'status' => 'skipped',
-                'class' => $className,
-                'header' => $headerPath,
-                'reason_code' => $decision->reasonCode ?? 'class_filtered',
-                'reason_message' => $decision->reasonMessage ?? 'Class is filtered.',
-            ];
-        }
-
         if ($this->isTemplateClassDeclaration($headerPath, $className)) {
             return [
                 'status' => 'skipped',
@@ -627,8 +616,8 @@ class ClassGenerationService
         }
 
         $inspector = new QtClassInspector(new ClangArgumentBuilder($includePaths));
-        $classData = $inspector->inspect($headerPath, $className);
-        if ($classData === null) {
+        $inspection = $inspector->inspectWithReferencedNestedClasses($headerPath, $className);
+        if ($inspection === null) {
             return [
                 'status' => 'skipped',
                 'class' => $className,
@@ -638,18 +627,73 @@ class ClassGenerationService
             ];
         }
 
+        $classData = $this->enrichDiscoveryClassData(
+            is_array($inspection['class_data'] ?? null) ? $inspection['class_data'] : [],
+            $headerPath,
+            $className,
+        );
+
+        $resolvedName = is_string($classData['name'] ?? null) ? trim((string) $classData['name']) : '';
+        $resolvedQualified = is_string($classData['qualified_name'] ?? null)
+            ? trim((string) $classData['qualified_name'])
+            : '';
+        if ($resolvedName !== '' && !str_contains($resolvedQualified, '::')) {
+            $decision = $this->classPolicy->decideClassName($resolvedName);
+            if (!$decision->accepted) {
+                return [
+                    'status' => 'skipped',
+                    'class' => $className,
+                    'header' => $headerPath,
+                    'reason_code' => $decision->reasonCode ?? 'class_filtered',
+                    'reason_message' => $decision->reasonMessage ?? 'Class is filtered.',
+                ];
+            }
+        }
+
+        $referencedNestedClassData = [];
+        foreach ((array) ($inspection['referenced_nested_class_data'] ?? []) as $nestedClassData) {
+            if (!is_array($nestedClassData)) {
+                continue;
+            }
+
+            $nestedLookupName = is_string($nestedClassData['name'] ?? null)
+                ? trim((string) $nestedClassData['name'])
+                : '';
+            if ($nestedLookupName === '') {
+                continue;
+            }
+
+            $referencedNestedClassData[] = $this->enrichDiscoveryClassData($nestedClassData, $headerPath, $nestedLookupName);
+        }
+
+        return [
+            'status' => 'ok',
+            'class' => $className,
+            'header' => $headerPath,
+            'class_data' => $classData,
+            'referenced_nested_class_data' => $referencedNestedClassData,
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $classData
+     * @return array<string, mixed>
+     */
+    private function enrichDiscoveryClassData(array $classData, string $headerPath, string $classLookupName): array
+    {
         $runtimeLifecycle = $this->analyzeLifecycleCapabilitiesFromClassData($classData);
-        if ($runtimeLifecycle !== null && !$this->classDataHasDestructorMetadata($classData, $className)) {
-            $sourceLifecycle = $this->analyzeLifecycleCapabilities($headerPath, $className, (bool) ($classData['is_struct'] ?? false));
+        if ($runtimeLifecycle !== null && !$this->classDataHasDestructorMetadata($classData, $classLookupName)) {
+            $sourceLifecycle = $this->analyzeLifecycleCapabilities($headerPath, $classLookupName, (bool) ($classData['is_struct'] ?? false));
             $runtimeLifecycle['has_public_destructor'] = $sourceLifecycle['has_public_destructor'];
         }
 
         $lifecycle = $runtimeLifecycle
-            ?? $this->analyzeLifecycleCapabilities($headerPath, $className, (bool) ($classData['is_struct'] ?? false));
+            ?? $this->analyzeLifecycleCapabilities($headerPath, $classLookupName, (bool) ($classData['is_struct'] ?? false));
         $classData['is_copy_constructible'] = $lifecycle['is_copy_constructible'];
         $classData['has_public_constructor'] = $lifecycle['has_public_constructor'];
         $classData['has_public_default_constructor'] = $lifecycle['has_public_default_constructor'];
         $classData['has_public_destructor'] = $lifecycle['has_public_destructor'];
+
         $astFlagAliases = $this->normalizeFlagAliases(
             is_array($classData['flag_aliases'] ?? null)
                 ? (array) $classData['flag_aliases']
@@ -657,7 +701,7 @@ class ClassGenerationService
         );
         $classData['flag_aliases'] = $astFlagAliases !== []
             ? $astFlagAliases
-            : $this->normalizeFlagAliases($this->discoverFlagAliases($headerPath, $className));
+            : $this->normalizeFlagAliases($this->discoverFlagAliases($headerPath, $classLookupName));
 
         $astEnumNames = $this->normalizeEnumNames(
             is_array($classData['enum_names'] ?? null)
@@ -666,24 +710,19 @@ class ClassGenerationService
         );
         $classData['enum_names'] = $astEnumNames !== []
             ? $astEnumNames
-            : $this->normalizeEnumNames($this->discoverEnumNames($headerPath, $className));
+            : $this->normalizeEnumNames($this->discoverEnumNames($headerPath, $classLookupName));
         $classData['smart_pointer_aliases'] = $this->smartPointerAliasResolver->discover($headerPath);
         $classData['methods'] = is_array($classData['methods'] ?? null) ? $classData['methods'] : [];
-        if (!$this->hasRuntimeConstructorSemantics($classData, $className)) {
+        if (!$this->hasRuntimeConstructorSemantics($classData, $classLookupName)) {
             $classData['methods'] = $this->annotateConstructorVariants(
                 $classData['methods'],
                 $headerPath,
-                $className,
+                $classLookupName,
                 (bool) ($classData['is_struct'] ?? false),
             );
         }
 
-        return [
-            'status' => 'ok',
-            'class' => $className,
-            'header' => $headerPath,
-            'class_data' => $classData,
-        ];
+        return $classData;
     }
 
     /**

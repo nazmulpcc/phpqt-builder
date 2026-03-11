@@ -1216,7 +1216,7 @@ class BuildPipeline
     {
         $module = $generatedClassModules[$classKey] ?? \QtBuilder\Support\TypeResolutionContext::moduleForQualifiedName($classKey) ?? 'QtCore';
 
-        return $this->namespaceForModule($module);
+        return ModuleNamespace::forQualifiedCppClass($module, $classKey);
     }
 
     private function withResolvedNativeIncludes(PhpClass $phpClass, HeaderCandidate $candidate): PhpClass
@@ -1759,7 +1759,10 @@ class BuildPipeline
         $payload = $importedAbi?->classNamespaces() ?? [];
 
         foreach ($acceptedCandidates as $candidate) {
-            $payload[$candidate->identityKey()] = $this->namespaceForModule($candidate->module);
+            $payload[$candidate->identityKey()] = ModuleNamespace::forQualifiedCppClass(
+                $candidate->module,
+                $candidate->qualifiedClassName ?? $candidate->className,
+            );
         }
 
         return $payload;
@@ -1780,7 +1783,10 @@ class BuildPipeline
                 continue;
             }
 
-            $namespaces[$candidate->identityKey()] = $this->namespaceForModule($candidate->module);
+            $namespaces[$candidate->identityKey()] = ModuleNamespace::forQualifiedCppClass(
+                $candidate->module,
+                $candidate->qualifiedClassName ?? $candidate->className,
+            );
         }
 
         return $namespaces;
