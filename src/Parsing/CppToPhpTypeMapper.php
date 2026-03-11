@@ -199,12 +199,22 @@ class CppToPhpTypeMapper
             return 'mixed';
         }
 
+        $ownerPhpNamespace = $this->ownerPhpNamespace($ownerClass, $resolutionContext);
+        $effectiveResolutionContext = $this->withModuleFromPhpNamespace($resolutionContext, $ownerPhpNamespace);
+
         if ($classTypeResolver !== null) {
-            $ownerPhpNamespace = $this->ownerPhpNamespace($ownerClass, $resolutionContext);
-            $resolvedPhpType = $classTypeResolver->resolvePhpType($trimmed, $resolutionContext, $ownerPhpNamespace);
+            $resolvedPhpType = $classTypeResolver->resolvePhpType($trimmed, $effectiveResolutionContext, $ownerPhpNamespace);
             if ($resolvedPhpType !== null) {
                 return $resolvedPhpType;
             }
+        }
+
+        if (
+            $effectiveResolutionContext !== null
+            && !str_contains($normalized, '::')
+            && $normalized === 'Key'
+        ) {
+            return 'int';
         }
 
         // Qualified nested types may be enums or nested classes.
@@ -320,6 +330,51 @@ class CppToPhpTypeMapper
         array_pop($parts);
 
         return $parts !== [] ? implode('\\', $parts) : null;
+    }
+
+    private function withModuleFromPhpNamespace(?TypeResolutionContext $resolutionContext, ?string $ownerPhpNamespace): ?TypeResolutionContext
+    {
+        if ($resolutionContext === null) {
+            return null;
+        }
+
+        if ($resolutionContext->module !== null && $resolutionContext->module !== '') {
+            return $resolutionContext;
+        }
+
+        $module = $this->moduleFromPhpNamespace($ownerPhpNamespace);
+        if ($module === null) {
+            return $resolutionContext;
+        }
+
+        return new TypeResolutionContext(
+            className: $resolutionContext->className,
+            qualifiedClassName: $resolutionContext->qualifiedClassName,
+            module: $module,
+            namespace: $resolutionContext->namespace,
+        );
+    }
+
+    private function moduleFromPhpNamespace(?string $phpNamespace): ?string
+    {
+        if (!is_string($phpNamespace) || $phpNamespace === '') {
+            return null;
+        }
+
+        $parts = array_values(array_filter(
+            explode('\\', ltrim($phpNamespace, '\\')),
+            static fn(string $part): bool => $part !== '',
+        ));
+        if (count($parts) < 2 || $parts[0] !== 'Qt') {
+            return null;
+        }
+
+        $suffix = $parts[1];
+        if ($suffix === '') {
+            return null;
+        }
+
+        return str_starts_with($suffix, 'Qt') ? $suffix : ('Qt' . $suffix);
     }
 
     /**

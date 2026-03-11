@@ -31,7 +31,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
 
     if (intern->native_ptr != NULL) {
-        zend_throw_error(NULL, "{!! $ctx->phpClassName !!}::__construct() called twice");
+        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!}::__construct() called twice");
         RETURN_THROWS();
     }
 
@@ -58,7 +58,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
 @endif
 @endif
 @if($method->overloadCount === 0)
-    zend_throw_error(NULL, "{!! $ctx->phpClassName !!} cannot be instantiated directly.");
+    zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} cannot be instantiated directly.");
     RETURN_THROWS();
 @else
 
@@ -67,7 +67,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
     if (_qt_use_trampoline) {
         intern->native_ptr = qt_new_default_native<{!! $ctx->nativeInstantiationType !!}>();
         if (intern->native_ptr == NULL) {
-            zend_throw_error(NULL, "{!! $ctx->phpClassName !!} cannot be instantiated directly.");
+            zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} cannot be instantiated directly.");
             RETURN_THROWS();
         }
         auto *_qt_trampoline = static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr);
@@ -77,12 +77,12 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
         intern->native_is_virtual_trampoline = true;
     } else {
 @if($ctx->isAbstract)
-        zend_throw_error(NULL, "Abstract class {!! $ctx->phpClassName !!} cannot be instantiated directly.");
+        zend_throw_error(NULL, "Abstract class {!! addslashes($ctx->phpClassName) !!} cannot be instantiated directly.");
         RETURN_THROWS();
 @else
         intern->native_ptr = qt_new_default_native<{!! $ctx->plainNativeInstantiationType !!}>();
         if (intern->native_ptr == NULL) {
-            zend_throw_error(NULL, "{!! $ctx->phpClassName !!} cannot be instantiated directly.");
+            zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} cannot be instantiated directly.");
             RETURN_THROWS();
         }
         intern->native_is_generated_subclass = {!! $ctx->plainInstantiationUsesGeneratedType() ? 'true' : 'false' !!};
@@ -92,7 +92,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
 @else
     intern->native_ptr = qt_new_default_native<{!! $ctx->nativeInstantiationType !!}>();
     if (intern->native_ptr == NULL) {
-        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} cannot be instantiated directly.");
+        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} cannot be instantiated directly.");
         RETURN_THROWS();
     }
 @if($ctx->tracksGeneratedNativeSubclass)
@@ -128,7 +128,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
         intern->native_is_virtual_trampoline = true;
     } else {
 @if($ctx->isAbstract)
-        zend_throw_error(NULL, "Abstract class {!! $ctx->phpClassName !!} cannot be instantiated directly.");
+        zend_throw_error(NULL, "Abstract class {!! addslashes($ctx->phpClassName) !!} cannot be instantiated directly.");
         RETURN_THROWS();
 @else
         intern->native_ptr = new {!! $ctx->plainNativeInstantiationType !!}({!! implode(', ', $callPlan['args']) !!});

@@ -62,7 +62,7 @@ class ContainerBridge
         }
 
         if ($container->isPairSequence()) {
-            return $this->isSupportedMapKey((string) $container->keyType)
+            return $this->isSupportedMapKey((string) $container->keyType, allowObjectKeys: true)
                 && $this->isSupportedMapValue((string) $container->valueType);
         }
 
@@ -109,7 +109,7 @@ class ContainerBridge
             return false;
         }
 
-        $phpType = $this->typeMapper->map($cppType);
+        $phpType = $this->elementPhpType($cppType);
         if ($this->isUnsupportedQualifiedScalarFallback($cppType, $phpType)) {
             return false;
         }
@@ -133,14 +133,30 @@ class ContainerBridge
         return true;
     }
 
-    private function isSupportedMapKey(string $cppType): bool
+    private function isSupportedMapKey(string $cppType, bool $allowObjectKeys = false): bool
     {
-        $phpType = $this->typeMapper->map($cppType);
+        if (str_contains($cppType, '<')) {
+            return false;
+        }
+
+        $phpType = $this->elementPhpType($cppType);
         if ($this->isUnsupportedQualifiedScalarFallback($cppType, $phpType)) {
             return false;
         }
 
-        return in_array($phpType, ['int', 'string'], true);
+        if (in_array($phpType, ['int', 'string'], true)) {
+            return true;
+        }
+
+        if (!$allowObjectKeys) {
+            return false;
+        }
+
+        if (in_array($phpType, ['float', 'bool', 'void', 'array', 'mixed', ''], true)) {
+            return false;
+        }
+
+        return true;
     }
 
     private function isSupportedMapValue(string $cppType): bool
@@ -153,7 +169,7 @@ class ContainerBridge
             return false;
         }
 
-        $phpType = $this->typeMapper->map($cppType);
+        $phpType = $this->elementPhpType($cppType);
         if ($this->isUnsupportedQualifiedScalarFallback($cppType, $phpType)) {
             return false;
         }
@@ -184,7 +200,37 @@ class ContainerBridge
             return [];
         }
 
-        return [$phpType];
+        $classRef = $this->canonicalClassLookupKey($trimmed);
+
+        return $classRef !== '' ? [$classRef] : [];
+    }
+
+    private function canonicalClassLookupKey(string $cppType): string
+    {
+        $normalized = $this->normalizedClassLikeType($cppType);
+        if ($normalized === '') {
+            return '';
+        }
+
+        if ($this->classTypeResolver !== null && $this->resolutionContext !== null) {
+            $normalized = $this->normalizedClassLikeType($this->classTypeResolver->canonicalizeType($normalized, $this->resolutionContext));
+        }
+
+        return $normalized;
+    }
+
+    private function normalizedClassLikeType(string $type): string
+    {
+        $trimmed = trim($type);
+        if ($trimmed === '') {
+            return '';
+        }
+
+        if (preg_match('/^(?:const\s+)?(?<base>(?:::)?(?:[A-Za-z_][A-Za-z0-9_]*::)*[A-Za-z_][A-Za-z0-9_]*)(?:\s*[*&]\s*)*$/', $trimmed, $matches) === 1) {
+            return trim((string) ($matches['base'] ?? $trimmed));
+        }
+
+        return $trimmed;
     }
 
     private function isUnsupportedQualifiedScalarFallback(string $cppType, string $phpType): bool

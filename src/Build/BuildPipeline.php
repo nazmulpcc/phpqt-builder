@@ -1216,7 +1216,7 @@ class BuildPipeline
     {
         $module = $generatedClassModules[$classKey] ?? \QtBuilder\Support\TypeResolutionContext::moduleForQualifiedName($classKey) ?? 'QtCore';
 
-        return $this->namespaceForModule($module);
+        return ModuleNamespace::forQualifiedCppClass($module, $classKey);
     }
 
     private function withResolvedNativeIncludes(PhpClass $phpClass, HeaderCandidate $candidate): PhpClass
@@ -1555,6 +1555,8 @@ class BuildPipeline
                 'namespace' => $classNamespaces[$name] ?? 'Qt\\Core',
                 'generation_id' => $phpClass->resolvedGenerationId(),
                 'qualified_name' => $phpClass->nativeCppType ?? $phpClass->name,
+                'module' => $this->moduleFromPhpNamespace($classNamespaces[$name] ?? 'Qt\\Core'),
+                'is_qobject_derived' => $phpClass->isQObjectDerived,
             ];
         }
         $this->removeStaleEnumHolderFiles($outputDir, $context->enumHolders);
@@ -1759,7 +1761,10 @@ class BuildPipeline
         $payload = $importedAbi?->classNamespaces() ?? [];
 
         foreach ($acceptedCandidates as $candidate) {
-            $payload[$candidate->identityKey()] = $this->namespaceForModule($candidate->module);
+            $payload[$candidate->identityKey()] = ModuleNamespace::forQualifiedCppClass(
+                $candidate->module,
+                $candidate->qualifiedClassName ?? $candidate->className,
+            );
         }
 
         return $payload;
@@ -1780,7 +1785,10 @@ class BuildPipeline
                 continue;
             }
 
-            $namespaces[$candidate->identityKey()] = $this->namespaceForModule($candidate->module);
+            $namespaces[$candidate->identityKey()] = ModuleNamespace::forQualifiedCppClass(
+                $candidate->module,
+                $candidate->qualifiedClassName ?? $candidate->className,
+            );
         }
 
         return $namespaces;
@@ -1824,6 +1832,24 @@ class BuildPipeline
     private function namespaceForModule(string $module): string
     {
         return ModuleNamespace::forQtModule($module);
+    }
+
+    private function moduleFromPhpNamespace(string $phpNamespace): string
+    {
+        $parts = array_values(array_filter(
+            explode('\\', ltrim($phpNamespace, '\\')),
+            static fn(string $part): bool => $part !== '',
+        ));
+        if (count($parts) < 2 || $parts[0] !== 'Qt') {
+            return 'QtCore';
+        }
+
+        $suffix = $parts[1];
+        if ($suffix === '') {
+            return 'QtCore';
+        }
+
+        return str_starts_with($suffix, 'Qt') ? $suffix : ('Qt' . $suffix);
     }
 
     private function ensureDirectory(string $directory): void

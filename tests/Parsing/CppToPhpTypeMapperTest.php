@@ -74,6 +74,61 @@ it('maps qualified namespaced class types to their php class identity when resol
         ->and($mapper->map('const Qt3DCore::QNodeId &', 'QRayCasterHit', $resolver, $context))->toBe('\\Qt\\Qt3DCore\\QNodeId');
 });
 
+it('maps nested class members to owner-scoped php fqcns when owner php namespace is available', function (): void {
+    $mapper = new CppToPhpTypeMapper();
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'QJsonObject', 'qualified_name' => 'QJsonObject', 'module' => 'QtCore'],
+        ['name' => 'const_iterator', 'qualified_name' => 'QJsonObject::const_iterator', 'module' => 'QtCore'],
+    ]);
+    $context = TypeResolutionContext::fromNames('QJsonObject', 'QJsonObject');
+
+    expect($mapper->map('const_iterator', '\\Qt\\Core\\QJsonObject', $resolver, $context))
+        ->toBe('\\Qt\\Core\\QJsonObject\\const_iterator');
+});
+
+it('maps nested class members to php fqcns even without explicit owner php namespace', function (): void {
+    $mapper = new CppToPhpTypeMapper();
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'QTextFrame', 'qualified_name' => 'QTextFrame', 'module' => 'QtGui'],
+        ['name' => 'iterator', 'qualified_name' => 'QTextFrame::iterator', 'module' => 'QtGui'],
+    ]);
+    $context = TypeResolutionContext::fromNames('QTextTableCell', 'QTextTableCell');
+
+    expect($mapper->map('QTextFrame::iterator', 'QTextTableCell', $resolver, $context))
+        ->toBe('\\Qt\\Gui\\QTextFrame\\iterator');
+});
+
+it('treats unresolved owner-scoped non-q bare tokens as enums instead of cross-module classes', function (): void {
+    $mapper = new CppToPhpTypeMapper();
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'Key', 'qualified_name' => 'QPixmapCache::Key', 'module' => 'QtGui'],
+    ]);
+    $context = TypeResolutionContext::fromNames('QMediaMetaData', 'QMediaMetaData');
+
+    expect($mapper->map('Key', '\\Qt\\Multimedia\\QMediaMetaData', $resolver, $context))->toBe('int');
+});
+
+it('does not map unrelated unresolved non-q bare tokens to int', function (): void {
+    $mapper = new CppToPhpTypeMapper();
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'Key', 'qualified_name' => 'QPixmapCache::Key', 'module' => 'QtGui'],
+    ]);
+    $context = TypeResolutionContext::fromNames('QElapsedTimer', 'QElapsedTimer');
+
+    expect($mapper->map('Duration', '\\Qt\\Core\\QElapsedTimer', $resolver, $context))->toBe('Duration');
+});
+
+it('keeps explicit Qt enum qualifiers mapped as int even when a class has the same bare tail name', function (): void {
+    $mapper = new CppToPhpTypeMapper();
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'Key', 'qualified_name' => 'QPixmapCache::Key', 'module' => 'QtGui'],
+    ]);
+    $context = TypeResolutionContext::fromNames('QKeyCombination', 'QKeyCombination');
+
+    expect($mapper->map('Qt::Key', 'QKeyCombination', $resolver, $context))->toBe('int')
+        ->and($mapper->map('const Qt::Key &', 'QKeyCombination', $resolver, $context))->toBe('int');
+});
+
 it('maps qsharedpointer aliases to the underlying php object type when alias metadata is available', function (): void {
     $mapper = new CppToPhpTypeMapper();
     $resolver = new CppClassTypeResolver([

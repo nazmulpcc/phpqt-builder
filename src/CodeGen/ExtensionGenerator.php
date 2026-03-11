@@ -58,7 +58,7 @@ class ExtensionGenerator
      * @param string   $outputDir Directory to write generated files
      * @param array<string, string> $classNamespaces Class-to-namespace map used for stub generation
      * @param array<string, string> $classNativeTypes Class-to-native-C++-type map used for namespaced type resolution
-     * @param array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string}> $classMetadata
+     * @param array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string, module?: string, is_qobject_derived?: bool}> $classMetadata
      * @return list<string> List of files written (absolute paths)
      */
     public function generate(

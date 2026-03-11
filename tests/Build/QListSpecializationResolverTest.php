@@ -34,6 +34,16 @@ it('rejects unsupported QList element shapes', function (): void {
         ->and($resolver->specializationFor('QVector<QPoint>'))->toBeNull();
 });
 
+it('derives stable QListOf names for nested element types', function (): void {
+    $resolver = new QListSpecializationResolver();
+
+    $nestedList = $resolver->specializationFor('QList<AddressInfo>');
+    expect($nestedList)->not->toBeNull();
+    expect($nestedList->className)->toBe('QListOfAddressInfo')
+        ->and($nestedList->elementPhpType)->toBe('AddressInfo')
+        ->and($nestedList->nativeIncludes)->toBe(['<QList>', '<AddressInfo>']);
+});
+
 it('only exposes synthetic QList element methods when the element type is supported', function (): void {
     $resolver = new QListSpecializationResolver();
 

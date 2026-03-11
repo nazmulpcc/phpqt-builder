@@ -42,13 +42,13 @@ if ($overload?->isPureVirtual) {
 @endphp
 @if((($overload?->access ?? 'public') === 'protected') && !$method->isStatic && !($overload?->isPureVirtual ?? false))
     if (!intern->native_is_generated_subclass) {
-        zend_throw_error(NULL, "Protected method {!! $ctx->phpClassName !!}::{!! $method->name !!}() requires a PHP-created native instance.");
+        zend_throw_error(NULL, "Protected method {!! addslashes($ctx->phpClassName) !!}::{!! $method->name !!}() requires a PHP-created native instance.");
         RETURN_THROWS();
     }
 
 @endif
 @if($overload?->isPureVirtual)
-    zend_throw_error(NULL, "Pure virtual method {!! $ctx->phpClassName !!}::{!! $method->name !!}() cannot be called directly.");
+    zend_throw_error(NULL, "Pure virtual method {!! addslashes($ctx->phpClassName) !!}::{!! $method->name !!}() cannot be called directly.");
     RETURN_THROWS();
 @else
 @if(!$method->hasNoParams())
@@ -67,7 +67,7 @@ if ($overload?->isPureVirtual) {
     object_init_ex(return_value, {!! $returnCe !!});
     if (UNEXPECTED(Z_TYPE_P(return_value) != IS_OBJECT)) {
         if (!EG(exception)) {
-            zend_throw_error(NULL, "Failed to instantiate PHP wrapper for {!! $returnClass !!}");
+            zend_throw_error(NULL, "Failed to instantiate PHP wrapper for {!! addslashes($returnClass) !!}");
         }
         RETURN_THROWS();
     }

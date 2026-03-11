@@ -25,7 +25,7 @@ use QtBuilder\Support\TypeResolutionContext;
 class TypeBridge
 {
     private ?ContainerBridge $containerBridge = null;
-    /** @var array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string}> */
+    /** @var array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string, module?: string, is_qobject_derived?: bool}> */
     private array $currentClassMetadata = [];
     /** @var array<string, string> */
     private array $currentSmartPointerAliases = [];
@@ -169,9 +169,9 @@ class TypeBridge
     ];
 
     /**
-     * @param array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string}> $classMetadata
+     * @param array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string, module?: string, is_qobject_derived?: bool}> $classMetadata
      */
-    public function setTypeResolutionMetadata(?string $phpNamespace, array $classMetadata, array $smartPointerAliases = []): void
+    public function setTypeResolutionMetadata(?string $phpNamespace, array $classMetadata, array $smartPointerAliases = [], ?string $ownerPhpType = null): void
     {
         $this->currentPhpNamespace = $phpNamespace !== null ? ltrim(trim($phpNamespace), '\\') : null;
         $this->currentClassMetadata = $classMetadata;
@@ -184,6 +184,12 @@ class TypeBridge
 
             $name = is_string($metadata['name'] ?? null) ? $metadata['name'] : '';
             $qualifiedName = is_string($metadata['qualified_name'] ?? null) ? $metadata['qualified_name'] : '';
+            $metadataNamespace = is_string($metadata['namespace'] ?? null)
+                ? ltrim(trim((string) $metadata['namespace']), '\\')
+                : '';
+            $metadataModule = is_string($metadata['module'] ?? null)
+                ? trim((string) $metadata['module'])
+                : '';
             if ($name === '') {
                 continue;
             }
@@ -191,23 +197,58 @@ class TypeBridge
             $classUniverse[] = [
                 'name' => $name,
                 'qualified_name' => $qualifiedName !== '' ? $qualifiedName : null,
-                'module' => TypeResolutionContext::moduleForQualifiedName($qualifiedName),
+                'module' => $metadataModule !== ''
+                    ? $metadataModule
+                    : ($this->moduleFromPhpNamespace($metadataNamespace) ?? TypeResolutionContext::moduleForQualifiedName($qualifiedName)),
             ];
         }
         $this->currentClassTypeResolver = $classUniverse !== [] ? new CppClassTypeResolver($classUniverse) : null;
 
-        $module = null;
-        if ($this->currentPhpNamespace !== null && $this->currentPhpNamespace !== '') {
-            $parts = array_values(array_filter(explode('\\', $this->currentPhpNamespace), static fn(string $part): bool => $part !== ''));
-            $last = $parts !== [] ? $parts[array_key_last($parts)] : null;
-            if (is_string($last) && str_starts_with($last, 'Qt')) {
-                $module = $last;
+        $ownerPhpType = is_string($ownerPhpType) ? trim($ownerPhpType) : '';
+        $ownerQualifiedName = null;
+        $ownerModule = null;
+        if ($ownerPhpType !== '') {
+            foreach ($classMetadata as $metadata) {
+                if (!is_array($metadata)) {
+                    continue;
+                }
+
+                $name = is_string($metadata['name'] ?? null) ? trim((string) $metadata['name']) : '';
+                if ($name !== $ownerPhpType) {
+                    continue;
+                }
+
+                $metadataNamespace = is_string($metadata['namespace'] ?? null)
+                    ? ltrim(trim((string) $metadata['namespace']), '\\')
+                    : '';
+                if (
+                    $this->currentPhpNamespace !== null
+                    && $this->currentPhpNamespace !== ''
+                    && $metadataNamespace !== ''
+                    && $metadataNamespace !== $this->currentPhpNamespace
+                ) {
+                    continue;
+                }
+
+                $qualifiedName = is_string($metadata['qualified_name'] ?? null)
+                    ? trim((string) $metadata['qualified_name'])
+                    : '';
+                if ($qualifiedName === '') {
+                    continue;
+                }
+
+                $ownerQualifiedName = $qualifiedName;
+                $ownerModule = TypeResolutionContext::moduleForQualifiedName($qualifiedName);
+                break;
             }
         }
-        $namespace = $module !== null && $module !== 'Qt' ? $module : null;
+
+        $module = $ownerModule ?? $this->moduleFromPhpNamespace($this->currentPhpNamespace);
+        $namespace = TypeResolutionContext::namespaceForQualifiedName($ownerQualifiedName)
+            ?? ($module !== null && $module !== 'Qt' ? $module : null);
         $this->currentTypeResolutionContext = new TypeResolutionContext(
-            className: '',
-            qualifiedClassName: null,
+            className: $ownerPhpType,
+            qualifiedClassName: $ownerQualifiedName,
             module: $module,
             namespace: $namespace,
         );
@@ -226,6 +267,28 @@ class TypeBridge
     public function smartPointerAliases(): array
     {
         return $this->currentSmartPointerAliases;
+    }
+
+    private function moduleFromPhpNamespace(?string $phpNamespace): ?string
+    {
+        if (!is_string($phpNamespace) || $phpNamespace === '') {
+            return null;
+        }
+
+        $parts = array_values(array_filter(
+            explode('\\', ltrim($phpNamespace, '\\')),
+            static fn(string $part): bool => $part !== '',
+        ));
+        if (count($parts) < 2 || $parts[0] !== 'Qt') {
+            return null;
+        }
+
+        $suffix = $parts[1];
+        if ($suffix === '') {
+            return null;
+        }
+
+        return str_starts_with($suffix, 'Qt') ? $suffix : ('Qt' . $suffix);
     }
 
     // ------------------------------------------------------------------
@@ -1752,7 +1815,34 @@ class TypeBridge
             return false;
         }
 
-        return str_contains(trim($cppType), '&');
+        if (!str_contains(trim($cppType), '&')) {
+            return false;
+        }
+
+        return $this->isQObjectDerivedPhpType($phpType);
+    }
+
+    private function isQObjectDerivedPhpType(string $phpType): bool
+    {
+        $typeName = $this->phpTypeBaseName($phpType);
+        if ($typeName === '') {
+            return false;
+        }
+
+        foreach ($this->currentClassMetadata as $metadata) {
+            if (!is_array($metadata)) {
+                continue;
+            }
+
+            $name = is_string($metadata['name'] ?? null) ? trim((string) $metadata['name']) : '';
+            if ($name !== $typeName) {
+                continue;
+            }
+
+            return (bool) ($metadata['is_qobject_derived'] ?? false);
+        }
+
+        return false;
     }
 
     public function zvalToNativeReturnExpr(string $phpType, string $cppType, string $zvalPtrExpr, bool $nullable = false): string
@@ -2042,6 +2132,23 @@ class TypeBridge
         }
 
         if (str_contains($trimmed, '\\')) {
+            foreach ($this->currentClassMetadata as $candidate) {
+                if (!is_array($candidate)) {
+                    continue;
+                }
+
+                $namespace = is_string($candidate['namespace'] ?? null) ? ltrim($candidate['namespace'], '\\') : '';
+                $name = is_string($candidate['name'] ?? null) ? $candidate['name'] : '';
+                $generationId = is_string($candidate['generation_id'] ?? null) ? $candidate['generation_id'] : '';
+                if ($namespace === '' || $name === '' || $generationId === '') {
+                    continue;
+                }
+
+                if ($trimmed === ltrim($namespace . '\\' . $name, '\\')) {
+                    return $generationId;
+                }
+            }
+
             $parts = array_values(array_filter(explode('\\', $trimmed), static fn(string $part): bool => $part !== ''));
             $bareName = array_pop($parts) ?: $trimmed;
             $moduleSegment = $parts[1] ?? null;
@@ -2090,6 +2197,31 @@ class TypeBridge
 
         if (count($uniqueMatches) === 1) {
             return array_key_first($uniqueMatches);
+        }
+
+        if ($this->currentClassTypeResolver !== null && $this->currentTypeResolutionContext !== null) {
+            $resolvedQualified = $this->currentClassTypeResolver->resolveQualifiedClassName($trimmed, $this->currentTypeResolutionContext);
+            if (is_string($resolvedQualified) && $resolvedQualified !== '') {
+                foreach ($this->currentClassMetadata as $candidate) {
+                    if (!is_array($candidate)) {
+                        continue;
+                    }
+
+                    $candidateQualified = is_string($candidate['qualified_name'] ?? null)
+                        ? trim((string) $candidate['qualified_name'])
+                        : '';
+                    $generationId = is_string($candidate['generation_id'] ?? null)
+                        ? trim((string) $candidate['generation_id'])
+                        : '';
+                    if ($candidateQualified === '' || $generationId === '') {
+                        continue;
+                    }
+
+                    if ($candidateQualified === $resolvedQualified) {
+                        return $generationId;
+                    }
+                }
+            }
         }
 
         return GeneratedTypeIdentity::fromNames(CppName::unqualify($trimmed), str_contains($trimmed, '::') ? $trimmed : null)->generationId;
@@ -2283,6 +2415,10 @@ class TypeBridge
 
         if ($base === 'std::filesystem::path') {
             return sprintf('std::filesystem::path(std::string(ZSTR_VAL(%s), ZSTR_LEN(%s)))', $varName, $varName);
+        }
+
+        if ($base === 'QAnyStringView') {
+            return sprintf('QAnyStringView(QString::fromUtf8(ZSTR_VAL(%s), (int)ZSTR_LEN(%s)))', $varName, $varName);
         }
 
         if ($base === 'qint128' || $base === 'quint128') {
@@ -2494,7 +2630,7 @@ class TypeBridge
             $matchExpr = $this->zvalTypeMatchExpr($entryVar, $phpType);
             $nativeExpr = $this->zvalToNativeExpr($phpType, $elementType, $entryVar, false);
             $lines[] = sprintf('        if (!(%s)) {', $matchExpr);
-            $lines[] = sprintf('            zend_type_error("Expected array of %ss.");', $phpType);
+            $lines[] = sprintf('            zend_type_error("Expected array of %ss.");', addslashes($phpType));
             $lines[] = '            ' . $failureStatement;
             $lines[] = '        }';
             $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($elementType), $valueVar, $nativeExpr);
@@ -2506,7 +2642,7 @@ class TypeBridge
             ? sprintf('(Z_TYPE_P(%1$s) == IS_NULL || (Z_TYPE_P(%1$s) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s), %2$s)))', $entryVar, $this->ceVarName($phpType))
             : sprintf('(Z_TYPE_P(%1$s) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s), %2$s))', $entryVar, $this->ceVarName($phpType));
         $lines[] = sprintf('        if (!(%s)) {', $objectCheck);
-        $lines[] = sprintf('            zend_type_error("Expected array of %s objects.");', $phpType);
+        $lines[] = sprintf('            zend_type_error("Expected array of %s objects.");', addslashes($phpType));
         $lines[] = '            ' . $failureStatement;
         $lines[] = '        }';
         $nativeExpr = $nullable
@@ -2667,7 +2803,7 @@ class TypeBridge
             $lines[] = sprintf('        zend_string_release(%s);', $stringVar);
         } elseif (in_array($valuePhpType, ['int', 'float', 'bool'], true)) {
             $lines[] = sprintf('        if (!(%s)) {', $this->zvalTypeMatchExpr(sprintf('%s_entry', $nativeVarName), $valuePhpType));
-            $lines[] = sprintf('            zend_type_error("Expected %s map values.");', $valuePhpType);
+            $lines[] = sprintf('            zend_type_error("Expected %s map values.");', addslashes($valuePhpType));
             $lines[] = '            ' . $failureStatement;
             $lines[] = '        }';
             $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($valueType), $valueVar, $this->zvalToNativeExpr($valuePhpType, $valueType, sprintf('%s_entry', $nativeVarName), false));
@@ -2676,7 +2812,7 @@ class TypeBridge
                 ? sprintf('(Z_TYPE_P(%1$s_entry) == IS_NULL || (Z_TYPE_P(%1$s_entry) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s_entry), %2$s)))', $nativeVarName, $this->ceVarName($valuePhpType))
                 : sprintf('(Z_TYPE_P(%1$s_entry) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s_entry), %2$s))', $nativeVarName, $this->ceVarName($valuePhpType));
             $lines[] = sprintf('        if (!(%s)) {', $valueCheck);
-            $lines[] = sprintf('            zend_type_error("Expected %s map values.");', $valuePhpType);
+            $lines[] = sprintf('            zend_type_error("Expected %s map values.");', addslashes($valuePhpType));
             $lines[] = '            ' . $failureStatement;
             $lines[] = '        }';
             $nativeExpr = $valueNullable
@@ -2704,6 +2840,7 @@ class TypeBridge
         $valueType = (string) $container->valueType;
         $keyPhpType = $this->containerBridge()->elementPhpType($keyType);
         $valuePhpType = $this->containerBridge()->elementPhpType($valueType);
+        $keyNullable = $this->isPointerType($keyType);
         $valueNullable = $this->isPointerType($valueType);
         $pairVar = $nativeVarName . '_pair';
         $keyEntryVar = $nativeVarName . '_key_entry';
@@ -2745,7 +2882,7 @@ class TypeBridge
             $lines[] = '            ' . $failureStatement;
             $lines[] = '        }';
             $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($keyType), $keyVar, $this->zvalToNativeExpr('int', $keyType, $keyEntryVar, false));
-        } else {
+        } elseif ($keyPhpType === 'string') {
             $lines[] = sprintf('        if (Z_TYPE_P(%s) != IS_STRING) {', $keyEntryVar);
             $lines[] = '            zend_type_error("Expected pair key type string.");';
             $lines[] = '            ' . $failureStatement;
@@ -2753,6 +2890,18 @@ class TypeBridge
             $lines[] = sprintf('        zend_string *%s = zval_get_string(%s);', $keyStringVar, $keyEntryVar);
             $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($keyType), $keyVar, $this->phpStringToNativeExpr($keyType, $keyStringVar));
             $lines[] = sprintf('        zend_string_release(%s);', $keyStringVar);
+        } else {
+            $keyCheck = $keyNullable
+                ? sprintf('(Z_TYPE_P(%1$s) == IS_NULL || (Z_TYPE_P(%1$s) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s), %2$s)))', $keyEntryVar, $this->ceVarName($keyPhpType))
+                : sprintf('(Z_TYPE_P(%1$s) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s), %2$s))', $keyEntryVar, $this->ceVarName($keyPhpType));
+            $lines[] = sprintf('        if (!(%s)) {', $keyCheck);
+            $lines[] = sprintf('            zend_type_error("Expected pair key type %s.");', addslashes($keyPhpType));
+            $lines[] = '            ' . $failureStatement;
+            $lines[] = '        }';
+            $keyNativeExpr = $keyNullable
+                ? sprintf('(Z_TYPE_P(%1$s) == IS_NULL ? NULL : %2$s(Z_OBJ_P(%1$s))->native_ptr)', $keyEntryVar, $this->fromObjFuncName($keyPhpType))
+                : $this->phpObjectToNativeExpr($keyPhpType, $keyType, $keyEntryVar, false);
+            $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($keyType), $keyVar, $keyNativeExpr);
         }
 
         if ($valueType === 'QVariant') {
@@ -2770,7 +2919,7 @@ class TypeBridge
             $lines[] = sprintf('        zend_string_release(%s);', $valueStringVar);
         } elseif (in_array($valuePhpType, ['int', 'float', 'bool'], true)) {
             $lines[] = sprintf('        if (!(%s)) {', $this->zvalTypeMatchExpr($valueEntryVar, $valuePhpType));
-            $lines[] = sprintf('            zend_type_error("Expected pair value type %s.");', $valuePhpType);
+            $lines[] = sprintf('            zend_type_error("Expected pair value type %s.");', addslashes($valuePhpType));
             $lines[] = '            ' . $failureStatement;
             $lines[] = '        }';
             $lines[] = sprintf('        %s %s = %s;', $this->localContainerNativeType($valueType), $valueVar, $this->zvalToNativeExpr($valuePhpType, $valueType, $valueEntryVar, false));
@@ -2779,7 +2928,7 @@ class TypeBridge
                 ? sprintf('(Z_TYPE_P(%1$s) == IS_NULL || (Z_TYPE_P(%1$s) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s), %2$s)))', $valueEntryVar, $this->ceVarName($valuePhpType))
                 : sprintf('(Z_TYPE_P(%1$s) == IS_OBJECT && instanceof_function(Z_OBJCE_P(%1$s), %2$s))', $valueEntryVar, $this->ceVarName($valuePhpType));
             $lines[] = sprintf('        if (!(%s)) {', $valueCheck);
-            $lines[] = sprintf('            zend_type_error("Expected pair value type %s.");', $valuePhpType);
+            $lines[] = sprintf('            zend_type_error("Expected pair value type %s.");', addslashes($valuePhpType));
             $lines[] = '            ' . $failureStatement;
             $lines[] = '        }';
             $nativeExpr = $valueNullable
@@ -2907,7 +3056,7 @@ class TypeBridge
             $generationId = $this->generationIdForPhpAndCppType($phpType, $cppType);
             return [
                 sprintf('object_init_ex(%s, %s);', $zvalPtrExpr, $this->ceVarNameForId($generationId)),
-                sprintf('%s(%s)->native_ptr = new %s(%s);', $this->zMacroNameForId($generationId), $zvalPtrExpr, $this->normalizeCppType($cppType), $sourceExpr),
+                sprintf('%s(%s)->native_ptr = new %s(%s);', $this->zMacroNameForId($generationId), $zvalPtrExpr, $this->localContainerNativeType($cppType), $sourceExpr),
             ];
         }
 
@@ -2917,7 +3066,7 @@ class TypeBridge
                 return [
                     sprintf('if (%s != NULL) {', $sourceExpr),
                     sprintf('    object_init_ex(%s, %s);', $zvalPtrExpr, $this->ceVarNameForId($generationId)),
-                    sprintf('    %s(%s)->native_ptr = new %s(*%s);', $this->zMacroNameForId($generationId), $zvalPtrExpr, $this->normalizeCppType($cppType), $sourceExpr),
+                    sprintf('    %s(%s)->native_ptr = new %s(*%s);', $this->zMacroNameForId($generationId), $zvalPtrExpr, $this->localContainerNativeType($cppType), $sourceExpr),
                     '} else {',
                     sprintf('    ZVAL_NULL(%s);', $zvalPtrExpr),
                     '}',

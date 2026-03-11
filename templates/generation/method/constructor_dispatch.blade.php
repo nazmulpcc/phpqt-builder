@@ -52,7 +52,7 @@
                 intern->native_ptr = new {!! $ctx->nativeInstantiationType !!}({!! implode(', ', $callPlan['args']) !!});
 @endif
                 if (intern->native_ptr == NULL) {
-                    zend_throw_error(NULL, "{!! $ctx->phpClassName !!} cannot be instantiated directly.");
+                    zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} cannot be instantiated directly.");
                     RETURN_THROWS();
                 }
                 auto *_qt_trampoline = static_cast<{!! $ctx->trampolineTypeName !!} *>(intern->native_ptr);
@@ -62,7 +62,7 @@
                 intern->native_is_virtual_trampoline = true;
             } else {
 @if($ctx->isAbstract)
-                zend_throw_error(NULL, "Abstract class {!! $ctx->phpClassName !!} cannot be instantiated directly.");
+                zend_throw_error(NULL, "Abstract class {!! addslashes($ctx->phpClassName) !!} cannot be instantiated directly.");
                 RETURN_THROWS();
 @else
 @if(count($callPlan['args']) === 0)
@@ -71,7 +71,7 @@
                 intern->native_ptr = new {!! $ctx->plainNativeInstantiationType !!}({!! implode(', ', $callPlan['args']) !!});
 @endif
                 if (intern->native_ptr == NULL) {
-                    zend_throw_error(NULL, "{!! $ctx->phpClassName !!} cannot be instantiated directly.");
+                    zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} cannot be instantiated directly.");
                     RETURN_THROWS();
                 }
                 intern->native_is_generated_subclass = {!! $ctx->plainInstantiationUsesGeneratedType() ? 'true' : 'false' !!};
@@ -85,7 +85,7 @@
             intern->native_ptr = new {!! $ctx->nativeInstantiationType !!}({!! implode(', ', $callPlan['args']) !!});
 @endif
             if (intern->native_ptr == NULL) {
-                zend_throw_error(NULL, "{!! $ctx->phpClassName !!} cannot be instantiated directly.");
+                zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} cannot be instantiated directly.");
                 RETURN_THROWS();
             }
 @if($ctx->tracksGeneratedNativeSubclass)

@@ -11,6 +11,9 @@ final class CppClassTypeResolver
     /** @var array<string, string> */
     private array $qualifiedByExact = [];
 
+    /** @var array<string, string> */
+    private array $moduleByQualified = [];
+
     /** @var array<string, array<string, string>> */
     private array $qualifiedByNamespaceAndBare = [];
 
@@ -44,6 +47,9 @@ final class CppClassTypeResolver
             $namespace = TypeResolutionContext::namespaceForQualifiedName($qualifiedName) ?? '';
 
             $this->qualifiedByExact[$qualifiedName] = $qualifiedName;
+            if ($module !== '') {
+                $this->moduleByQualified[$qualifiedName] = $module;
+            }
             $this->qualifiedByBare[$bareName][] = $qualifiedName;
 
             if ($namespace !== '') {
@@ -77,9 +83,11 @@ final class CppClassTypeResolver
                 'qualified_name' => is_string($classData['qualified_name'] ?? null)
                     ? (string) $classData['qualified_name']
                     : null,
-                'module' => TypeResolutionContext::moduleForQualifiedName(
-                    is_string($classData['qualified_name'] ?? null) ? (string) $classData['qualified_name'] : null,
-                ),
+                'module' => is_string($classData['module'] ?? null) && trim((string) $classData['module']) !== ''
+                    ? (string) $classData['module']
+                    : TypeResolutionContext::moduleForQualifiedName(
+                        is_string($classData['qualified_name'] ?? null) ? (string) $classData['qualified_name'] : null,
+                    ),
             ];
         }
 
@@ -97,6 +105,11 @@ final class CppClassTypeResolver
 
     public function canonicalizeType(string $cppType, TypeResolutionContext $context): string
     {
+        $templated = $this->canonicalizeTemplateType($cppType, $context);
+        if ($templated !== null) {
+            return $templated;
+        }
+
         $parsed = $this->parseDirectClassReference($cppType);
         if ($parsed !== null) {
             $resolved = $this->resolveQualifiedName($parsed['base'], $context);
@@ -136,12 +149,16 @@ final class CppClassTypeResolver
         }
 
         $bareName = CppName::unqualify($resolved);
-        $module = TypeResolutionContext::moduleForQualifiedName($resolved);
+        $module = $this->moduleByQualified[$resolved] ?? TypeResolutionContext::moduleForQualifiedName($resolved);
         if ($module === null) {
             return $bareName;
         }
 
-        $targetPhpNamespace = ModuleNamespace::forQtModule($module);
+        $targetPhpNamespace = ModuleNamespace::forQualifiedCppClass($module, $resolved);
+        if (str_contains($resolved, '::')) {
+            return '\\' . $targetPhpNamespace . '\\' . $bareName;
+        }
+
         if (str_starts_with($targetPhpNamespace, 'Qt\\Qt')) {
             return '\\' . $targetPhpNamespace . '\\' . $bareName;
         }
@@ -170,8 +187,18 @@ final class CppClassTypeResolver
             return null;
         }
 
-        if (str_contains($trimmed, '::') && isset($this->qualifiedByExact[$trimmed])) {
-            return $this->qualifiedByExact[$trimmed];
+        if (str_contains($trimmed, '::')) {
+            if (isset($this->qualifiedByExact[$trimmed])) {
+                return $this->qualifiedByExact[$trimmed];
+            }
+
+            $globalTrimmed = ltrim($trimmed, ':');
+            if ($globalTrimmed !== '' && isset($this->qualifiedByExact[$globalTrimmed])) {
+                return $this->qualifiedByExact[$globalTrimmed];
+            }
+
+            // Explicitly-qualified C++ types should not be guessed via bare-name fallback.
+            return null;
         }
 
         $bareName = CppName::unqualify($trimmed);
@@ -181,6 +208,13 @@ final class CppClassTypeResolver
 
         if ($context !== null && $context->qualifiedClassName !== null && $context->className === $bareName) {
             return $context->qualifiedClassName;
+        }
+
+        if ($context !== null && $context->qualifiedClassName !== null) {
+            $ownerNestedMatch = $this->qualifiedByNamespaceAndBare[$context->qualifiedClassName][$bareName] ?? null;
+            if (is_string($ownerNestedMatch) && $ownerNestedMatch !== '') {
+                return $ownerNestedMatch;
+            }
         }
 
         if ($context !== null && $context->namespace !== null) {
@@ -193,16 +227,137 @@ final class CppClassTypeResolver
         if ($context !== null && $context->module !== null) {
             $moduleMatch = $this->qualifiedByModuleAndBare[$context->module][$bareName] ?? null;
             if (is_string($moduleMatch) && $moduleMatch !== '') {
+                if ($this->isCrossOwnerBareNestedMismatch($moduleMatch, $bareName, $context)) {
+                    return null;
+                }
+
                 return $moduleMatch;
             }
         }
 
         $matches = $this->qualifiedByBare[$bareName] ?? [];
         if (count($matches) === 1) {
-            return $matches[0];
+            $candidate = $matches[0];
+            if ($this->isCrossOwnerBareNestedMismatch($candidate, $bareName, $context)) {
+                return null;
+            }
+
+            if ($context !== null && $context->module !== null) {
+                $candidateModule = $this->moduleByQualified[$candidate] ?? TypeResolutionContext::moduleForQualifiedName($candidate);
+                if (
+                    $candidateModule !== null
+                    && $candidateModule !== $context->module
+                    && !str_starts_with($bareName, 'Q')
+                ) {
+                    return null;
+                }
+            }
+
+            return $candidate;
         }
 
         return null;
+    }
+
+    private function isCrossOwnerBareNestedMismatch(string $candidate, string $bareName, ?TypeResolutionContext $context): bool
+    {
+        if (
+            $context === null
+            || $context->qualifiedClassName === null
+            || str_starts_with($bareName, 'Q')
+            || !str_contains($candidate, '::')
+        ) {
+            return false;
+        }
+
+        $ownerQualifiedName = ltrim($context->qualifiedClassName, ':');
+        $ownerSeparator = strrpos($candidate, '::');
+        $candidateOwner = $ownerSeparator !== false ? substr($candidate, 0, $ownerSeparator) : '';
+
+        return $candidateOwner !== ''
+            && $candidateOwner !== $ownerQualifiedName
+            && !str_starts_with($candidateOwner, $ownerQualifiedName . '::');
+    }
+
+    private function canonicalizeTemplateType(string $cppType, TypeResolutionContext $context): ?string
+    {
+        $trimmed = trim($cppType);
+        if ($trimmed === '' || !str_contains($trimmed, '<') || !str_contains($trimmed, '>')) {
+            return null;
+        }
+
+        if (preg_match('/^(?<prefix>(?:const\s+)?)(?<base>(?:::)?(?:[A-Za-z_][A-Za-z0-9_]*::)*[A-Za-z_][A-Za-z0-9_]*)\s*<(?<args>.*)>(?<suffix>(?:\s*[*&]\s*)*)$/', $trimmed, $matches) !== 1) {
+            return null;
+        }
+
+        $base = trim((string) ($matches['base'] ?? ''));
+        $args = trim((string) ($matches['args'] ?? ''));
+        if ($base === '' || $args === '') {
+            return null;
+        }
+
+        $arguments = $this->splitTopLevelTemplateArgs($args);
+        if ($arguments === []) {
+            return null;
+        }
+
+        $resolvedBase = $this->resolveQualifiedName($base, $context) ?? $base;
+        $resolvedArguments = array_map(
+            fn(string $argument): string => $this->canonicalizeType($argument, $context),
+            $arguments,
+        );
+
+        return sprintf(
+            '%s%s<%s>%s',
+            (string) ($matches['prefix'] ?? ''),
+            $resolvedBase,
+            implode(', ', $resolvedArguments),
+            (string) ($matches['suffix'] ?? ''),
+        );
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function splitTopLevelTemplateArgs(string $args): array
+    {
+        $parts = [];
+        $buffer = '';
+        $depth = 0;
+        $length = strlen($args);
+
+        for ($index = 0; $index < $length; $index++) {
+            $char = $args[$index];
+            if ($char === '<') {
+                $depth++;
+                $buffer .= $char;
+                continue;
+            }
+
+            if ($char === '>') {
+                $depth--;
+                $buffer .= $char;
+                continue;
+            }
+
+            if ($char === ',' && $depth === 0) {
+                $part = trim($buffer);
+                if ($part !== '') {
+                    $parts[] = $part;
+                }
+                $buffer = '';
+                continue;
+            }
+
+            $buffer .= $char;
+        }
+
+        $tail = trim($buffer);
+        if ($tail !== '') {
+            $parts[] = $tail;
+        }
+
+        return $parts;
     }
 
     /**

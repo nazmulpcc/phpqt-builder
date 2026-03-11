@@ -22,8 +22,29 @@ final readonly class TypeResolutionContext
         $qualifiedClassName = is_string($classData['qualified_name'] ?? null)
             ? trim((string) $classData['qualified_name'])
             : null;
+        $module = is_string($classData['module'] ?? null)
+            ? trim((string) $classData['module'])
+            : '';
+        if ($module === '') {
+            $module = self::moduleForQualifiedName($qualifiedClassName) ?? '';
+        }
 
-        return self::fromNames($className, $qualifiedClassName);
+        $namespace = self::namespaceForQualifiedName($qualifiedClassName);
+        if ($namespace === null) {
+            $candidateNamespace = is_string($classData['namespace'] ?? null)
+                ? trim((string) $classData['namespace'])
+                : '';
+            if ($candidateNamespace !== '') {
+                $namespace = $candidateNamespace;
+            }
+        }
+
+        return new self(
+            className: $className,
+            qualifiedClassName: $qualifiedClassName,
+            module: $module !== '' ? $module : null,
+            namespace: $namespace,
+        );
     }
 
     public static function fromNames(string $className, ?string $qualifiedClassName = null): self

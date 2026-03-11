@@ -33,7 +33,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
 
 @if(!$method->isConstructor)
     if (intern->native_ptr == NULL) {
-        zend_throw_error(NULL, "{!! $ctx->phpClassName !!} native instance is not initialized");
+        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
         RETURN_THROWS();
     }
 

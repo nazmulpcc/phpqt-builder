@@ -605,17 +605,6 @@ class ClassGenerationService
      */
     public function prepareDiscoveryFacts(string $headerPath, string $className, array $includePaths): array
     {
-        $decision = $this->classPolicy->decideClassName($className);
-        if (!$decision->accepted) {
-            return [
-                'status' => 'skipped',
-                'class' => $className,
-                'header' => $headerPath,
-                'reason_code' => $decision->reasonCode ?? 'class_filtered',
-                'reason_message' => $decision->reasonMessage ?? 'Class is filtered.',
-            ];
-        }
-
         if ($this->isTemplateClassDeclaration($headerPath, $className)) {
             return [
                 'status' => 'skipped',
@@ -627,8 +616,8 @@ class ClassGenerationService
         }
 
         $inspector = new QtClassInspector(new ClangArgumentBuilder($includePaths));
-        $classData = $inspector->inspect($headerPath, $className);
-        if ($classData === null) {
+        $inspection = $inspector->inspectWithReferencedNestedClasses($headerPath, $className);
+        if ($inspection === null) {
             return [
                 'status' => 'skipped',
                 'class' => $className,
@@ -638,18 +627,112 @@ class ClassGenerationService
             ];
         }
 
+        $classData = $this->enrichDiscoveryClassData(
+            is_array($inspection['class_data'] ?? null) ? $inspection['class_data'] : [],
+            $headerPath,
+            $className,
+        );
+
+        $resolvedName = is_string($classData['name'] ?? null) ? trim((string) $classData['name']) : '';
+        $resolvedQualified = is_string($classData['qualified_name'] ?? null)
+            ? trim((string) $classData['qualified_name'])
+            : '';
+        if ($resolvedName !== '' && !str_contains($resolvedQualified, '::')) {
+            $decision = $this->classPolicy->decideClassName($resolvedName);
+            if (!$decision->accepted) {
+                return [
+                    'status' => 'skipped',
+                    'class' => $className,
+                    'header' => $headerPath,
+                    'reason_code' => $decision->reasonCode ?? 'class_filtered',
+                    'reason_message' => $decision->reasonMessage ?? 'Class is filtered.',
+                ];
+            }
+        }
+
+        $referencedNestedClassData = [];
+        $nestedAccessContext = $this->nestedDeclarationAccessContext(
+            $headerPath,
+            $resolvedName !== '' ? $resolvedName : $className,
+            (bool) ($classData['is_struct'] ?? false),
+        );
+        $nestedAccessByName = is_array($nestedAccessContext['name_access'] ?? null)
+            ? $nestedAccessContext['name_access']
+            : [];
+        $nestedAccessByLine = is_array($nestedAccessContext['line_access'] ?? null)
+            ? $nestedAccessContext['line_access']
+            : [];
+        $nestedSourcePath = is_string($nestedAccessContext['source_path'] ?? null)
+            ? trim((string) $nestedAccessContext['source_path'])
+            : '';
+        foreach ((array) ($inspection['referenced_nested_class_data'] ?? []) as $nestedClassData) {
+            if (!is_array($nestedClassData)) {
+                continue;
+            }
+
+            $nestedLookupName = is_string($nestedClassData['name'] ?? null)
+                ? trim((string) $nestedClassData['name'])
+                : '';
+            if ($nestedLookupName === '') {
+                continue;
+            }
+
+            if ($this->isPhpReservedIdentifier($nestedLookupName)) {
+                continue;
+            }
+
+            $declarationAccess = $nestedAccessByName[$nestedLookupName] ?? null;
+            if ($declarationAccess === null) {
+                $declarationFile = is_string($nestedClassData['declaration_file'] ?? null)
+                    ? trim((string) $nestedClassData['declaration_file'])
+                    : '';
+                $declarationLine = $nestedClassData['declaration_line'] ?? null;
+                $sameSourceFile = $declarationFile === '' || $nestedSourcePath === '' || $declarationFile === $nestedSourcePath;
+                if ($sameSourceFile && is_int($declarationLine) && $declarationLine > 0) {
+                    $declarationAccess = is_string($nestedAccessByLine[$declarationLine] ?? null)
+                        ? $nestedAccessByLine[$declarationLine]
+                        : null;
+                }
+
+                if ($declarationAccess === null && $declarationFile !== '' && $nestedSourcePath !== '' && $declarationFile !== $nestedSourcePath) {
+                    continue;
+                }
+            }
+            if ($declarationAccess !== null && $declarationAccess !== 'public') {
+                continue;
+            }
+
+            $referencedNestedClassData[] = $this->enrichDiscoveryClassData($nestedClassData, $headerPath, $nestedLookupName);
+        }
+
+        return [
+            'status' => 'ok',
+            'class' => $className,
+            'header' => $headerPath,
+            'class_data' => $classData,
+            'referenced_nested_class_data' => $referencedNestedClassData,
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $classData
+     * @return array<string, mixed>
+     */
+    private function enrichDiscoveryClassData(array $classData, string $headerPath, string $classLookupName): array
+    {
         $runtimeLifecycle = $this->analyzeLifecycleCapabilitiesFromClassData($classData);
-        if ($runtimeLifecycle !== null && !$this->classDataHasDestructorMetadata($classData, $className)) {
-            $sourceLifecycle = $this->analyzeLifecycleCapabilities($headerPath, $className, (bool) ($classData['is_struct'] ?? false));
+        if ($runtimeLifecycle !== null && !$this->classDataHasDestructorMetadata($classData, $classLookupName)) {
+            $sourceLifecycle = $this->analyzeLifecycleCapabilities($headerPath, $classLookupName, (bool) ($classData['is_struct'] ?? false));
             $runtimeLifecycle['has_public_destructor'] = $sourceLifecycle['has_public_destructor'];
         }
 
         $lifecycle = $runtimeLifecycle
-            ?? $this->analyzeLifecycleCapabilities($headerPath, $className, (bool) ($classData['is_struct'] ?? false));
+            ?? $this->analyzeLifecycleCapabilities($headerPath, $classLookupName, (bool) ($classData['is_struct'] ?? false));
         $classData['is_copy_constructible'] = $lifecycle['is_copy_constructible'];
         $classData['has_public_constructor'] = $lifecycle['has_public_constructor'];
         $classData['has_public_default_constructor'] = $lifecycle['has_public_default_constructor'];
         $classData['has_public_destructor'] = $lifecycle['has_public_destructor'];
+
         $astFlagAliases = $this->normalizeFlagAliases(
             is_array($classData['flag_aliases'] ?? null)
                 ? (array) $classData['flag_aliases']
@@ -657,7 +740,7 @@ class ClassGenerationService
         );
         $classData['flag_aliases'] = $astFlagAliases !== []
             ? $astFlagAliases
-            : $this->normalizeFlagAliases($this->discoverFlagAliases($headerPath, $className));
+            : $this->normalizeFlagAliases($this->discoverFlagAliases($headerPath, $classLookupName));
 
         $astEnumNames = $this->normalizeEnumNames(
             is_array($classData['enum_names'] ?? null)
@@ -666,24 +749,19 @@ class ClassGenerationService
         );
         $classData['enum_names'] = $astEnumNames !== []
             ? $astEnumNames
-            : $this->normalizeEnumNames($this->discoverEnumNames($headerPath, $className));
+            : $this->normalizeEnumNames($this->discoverEnumNames($headerPath, $classLookupName));
         $classData['smart_pointer_aliases'] = $this->smartPointerAliasResolver->discover($headerPath);
         $classData['methods'] = is_array($classData['methods'] ?? null) ? $classData['methods'] : [];
-        if (!$this->hasRuntimeConstructorSemantics($classData, $className)) {
+        if (!$this->hasRuntimeConstructorSemantics($classData, $classLookupName)) {
             $classData['methods'] = $this->annotateConstructorVariants(
                 $classData['methods'],
                 $headerPath,
-                $className,
+                $classLookupName,
                 (bool) ($classData['is_struct'] ?? false),
             );
         }
 
-        return [
-            'status' => 'ok',
-            'class' => $className,
-            'header' => $headerPath,
-            'class_data' => $classData,
-        ];
+        return $classData;
     }
 
     /**
@@ -3517,7 +3595,7 @@ class ClassGenerationService
     }
 
     /**
-     * @return array{path: string, contents: string, body: array{kind: string, body: string}|null}|null
+     * @return array{path: string, contents: string, body: array{kind: string, body: string, body_start_line: int}|null}|null
      */
     private function resolveClassDefinitionSource(string $headerPath, string $className): ?array
     {
@@ -3617,16 +3695,17 @@ class ClassGenerationService
     }
 
     /**
-     * @return array{kind: string, body: string}|null
+     * @return array{kind: string, body: string, body_start_line: int}|null
      */
     private function extractClassBody(string $contents, string $className): ?array
     {
+        $scanSource = $this->stripCommentsPreservingOffsets($contents);
         $pattern = sprintf(
             '/(?:^|\n)\s*(class|struct)\s+(?:[A-Za-z_][A-Za-z0-9_]*(?:\s*\([^)]*\))?\s+)*%s\b(?:\s+final)?(?:\s*:[^{]+)?\s*\{/s',
             preg_quote($className, '/'),
         );
 
-        if (preg_match($pattern, $contents, $matches, PREG_OFFSET_CAPTURE) !== 1) {
+        if (preg_match($pattern, $scanSource, $matches, PREG_OFFSET_CAPTURE) !== 1) {
             return null;
         }
 
@@ -3643,6 +3722,7 @@ class ClassGenerationService
         }
 
         $bodyStart = $matchOffset + $braceOffset + 1;
+        $bodyStartLine = substr_count(substr($contents, 0, $bodyStart), "\n") + 1;
         $depth = 1;
         $length = strlen($contents);
 
@@ -3660,12 +3740,41 @@ class ClassGenerationService
                     return [
                         'kind' => $kind,
                         'body' => substr($contents, $bodyStart, $index - $bodyStart),
+                        'body_start_line' => $bodyStartLine,
                     ];
                 }
             }
         }
 
         return null;
+    }
+
+    private function stripCommentsPreservingOffsets(string $source): string
+    {
+        $withoutBlockComments = preg_replace_callback(
+            '/\/\*.*?\*\//s',
+            static function (array $match): string {
+                $comment = is_string($match[0] ?? null) ? $match[0] : '';
+
+                return preg_replace('/[^\n]/', ' ', $comment) ?? $comment;
+            },
+            $source,
+        );
+        if (!is_string($withoutBlockComments)) {
+            $withoutBlockComments = $source;
+        }
+
+        $withoutLineComments = preg_replace_callback(
+            '/\/\/[^\n]*/',
+            static function (array $match): string {
+                $comment = is_string($match[0] ?? null) ? $match[0] : '';
+
+                return str_repeat(' ', strlen($comment));
+            },
+            $withoutBlockComments,
+        );
+
+        return is_string($withoutLineComments) ? $withoutLineComments : $withoutBlockComments;
     }
 
     /**
@@ -3713,6 +3822,201 @@ class ClassGenerationService
         }
 
         return $segments;
+    }
+
+    /**
+     * @return array{
+     *   name_access: array<string, string>,
+     *   line_access: array<int, string>,
+     *   source_path: string
+     * }
+     */
+    private function nestedDeclarationAccessContext(string $headerPath, string $ownerClassName, bool $ownerIsStruct): array
+    {
+        $resolved = $this->resolveClassDefinitionSource($headerPath, $ownerClassName);
+        if ($resolved === null) {
+            return ['name_access' => [], 'line_access' => [], 'source_path' => ''];
+        }
+
+        $classBody = is_array($resolved['body'] ?? null) && is_string($resolved['body']['body'] ?? null)
+            ? $resolved['body']['body']
+            : null;
+        if ($classBody === null) {
+            return [
+                'name_access' => [],
+                'line_access' => [],
+                'source_path' => is_string($resolved['path'] ?? null) ? (string) $resolved['path'] : '',
+            ];
+        }
+        $bodyStartLine = is_array($resolved['body'] ?? null) && is_int($resolved['body']['body_start_line'] ?? null)
+            ? (int) $resolved['body']['body_start_line']
+            : 1;
+
+        $defaultAccess = $resolved['body'] !== null && $resolved['body']['kind'] === 'struct'
+            ? 'public'
+            : ($ownerIsStruct ? 'public' : 'private');
+        $segments = $this->topLevelClassSegments($classBody, $defaultAccess);
+        $lineAccess = $this->topLevelClassAccessByLine($classBody, $defaultAccess, $bodyStartLine);
+
+        $accessByName = [];
+        foreach ($segments as $segmentInfo) {
+            $access = is_string($segmentInfo['access'] ?? null) ? $segmentInfo['access'] : 'private';
+            $segment = is_string($segmentInfo['segment'] ?? null) ? $segmentInfo['segment'] : '';
+            if ($segment === '') {
+                continue;
+            }
+
+            foreach ($this->declaredTopLevelNestedClassNames($segment) as $nestedName) {
+                if (!isset($accessByName[$nestedName])) {
+                    $accessByName[$nestedName] = $access;
+                }
+            }
+        }
+
+        return [
+            'name_access' => $accessByName,
+            'line_access' => $lineAccess,
+            'source_path' => is_string($resolved['path'] ?? null) ? (string) $resolved['path'] : '',
+        ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function declaredTopLevelNestedClassNames(string $segment): array
+    {
+        $matchCount = preg_match_all(
+            '/\b(?:class|struct)\s+(?:[A-Za-z_][A-Za-z0-9_]*(?:\s*\([^)]*\))?\s+)*(?<name>[A-Za-z_][A-Za-z0-9_]*)\b(?:\s+final)?(?:\s*:[^{;]+)?\s*(?:\{|;)/s',
+            $segment,
+            $matches,
+        );
+        if (!is_int($matchCount) || $matchCount === 0) {
+            return [];
+        }
+
+        return array_values(array_unique(array_filter(array_map(
+            static fn(mixed $name): string => is_string($name) ? trim($name) : '',
+            $matches['name'] ?? [],
+        ), static fn(string $name): bool => $name !== '')));
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function topLevelClassAccessByLine(string $body, string $defaultAccess, int $bodyStartLine): array
+    {
+        $accessByLine = [];
+        $access = $defaultAccess;
+        $braceDepth = 0;
+        $lineNumber = $bodyStartLine;
+
+        foreach (preg_split("/(\r?\n)/", $body) ?: [] as $line) {
+            if ($braceDepth === 0 && preg_match('/^\s*(public|protected|private)\s*:\s*(.*)$/', $line, $matches) === 1) {
+                $access = $matches[1];
+                $line = (string) ($matches[2] ?? '');
+            }
+
+            if (!isset($accessByLine[$lineNumber])) {
+                $accessByLine[$lineNumber] = $access;
+            }
+
+            $braceDepth += substr_count($line, '{');
+            $braceDepth -= substr_count($line, '}');
+            $lineNumber++;
+        }
+
+        return $accessByLine;
+    }
+
+    private function isPhpReservedIdentifier(string $name): bool
+    {
+        static $reserved = [
+            'abstract' => true,
+            'and' => true,
+            'array' => true,
+            'as' => true,
+            'break' => true,
+            'callable' => true,
+            'case' => true,
+            'catch' => true,
+            'class' => true,
+            'clone' => true,
+            'const' => true,
+            'continue' => true,
+            'declare' => true,
+            'default' => true,
+            'do' => true,
+            'echo' => true,
+            'else' => true,
+            'elseif' => true,
+            'empty' => true,
+            'enddeclare' => true,
+            'endfor' => true,
+            'endforeach' => true,
+            'endif' => true,
+            'endswitch' => true,
+            'endwhile' => true,
+            'enum' => true,
+            'eval' => true,
+            'exit' => true,
+            'extends' => true,
+            'final' => true,
+            'finally' => true,
+            'fn' => true,
+            'for' => true,
+            'foreach' => true,
+            'function' => true,
+            'global' => true,
+            'goto' => true,
+            'if' => true,
+            'implements' => true,
+            'include' => true,
+            'include_once' => true,
+            'instanceof' => true,
+            'insteadof' => true,
+            'interface' => true,
+            'isset' => true,
+            'list' => true,
+            'match' => true,
+            'namespace' => true,
+            'new' => true,
+            'or' => true,
+            'print' => true,
+            'private' => true,
+            'protected' => true,
+            'public' => true,
+            'readonly' => true,
+            'require' => true,
+            'require_once' => true,
+            'return' => true,
+            'static' => true,
+            'switch' => true,
+            'throw' => true,
+            'trait' => true,
+            'try' => true,
+            'unset' => true,
+            'use' => true,
+            'var' => true,
+            'while' => true,
+            'xor' => true,
+            'yield' => true,
+            'bool' => true,
+            'false' => true,
+            'float' => true,
+            'int' => true,
+            'iterable' => true,
+            'mixed' => true,
+            'never' => true,
+            'null' => true,
+            'object' => true,
+            'parent' => true,
+            'self' => true,
+            'string' => true,
+            'true' => true,
+            'void' => true,
+        ];
+
+        return isset($reserved[strtolower($name)]);
     }
 
     private function containsCopyDisablingMacro(string $segment, string $className): bool

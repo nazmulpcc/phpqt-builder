@@ -27,13 +27,13 @@ if ($overload?->isPureVirtual) {
 @endphp
 @if((($overload?->access ?? 'public') === 'protected') && !$method->isStatic && !($overload?->isPureVirtual ?? false))
     if (!intern->native_is_generated_subclass) {
-        zend_throw_error(NULL, "Protected method {!! $ctx->phpClassName !!}::{!! $method->name !!}() requires a PHP-created native instance.");
+        zend_throw_error(NULL, "Protected method {!! addslashes($ctx->phpClassName) !!}::{!! $method->name !!}() requires a PHP-created native instance.");
         RETURN_THROWS();
     }
 
 @endif
 @if($overload?->isPureVirtual)
-    zend_throw_error(NULL, "Pure virtual method {!! $ctx->phpClassName !!}::{!! $method->name !!}() cannot be called directly.");
+    zend_throw_error(NULL, "Pure virtual method {!! addslashes($ctx->phpClassName) !!}::{!! $method->name !!}() cannot be called directly.");
     RETURN_THROWS();
 @else
 @if($method->hasNoParams())

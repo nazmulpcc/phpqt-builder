@@ -12,6 +12,7 @@ use QtBuilder\Definition\PhpMethod;
 use QtBuilder\Definition\PhpParameter;
 use QtBuilder\Parsing\ContainerTypeParser;
 use QtBuilder\Parsing\CppToPhpTypeMapper;
+use QtBuilder\Support\CppName;
 
 class QListSpecializationResolver
 {
@@ -136,7 +137,7 @@ class QListSpecializationResolver
             'bool' => 'Bool',
             'string' => $this->stringElementSuffix($elementCppType),
             'mixed' => trim($elementCppType) === 'QVariant' ? 'QVariant' : 'Value',
-            default => $this->normalizeIdentifier($elementPhpType),
+            default => $this->classLikeElementSuffix($elementCppType, $elementPhpType),
         };
     }
 
@@ -176,7 +177,35 @@ class QListSpecializationResolver
             return trim($specialization->elementCppType) === 'QVariant';
         }
 
-        return in_array($phpType, $availableClasses, true);
+        if (in_array($phpType, $availableClasses, true)) {
+            return true;
+        }
+
+        $normalizedPhpType = ltrim($phpType, '\\');
+        if ($normalizedPhpType !== $phpType && in_array($normalizedPhpType, $availableClasses, true)) {
+            return true;
+        }
+
+        $cppType = $this->normalizeCppType($specialization->elementCppType);
+        if ($cppType !== '' && in_array($cppType, $availableClasses, true)) {
+            return true;
+        }
+
+        $phpBare = $this->phpClassBaseName($phpType);
+        $cppBare = CppName::unqualify($cppType);
+
+        foreach ($availableClasses as $availableClass) {
+            $availableBare = CppName::unqualify(str_replace('\\', '::', ltrim($availableClass, '\\')));
+            if ($availableBare === '') {
+                continue;
+            }
+
+            if (($phpBare !== '' && $availableBare === $phpBare) || ($cppBare !== '' && $availableBare === $cppBare)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function simpleScalarMethod(string $name, string $phpReturnType): PhpMethod
@@ -349,7 +378,44 @@ class QListSpecializationResolver
             return null;
         }
 
+        if (str_contains($base, '::')) {
+            $owner = (string) substr($base, 0, (int) strrpos($base, '::'));
+            $ownerBase = CppName::unqualify($owner);
+            if ($ownerBase !== '') {
+                return sprintf('<%s>', $ownerBase);
+            }
+        }
+
         return sprintf('<%s>', $base);
+    }
+
+    private function classLikeElementSuffix(string $elementCppType, string $elementPhpType): string
+    {
+        $phpBase = $this->phpClassBaseName($elementPhpType);
+        if ($phpBase !== '') {
+            return $this->normalizeIdentifier($phpBase);
+        }
+
+        $cppBase = CppName::unqualify($this->normalizeCppType($elementCppType));
+        if ($cppBase !== '') {
+            return $this->normalizeIdentifier($cppBase);
+        }
+
+        return $this->normalizeIdentifier($elementPhpType);
+    }
+
+    private function phpClassBaseName(string $phpType): string
+    {
+        $normalized = ltrim(trim($phpType), '\\');
+        if ($normalized === '') {
+            return '';
+        }
+
+        if (!str_contains($normalized, '\\')) {
+            return $normalized;
+        }
+
+        return (string) substr($normalized, (int) strrpos($normalized, '\\') + 1);
     }
 
     private function stringElementSuffix(string $elementCppType): string

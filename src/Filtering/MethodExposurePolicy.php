@@ -82,6 +82,7 @@ class MethodExposurePolicy
         $hasPublicDestructor = (bool) ($classData['has_public_destructor'] ?? true);
         $isAbstractClass = (bool) ($classData['is_abstract'] ?? false);
         $resolutionContext = TypeResolutionContext::fromClassData($classData);
+        $this->containerBridge->setTypeResolutionMetadata($classTypeResolver, $resolutionContext, $smartPointerAliases);
 
         foreach ($grouped as $methodName => $variants) {
             $result = $this->selectVariants(

@@ -187,7 +187,7 @@ class ClassContext
     /** @var array<string, string> */
     public readonly array $classNamespaces;
 
-    /** @var array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string}> */
+    /** @var array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string, module?: string, is_qobject_derived?: bool}> */
     public readonly array $classMetadata;
 
     public readonly CppClassTypeResolver $classTypeResolver;
@@ -225,7 +225,7 @@ class ClassContext
         $this->classNamespaces = $classNamespaces;
         $this->classMetadata = $classMetadata;
         $this->smartPointerAliases = $phpClass->smartPointerAliases;
-        $this->typeBridge->setTypeResolutionMetadata($namespace, $classMetadata, $this->smartPointerAliases);
+        $this->typeBridge->setTypeResolutionMetadata($namespace, $classMetadata, $this->smartPointerAliases, $phpClass->name);
         $this->phpClassName = $phpClass->name;
         $this->generationId = $phpClass->resolvedGenerationId();
         $this->nativeCppType = $phpClass->nativeCppType ?? $phpClass->name;
@@ -377,7 +377,7 @@ class ClassContext
 
     /**
      * @param array<string, string> $classNativeTypes
-     * @param array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string}> $classMetadata
+     * @param array<string, array{name: string, namespace: string, generation_id: string, qualified_name: string, module?: string, is_qobject_derived?: bool}> $classMetadata
      */
     private function buildClassTypeResolver(PhpClass $phpClass, array $classNativeTypes, array $classMetadata): CppClassTypeResolver
     {
@@ -390,6 +390,8 @@ class ClassContext
 
                 $className = is_string($metadata['name'] ?? null) ? trim($metadata['name']) : '';
                 $qualifiedName = is_string($metadata['qualified_name'] ?? null) ? trim($metadata['qualified_name']) : '';
+                $metadataNamespace = is_string($metadata['namespace'] ?? null) ? trim($metadata['namespace']) : '';
+                $metadataModule = is_string($metadata['module'] ?? null) ? trim($metadata['module']) : '';
                 if ($className === '' || $qualifiedName === '') {
                     continue;
                 }
@@ -397,7 +399,9 @@ class ClassContext
                 $classUniverse[] = [
                     'name' => $className,
                     'qualified_name' => $qualifiedName,
-                    'module' => TypeResolutionContext::moduleForQualifiedName($qualifiedName),
+                    'module' => $metadataModule !== ''
+                        ? $metadataModule
+                        : ($this->moduleFromPhpNamespace($metadataNamespace) ?? TypeResolutionContext::moduleForQualifiedName($qualifiedName)),
                 ];
             }
 
@@ -508,7 +512,51 @@ class ClassContext
             return array_key_first($uniqueMatches);
         }
 
+        $resolvedQualified = $this->classTypeResolver->resolveQualifiedClassName(
+            $type,
+            TypeResolutionContext::fromNames($this->phpClassName, $this->nativeCppType),
+        );
+        if (is_string($resolvedQualified) && $resolvedQualified !== '') {
+            foreach ($this->classMetadata as $metadata) {
+                if (!is_array($metadata)) {
+                    continue;
+                }
+
+                $qualifiedName = is_string($metadata['qualified_name'] ?? null) ? trim($metadata['qualified_name']) : '';
+                $generationId = is_string($metadata['generation_id'] ?? null) ? $metadata['generation_id'] : '';
+                if ($qualifiedName === '' || $generationId === '') {
+                    continue;
+                }
+
+                if ($qualifiedName === $resolvedQualified) {
+                    return $generationId;
+                }
+            }
+        }
+
         return $this->typeBridge->generationIdForQualifiedName($type);
+    }
+
+    private function moduleFromPhpNamespace(?string $phpNamespace): ?string
+    {
+        if (!is_string($phpNamespace) || $phpNamespace === '') {
+            return null;
+        }
+
+        $parts = array_values(array_filter(
+            explode('\\', ltrim($phpNamespace, '\\')),
+            static fn(string $part): bool => $part !== '',
+        ));
+        if (count($parts) < 2 || $parts[0] !== 'Qt') {
+            return null;
+        }
+
+        $suffix = $parts[1];
+        if ($suffix === '') {
+            return null;
+        }
+
+        return str_starts_with($suffix, 'Qt') ? $suffix : ('Qt' . $suffix);
     }
 
     /**
@@ -627,6 +675,7 @@ class ClassContext
             $includes[] = $typeBridge->minitNameForId($this->resolveGenerationIdForPhpType($className)) . '.h';
         }
 
+        $includes = array_values(array_unique($includes));
         sort($includes);
 
         return $includes;
@@ -636,7 +685,7 @@ class ClassContext
     {
         return $typeMapper->map(
             $cppType,
-            $phpClass->name,
+            '\\' . ltrim($this->phpNamespace . '\\' . $phpClass->name, '\\'),
             $this->classTypeResolver,
             TypeResolutionContext::fromNames($phpClass->name, $phpClass->nativeCppType ?? $phpClass->name),
             $this->smartPointerAliases,
