@@ -44,5 +44,6 @@ static inline qt_qthreadruntime_object *qt_qthreadruntime_from_obj(zend_object *
 PHP_MINIT_FUNCTION(qt_qthreadruntime);
 PHP_QT_API void qt_qthreadruntime_shutdown_all(zend_long timeout_ms);
 PHP_QT_API bool qt_qthreadruntime_is_worker_request_context(void);
+PHP_QT_API void qt_qthreadruntime_phpinfo_rows(void);
 
 #endif /* QT_QTHREADRUNTIME_H */

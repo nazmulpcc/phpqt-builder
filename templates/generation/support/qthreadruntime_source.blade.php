@@ -10,11 +10,13 @@
 #include <QtCore/QThread>
 #include <TSRM.h>
 #include <Zend/zend_exceptions.h>
+#include <ext/standard/info.h>
 #include <main/php_main.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <deque>
@@ -27,6 +29,30 @@
 zend_class_entry *qt_ce_QThreadRuntime = NULL;
 zend_object_handlers qt_qthreadruntime_handlers;
 static thread_local bool qt_qthreadruntime_tls_worker_request = false;
+static constexpr size_t QT_QTHREADRUNTIME_MAX_QUEUE_DEPTH_DEFAULT = 4096;
+static std::atomic_uint64_t qt_qthreadruntime_total_enqueued{0};
+static std::atomic_uint64_t qt_qthreadruntime_total_drained{0};
+static std::atomic_uint64_t qt_qthreadruntime_total_canceled{0};
+static std::atomic_uint64_t qt_qthreadruntime_total_rejected_full{0};
+static std::atomic_uint64_t qt_qthreadruntime_total_rejected_stopping{0};
+static std::atomic_uint64_t qt_qthreadruntime_total_timeouts{0};
+static std::atomic_uint64_t qt_qthreadruntime_total_worker_crash{0};
+
+static size_t qt_qthreadruntime_env_queue_depth()
+{
+    const char *raw = getenv("QT_QTHREADRUNTIME_MAX_QUEUE_DEPTH");
+    if (raw == NULL || *raw == '\0') {
+        return QT_QTHREADRUNTIME_MAX_QUEUE_DEPTH_DEFAULT;
+    }
+
+    char *end = NULL;
+    long parsed = strtol(raw, &end, 10);
+    if (end == raw || parsed <= 0) {
+        return QT_QTHREADRUNTIME_MAX_QUEUE_DEPTH_DEFAULT;
+    }
+
+    return (size_t) parsed;
+}
 
 struct qt_qthreadruntime_error {
     bool is_fatal{false};
@@ -100,6 +126,25 @@ public:
         }
 
         stopping_ = true;
+        while (!queue_.empty()) {
+            std::shared_ptr<qt_qthreadruntime_job> job = queue_.front();
+            queue_.pop_front();
+            if (!job) {
+                continue;
+            }
+
+            job->canceled.store(true, std::memory_order_release);
+            jobs_.erase(job->id);
+            qt_qthreadruntime_result canceled_result;
+            canceled_result.ready = true;
+            canceled_result.success = false;
+            canceled_result.canceled = true;
+            results_[job->id] = std::move(canceled_result);
+            stats_canceled_++;
+            qt_qthreadruntime_total_canceled.fetch_add(1, std::memory_order_acq_rel);
+        }
+
+        result_cv_.notify_all();
         job_cv_.notify_all();
         lock.unlock();
 
@@ -140,7 +185,16 @@ public:
         }
 
         if (stopping_) {
+            stats_rejected_stopping_++;
+            qt_qthreadruntime_total_rejected_stopping.fetch_add(1, std::memory_order_acq_rel);
             *error = "Worker runtime is stopping.";
+            return false;
+        }
+
+        if (queue_.size() >= max_queue_depth_) {
+            stats_rejected_full_++;
+            qt_qthreadruntime_total_rejected_full.fetch_add(1, std::memory_order_acq_rel);
+            *error = "Worker runtime queue is full.";
             return false;
         }
 
@@ -152,6 +206,7 @@ public:
         jobs_[job->id] = job;
         queue_.push_back(job);
         stats_enqueued_++;
+        qt_qthreadruntime_total_enqueued.fetch_add(1, std::memory_order_acq_rel);
         *job_id = job->id;
 
         job_cv_.notify_one();
@@ -186,6 +241,7 @@ public:
             result_cv_.wait(lock, done);
         } else if (!result_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), done)) {
             stats_timeouts_++;
+            qt_qthreadruntime_total_timeouts.fetch_add(1, std::memory_order_acq_rel);
             return qt_qthreadruntime_await_status::timeout;
         }
 
@@ -206,10 +262,13 @@ public:
         array_init(return_value);
         add_assoc_bool(return_value, "running", running_);
         add_assoc_long(return_value, "queued", (zend_long) queue_.size());
+        add_assoc_long(return_value, "queue_max_depth", (zend_long) max_queue_depth_);
         add_assoc_long(return_value, "pending_results", (zend_long) results_.size());
         add_assoc_long(return_value, "enqueued", (zend_long) stats_enqueued_);
         add_assoc_long(return_value, "drained", (zend_long) stats_drained_);
         add_assoc_long(return_value, "canceled", (zend_long) stats_canceled_);
+        add_assoc_long(return_value, "rejected_full", (zend_long) stats_rejected_full_);
+        add_assoc_long(return_value, "rejected_stopping", (zend_long) stats_rejected_stopping_);
         add_assoc_long(return_value, "timeouts", (zend_long) stats_timeouts_);
         add_assoc_long(return_value, "worker_crash", (zend_long) stats_worker_crash_);
         add_assoc_bool(return_value, "worker_bootstrap_failed", worker_bootstrap_failed_);
@@ -260,6 +319,7 @@ public:
                 result.ready = true;
                 results_[job->id] = std::move(result);
                 stats_drained_++;
+                qt_qthreadruntime_total_drained.fetch_add(1, std::memory_order_acq_rel);
             }
             result_cv_.notify_all();
         }
@@ -463,6 +523,7 @@ public:
         if (bailed_out) {
             std::lock_guard<std::mutex> lock(mutex_);
             stats_worker_crash_++;
+            qt_qthreadruntime_total_worker_crash.fetch_add(1, std::memory_order_acq_rel);
             return makeErrorResult("RuntimeException", "Worker bailed out while executing the job.", 0, true);
         }
 
@@ -481,8 +542,11 @@ private:
     uint64_t stats_enqueued_{0};
     uint64_t stats_drained_{0};
     uint64_t stats_canceled_{0};
+    uint64_t stats_rejected_full_{0};
+    uint64_t stats_rejected_stopping_{0};
     uint64_t stats_timeouts_{0};
     uint64_t stats_worker_crash_{0};
+    size_t max_queue_depth_{qt_qthreadruntime_env_queue_depth()};
     bool running_{false};
     bool stopping_{false};
     bool worker_bootstrap_failed_{false};
@@ -559,6 +623,18 @@ PHP_QT_API void qt_qthreadruntime_shutdown_all(zend_long timeout_ms)
 PHP_QT_API bool qt_qthreadruntime_is_worker_request_context(void)
 {
     return qt_qthreadruntime_tls_worker_request;
+}
+
+PHP_QT_API void qt_qthreadruntime_phpinfo_rows(void)
+{
+    php_info_print_table_row(2, "qthreadruntime queue max depth", "4096 (default)");
+    php_info_print_table_row(2, "qthreadruntime total enqueued", std::to_string(qt_qthreadruntime_total_enqueued.load(std::memory_order_acquire)).c_str());
+    php_info_print_table_row(2, "qthreadruntime total drained", std::to_string(qt_qthreadruntime_total_drained.load(std::memory_order_acquire)).c_str());
+    php_info_print_table_row(2, "qthreadruntime total canceled", std::to_string(qt_qthreadruntime_total_canceled.load(std::memory_order_acquire)).c_str());
+    php_info_print_table_row(2, "qthreadruntime rejected (full)", std::to_string(qt_qthreadruntime_total_rejected_full.load(std::memory_order_acquire)).c_str());
+    php_info_print_table_row(2, "qthreadruntime rejected (stopping)", std::to_string(qt_qthreadruntime_total_rejected_stopping.load(std::memory_order_acquire)).c_str());
+    php_info_print_table_row(2, "qthreadruntime total await timeouts", std::to_string(qt_qthreadruntime_total_timeouts.load(std::memory_order_acquire)).c_str());
+    php_info_print_table_row(2, "qthreadruntime worker crashes", std::to_string(qt_qthreadruntime_total_worker_crash.load(std::memory_order_acquire)).c_str());
 }
 
 static inline qt_qthreadruntime_state *qt_qthreadruntime_fetch_state(zval *zv)

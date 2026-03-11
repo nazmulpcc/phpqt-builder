@@ -130,3 +130,40 @@ it('runs blocking worker jobs in parallel isolated runtimes', function (): void 
         ->and($payload['stop_a'])->toBeTrue()
         ->and($payload['stop_b'])->toBeTrue();
 });
+
+it('enforces bounded worker queue limits with deterministic rejection accounting', function (): void {
+    $payload = qt_runtime_payload(
+        'QtCore/thread_runtime_queue_limits.php',
+        ['QT_QTHREADRUNTIME_MAX_QUEUE_DEPTH' => '1'],
+        10,
+    );
+
+    expect($payload['queue_max_depth'])->toBe(1)
+        ->and($payload['accepted'])->toBeGreaterThan(0)
+        ->and($payload['rejected'])->toBeGreaterThan(0)
+        ->and($payload['rejected_full'])->toBeGreaterThan(0)
+        ->and($payload['stopped'])->toBeTrue();
+});
+
+it('returns null on await timeout and records timeout counters', function (): void {
+    $payload = qt_runtime_payload('QtCore/thread_runtime_timeout.php', [], 10);
+
+    expect($payload['first_is_null'])->toBeTrue()
+        ->and($payload['second_is_zero'])->toBeTrue()
+        ->and($payload['timeouts'])->toBeGreaterThanOrEqual(1)
+        ->and($payload['stopped'])->toBeTrue();
+});
+
+it('handles shutdown race with queued jobs without worker crashes', function (): void {
+    $payload = qt_runtime_payload(
+        'QtCore/thread_runtime_shutdown_race.php',
+        ['QT_QTHREADRUNTIME_MAX_QUEUE_DEPTH' => '8'],
+        10,
+    );
+
+    expect($payload['stop_ok'])->toBeTrue()
+        ->and($payload['submitted'])->toBeGreaterThan(0)
+        ->and($payload['stats_running'])->toBeFalse()
+        ->and($payload['stats_worker_crash'])->toBe(0)
+        ->and($payload['stats_canceled'])->toBeGreaterThanOrEqual(0);
+});

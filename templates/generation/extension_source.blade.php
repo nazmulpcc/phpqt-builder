@@ -314,6 +314,9 @@ PHP_MINFO_FUNCTION({!! $ctx->extensionName !!})
     php_info_print_table_row(2, "owner queue dropped (full)", std::to_string(qt_owner_task_dropped_full.load(std::memory_order_acquire)).c_str());
     php_info_print_table_row(2, "owner queue dropped (shutdown)", std::to_string(qt_owner_task_dropped_shutdown.load(std::memory_order_acquire)).c_str());
     php_info_print_table_row(2, "virtual dispatch timeouts", std::to_string(qt_owner_virtual_timeouts.load(std::memory_order_acquire)).c_str());
+@if($ctx->includeThreadRuntimeSupport)
+    qt_qthreadruntime_phpinfo_rows();
+@endif
     php_info_print_table_end();
 }
 
