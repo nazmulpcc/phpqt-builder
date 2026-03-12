@@ -337,7 +337,6 @@ class BuildPipeline
         $generation = $this->resolveGeneratedCandidates(
             $acceptedCandidates,
             $skippedClasses,
-            $allowedClasses,
             $preparedClassDataByClass,
             $output,
             $request->importedAbi,
@@ -753,7 +752,6 @@ class BuildPipeline
     /**
      * @param list<HeaderCandidate> $acceptedCandidates
      * @param list<array<string, string|null>> $initialSkippedClasses
-     * @param list<string> $initialAllowedClasses
      * @param array<string, array<string, mixed>> $preparedClassDataByClass
      * @return array{
      *   accepted_candidates: list<HeaderCandidate>,
@@ -775,7 +773,6 @@ class BuildPipeline
     private function resolveGeneratedCandidates(
         array $acceptedCandidates,
         array $initialSkippedClasses,
-        array $initialAllowedClasses,
         array $preparedClassDataByClass,
         OutputInterface $output,
         ?ImportedModuleAbi $importedAbi = null,
@@ -783,9 +780,6 @@ class BuildPipeline
     ): array {
         $generationService = new ClassGenerationService();
         $currentCandidates = array_values($acceptedCandidates);
-        $currentAllowedClasses = array_values(array_unique($initialAllowedClasses));
-        sort($currentAllowedClasses);
-        $currentAllowedSet = array_fill_keys($currentAllowedClasses, true);
         $importedAvailableClasses = $importedAbi?->availableClasses ?? [];
         $allPreparedClassData = $importedAbi !== null
             ? $importedAbi->mergePreparedClassData($preparedClassDataByClass)
@@ -795,6 +789,9 @@ class BuildPipeline
         foreach ($currentCandidates as $candidate) {
             $candidateMap[$candidate->identityKey()] = $candidate;
         }
+        $currentAllowedSet = array_fill_keys(array_keys($candidateMap), true);
+        $currentAllowedClasses = array_keys($currentAllowedSet);
+        sort($currentAllowedClasses);
 
         /** @var array<string, array<string, string|null>> $skippedByClass */
         $skippedByClass = [];
@@ -1951,7 +1948,12 @@ class BuildPipeline
                 continue;
             }
 
-            $returnType = is_string($method['type'] ?? null) ? trim((string) $method['type']) : '';
+            $returnType = is_string($method['return_type'] ?? null)
+                ? trim((string) $method['return_type'])
+                : '';
+            if ($returnType === '' && is_string($method['type'] ?? null)) {
+                $returnType = trim((string) $method['type']);
+            }
             if ($returnType !== '') {
                 $typeHints[] = $returnType;
             }
