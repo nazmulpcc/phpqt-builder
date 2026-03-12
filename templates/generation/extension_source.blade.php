@@ -365,9 +365,11 @@ PHP_RSHUTDOWN_FUNCTION({!! $ctx->extensionName !!})
 @if($ctx->includeThreadRuntimeSupport)
     if (!qt_qthreadruntime_is_worker_request_context()) {
         qt_qthreadruntime_shutdown_all(2000);
+        qt_runtime_shutdown_qcoreapplication();
     }
-@endif
+@else
     qt_runtime_shutdown_qcoreapplication();
+@endif
     QT_RUNTIME_G(request_active) = false;
 
     return SUCCESS;

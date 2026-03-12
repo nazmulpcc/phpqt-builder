@@ -20,8 +20,14 @@ try {
 }
 
 $unknownClassRejected = false;
+$unknownClassErroredOnAwait = false;
 try {
-    $runtime->submit(['Qt\\Core\\DefinitelyMissingRuntimeClass', 'run'], []);
+    $unknownJobId = $runtime->submit(['Qt\\Core\\DefinitelyMissingRuntimeClass', 'run'], []);
+    try {
+        $runtime->await($unknownJobId, 5000);
+    } catch (\Throwable) {
+        $unknownClassErroredOnAwait = true;
+    }
 } catch (\Throwable) {
     $unknownClassRejected = true;
 }
@@ -40,6 +46,7 @@ qt_runtime_result([
     'array_callable_class' => is_object($result) ? get_class($result) : '',
     'non_static_rejected' => $nonStaticRejected,
     'unknown_class_rejected' => $unknownClassRejected,
+    'unknown_class_errored_on_await' => $unknownClassErroredOnAwait,
     'closure_rejected' => $closureRejected,
     'stopped' => $stopped,
 ]);

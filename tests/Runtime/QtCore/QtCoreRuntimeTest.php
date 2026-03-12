@@ -174,7 +174,8 @@ it('accepts array callable descriptors and rejects closure callables determinist
     expect($payload['array_callable_object'])->toBeTrue()
         ->and($payload['array_callable_class'])->toBe('DateTimeImmutable')
         ->and($payload['non_static_rejected'])->toBeTrue()
-        ->and($payload['unknown_class_rejected'])->toBeTrue()
+        ->and($payload['unknown_class_rejected'])->toBeFalse()
+        ->and($payload['unknown_class_errored_on_await'])->toBeTrue()
         ->and($payload['closure_rejected'])->toBeTrue()
         ->and($payload['stopped'])->toBeTrue();
 });
@@ -186,6 +187,16 @@ it('loads worker bootstrap script into isolated runtime context', function (): v
         ->and($payload['worker_bootstrap_failed'])->toBeFalse()
         ->and($payload['stopped'])->toBeTrue()
         ->and($payload['main_has_function'])->toBeFalse();
+});
+
+it('executes bootstrap-defined array callables inside worker runtime', function (): void {
+    $payload = qt_runtime_payload('QtCore/thread_runtime_bootstrap_array_callable.php', [], 10);
+
+    expect($payload['result'])->toBe(42)
+        ->and($payload['await_errored'])->toBeFalse()
+        ->and($payload['worker_bootstrap_failed'])->toBeFalse()
+        ->and($payload['stopped'])->toBeTrue()
+        ->and($payload['main_has_class'])->toBeFalse();
 });
 
 it('rejects unsupported cross-runtime payload values deterministically', function (): void {

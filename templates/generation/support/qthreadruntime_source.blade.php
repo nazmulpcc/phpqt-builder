@@ -811,30 +811,17 @@ static bool qt_qthreadruntime_validate_callable(zval *callable, std::string *err
         return false;
     }
 
-    zend_string *class_name = Z_STR_P(first);
-    zend_class_entry *ce = zend_lookup_class_ex(class_name, NULL, ZEND_FETCH_CLASS_NO_AUTOLOAD);
-    if (ce == NULL) {
-        if (error != NULL) {
-            *error = "class-string callable requires a loaded class in owner runtime";
+    zend_class_entry *ce = zend_lookup_class_ex(Z_STR_P(first), NULL, ZEND_FETCH_CLASS_NO_AUTOLOAD);
+    if (ce != NULL) {
+        zend_string *lc_method = zend_string_tolower(Z_STR_P(second));
+        zend_function *fn = (zend_function *) zend_hash_find_ptr(&ce->function_table, lc_method);
+        zend_string_release(lc_method);
+        if (fn != NULL && (fn->common.fn_flags & ZEND_ACC_STATIC) == 0) {
+            if (error != NULL) {
+                *error = "array callable must reference a static method";
+            }
+            return false;
         }
-        return false;
-    }
-
-    zend_string *lc_method = zend_string_tolower(Z_STR_P(second));
-    zend_function *fn = (zend_function *) zend_hash_find_ptr(&ce->function_table, lc_method);
-    zend_string_release(lc_method);
-    if (fn == NULL) {
-        if (error != NULL) {
-            *error = "array callable method was not found on target class";
-        }
-        return false;
-    }
-
-    if ((fn->common.fn_flags & ZEND_ACC_STATIC) == 0) {
-        if (error != NULL) {
-            *error = "array callable must reference a static method";
-        }
-        return false;
     }
 
     return true;
