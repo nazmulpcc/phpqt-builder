@@ -167,7 +167,46 @@ class QtClassInspector
     {
         $this->parse($headerPath);
 
-        $classCursor = $this->findClass($className, $headerPath);
+        return $this->inspectParsedWithReferencedNestedClasses($className, $headerPath);
+    }
+
+    /**
+     * Inspect class facts from an already parsed translation unit.
+     *
+     * @return array{
+     *   class_data: array{
+     *     name: string,
+     *     qualified_name: string,
+     *     is_abstract: bool,
+     *     is_struct: bool,
+     *     bases: list<string>,
+     *     base_specifiers?: list<array{type: string, access: string, is_virtual: bool}>,
+     *     properties: list<array<string, mixed>>,
+     *     methods: list<array<string, mixed>>,
+     *     enum_constants: list<array<string, mixed>>,
+     *     enum_names?: list<string>,
+     *     flag_aliases?: array<string, string>
+     *   },
+     *   referenced_nested_class_data: list<array{
+     *     name: string,
+     *     qualified_name: string,
+     *     declaration_file?: string,
+     *     declaration_line?: int,
+     *     is_abstract: bool,
+     *     is_struct: bool,
+     *     bases: list<string>,
+     *     base_specifiers?: list<array{type: string, access: string, is_virtual: bool}>,
+     *     properties: list<array<string, mixed>>,
+     *     methods: list<array<string, mixed>>,
+     *     enum_constants: list<array<string, mixed>>,
+     *     enum_names?: list<string>,
+     *     flag_aliases?: array<string, string>
+     *   }>
+     * }|null
+     */
+    public function inspectParsedWithReferencedNestedClasses(string $className, ?string $preferredHeaderPath = null): ?array
+    {
+        $classCursor = $this->findClass($className, $preferredHeaderPath);
         if ($classCursor === null) {
             return null;
         }

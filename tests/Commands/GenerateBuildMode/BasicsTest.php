@@ -78,3 +78,47 @@ it('can load allowed classes from a json file', function (): void {
         ->and($result->payload['status'])->toBe('ok')
         ->and(is_file($result->path('QTree', 'cpp')))->toBeTrue();
 });
+
+it('returns multiple class facts from a single facts-batch worker payload', function (): void {
+    $fixtureDir = qt_temp_dir('qtbuilder-facts-batch-');
+    $headerPath = $fixtureDir . '/qbatchfacts.h';
+    $batchFile = $fixtureDir . '/facts_batch.json';
+
+    file_put_contents($headerPath, <<<'CPP'
+class QBatchFirst
+{
+public:
+    int value() const;
+};
+
+class QBatchSecond
+{
+public:
+    int value() const;
+};
+
+inline int QBatchFirst::value() const { return 1; }
+inline int QBatchSecond::value() const { return 2; }
+CPP);
+
+    file_put_contents($batchFile, json_encode([
+        ['class' => 'QBatchFirst', 'task_key' => 'task-first'],
+        ['class' => 'QBatchSecond', 'task_key' => 'task-second'],
+    ], JSON_THROW_ON_ERROR));
+
+    $result = GenerateBuildModeRunner::run('qt', [
+        'header' => $headerPath,
+        'class' => 'QBatchFirst',
+        '--module' => 'QtCore',
+        '--worker-mode' => 'facts-batch',
+        '--class-batch-file' => $batchFile,
+        '--include' => [$fixtureDir],
+    ], 'qtbuilder-facts-batch-');
+
+    expect($result->exitCode)->toBe(Command::SUCCESS)
+        ->and($result->payload['status'] ?? null)->toBe('ok')
+        ->and(is_array($result->payload['results'] ?? null))->toBeTrue()
+        ->and(array_column($result->payload['results'], 'class'))->toBe(['QBatchFirst', 'QBatchSecond'])
+        ->and(array_column($result->payload['results'], 'task_key'))->toBe(['task-first', 'task-second'])
+        ->and(array_column($result->payload['results'], 'status'))->toBe(['ok', 'ok']);
+});

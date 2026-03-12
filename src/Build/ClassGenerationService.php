@@ -617,6 +617,63 @@ class ClassGenerationService
 
         $inspector = new QtClassInspector(new ClangArgumentBuilder($includePaths));
         $inspection = $inspector->inspectWithReferencedNestedClasses($headerPath, $className);
+
+        return $this->prepareDiscoveryFactsFromInspection($headerPath, $className, $inspection);
+    }
+
+    /**
+     * @param list<string> $classNames
+     * @param list<string> $includePaths
+     * @return list<array<string, mixed>>
+     */
+    public function prepareDiscoveryFactsBatch(string $headerPath, array $classNames, array $includePaths): array
+    {
+        $results = [];
+        $pendingClassNames = [];
+        foreach ($classNames as $className) {
+            $className = trim((string) $className);
+            if ($className === '') {
+                continue;
+            }
+
+            if ($this->isTemplateClassDeclaration($headerPath, $className)) {
+                $results[] = [
+                    'status' => 'skipped',
+                    'class' => $className,
+                    'header' => $headerPath,
+                    'reason_code' => 'template_class',
+                    'reason_message' => 'Template classes are skipped in the current build mode.',
+                ];
+                continue;
+            }
+
+            $pendingClassNames[] = $className;
+        }
+
+        if ($pendingClassNames === []) {
+            return $results;
+        }
+
+        $inspector = new QtClassInspector(new ClangArgumentBuilder($includePaths));
+        $inspector->parse($headerPath);
+
+        foreach ($pendingClassNames as $className) {
+            $inspection = $inspector->inspectParsedWithReferencedNestedClasses($className, $headerPath);
+            $results[] = $this->prepareDiscoveryFactsFromInspection($headerPath, $className, $inspection);
+        }
+
+        return $results;
+    }
+
+    /**
+     * @param array{
+     *   class_data?: array<string, mixed>,
+     *   referenced_nested_class_data?: list<array<string, mixed>>
+     * }|null $inspection
+     * @return array<string, mixed>
+     */
+    private function prepareDiscoveryFactsFromInspection(string $headerPath, string $className, ?array $inspection): array
+    {
         if ($inspection === null) {
             return [
                 'status' => 'skipped',

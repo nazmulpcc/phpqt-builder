@@ -293,6 +293,44 @@ CPP);
         ->and($classData['flag_aliases'] ?? null)->toBe(['Modes' => 'Mode']);
 });
 
+it('prepares discovery facts in batch mode for multiple classes from a single header', function (): void {
+    $fixtureDir = qt_temp_dir('qtbuilder-batch-facts-');
+    $headerPath = $fixtureDir . '/qbatchfacts.h';
+
+    file_put_contents($headerPath, <<<'CPP'
+class QBatchFirst
+{
+public:
+    int value() const;
+};
+
+class QBatchSecond
+{
+public:
+    int value() const;
+};
+
+inline int QBatchFirst::value() const { return 1; }
+inline int QBatchSecond::value() const { return 2; }
+CPP);
+
+    $service = new ClassGenerationService();
+    $facts = $service->prepareDiscoveryFactsBatch(
+        $headerPath,
+        ['QBatchFirst', 'QMissing', 'QBatchSecond'],
+        [$fixtureDir],
+    );
+
+    expect(count($facts))->toBe(3)
+        ->and($facts[0]['status'] ?? null)->toBe('ok')
+        ->and($facts[0]['class'] ?? null)->toBe('QBatchFirst')
+        ->and($facts[1]['status'] ?? null)->toBe('skipped')
+        ->and($facts[1]['class'] ?? null)->toBe('QMissing')
+        ->and($facts[1]['reason_code'] ?? null)->toBe('class_not_found')
+        ->and($facts[2]['status'] ?? null)->toBe('ok')
+        ->and($facts[2]['class'] ?? null)->toBe('QBatchSecond');
+});
+
 it('extracts only referenced nested class facts from the owner parse payload', function (): void {
     $fixtureDir = qt_temp_dir('qtbuilder-nested-facts-');
     $headerPath = $fixtureDir . '/qnestedowner.h';

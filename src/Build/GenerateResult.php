@@ -61,9 +61,15 @@ readonly class GenerateResult
         );
     }
 
-    public static function error(string $className, string $headerPath, string $reasonMessage, string $stderr = ''): self
+    public static function error(
+        string $className,
+        string $headerPath,
+        string $reasonMessage,
+        string $stderr = '',
+        ?string $candidateKey = null,
+    ): self
     {
-        return new self('error', $className, $headerPath, null, null, null, [], [], [], [], [], 'worker_error', $reasonMessage, $stderr);
+        return new self('error', $className, $headerPath, $candidateKey, null, null, [], [], [], [], [], 'worker_error', $reasonMessage, $stderr);
     }
 
     public function isOk(): bool

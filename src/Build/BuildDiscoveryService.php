@@ -665,8 +665,9 @@ class BuildDiscoveryService
             $progressBar = $this->createProgressBar($output, count($cacheMisses), 'qt_class_cache', 'Class cache');
             $progressBar?->start();
 
+            $factsBatch = $this->buildFactsBatchTasks($cacheMisses, $outputDir, $includePaths, $extensionName, $metadataDir);
             $results = $this->workerPool->run(
-                $this->buildFactsTasks($cacheMisses, $outputDir, $includePaths, $extensionName),
+                $factsBatch['tasks'],
                 $jobs,
                 static function (int $completed, int $total, GenerateResult $result) use ($progressBar): void {
                     if ($progressBar === null) {
@@ -675,6 +676,7 @@ class BuildDiscoveryService
 
                     $progressBar->setProgress($completed);
                 },
+                $factsBatch['class_total'],
             );
 
             if ($progressBar !== null) {
@@ -682,6 +684,7 @@ class BuildDiscoveryService
                 $output->write(PHP_EOL);
             }
 
+            $processedMisses = [];
             foreach ($results as $result) {
                 $candidate = $result->candidateKey !== null
                     ? ($cacheMissesByClass[$result->candidateKey] ?? null)
@@ -697,6 +700,7 @@ class BuildDiscoveryService
                 if ($candidate === null) {
                     continue;
                 }
+                $processedMisses[$candidate->identityKey()] = true;
 
                 if ($result->status === 'error') {
                     $errorsByClass[$result->className] = [
@@ -729,6 +733,20 @@ class BuildDiscoveryService
                     $skippedByClass,
                     $errorsByClass,
                 );
+            }
+
+            foreach ($cacheMissesByClass as $identityKey => $candidate) {
+                if (isset($processedMisses[$identityKey])) {
+                    continue;
+                }
+
+                $errorsByClass[$identityKey] = [
+                    'module' => $candidate->module,
+                    'class' => $candidate->className,
+                    'header' => $candidate->parseHeader,
+                    'reason_code' => 'worker_result_missing',
+                    'reason_message' => 'Class facts worker did not return a result for this candidate.',
+                ];
             }
         }
 
@@ -922,32 +940,63 @@ class BuildDiscoveryService
     /**
      * @param list<HeaderCandidate> $candidates
      * @param list<string> $includePaths
-     * @return list<GenerateTask>
+     * @return array{tasks: list<GenerateTask>, class_total: int}
      */
-    private function buildFactsTasks(
+    private function buildFactsBatchTasks(
         array $candidates,
         string $outputDir,
         array $includePaths,
         string $extensionName,
+        string $metadataDir,
     ): array {
-        $tasks = [];
+        $batchDir = $metadataDir . '/facts-batches';
+        $this->ensureDirectory($batchDir);
 
+        /** @var array<string, list<HeaderCandidate>> $groups */
+        $groups = [];
         foreach ($candidates as $candidate) {
+            $groupKey = $candidate->module . "\0" . $candidate->parseHeader;
+            $groups[$groupKey] ??= [];
+            $groups[$groupKey][] = $candidate;
+        }
+
+        $tasks = [];
+        foreach ($groups as $groupKey => $groupCandidates) {
+            $firstCandidate = $groupCandidates[0] ?? null;
+            if (!$firstCandidate instanceof HeaderCandidate) {
+                continue;
+            }
+
+            $batchEntries = array_map(
+                static fn(HeaderCandidate $candidate): array => [
+                    'class' => $candidate->className,
+                    'task_key' => $candidate->identityKey(),
+                ],
+                $groupCandidates,
+            );
+            $batchHash = sha1($groupKey . ':' . json_encode($batchEntries, JSON_UNESCAPED_SLASHES));
+            $batchFile = $batchDir . '/' . $batchHash . '.json';
+            $this->writeJsonFile($batchFile, $batchEntries, '[]');
+
             $tasks[] = new GenerateTask(
-                headerPath: $candidate->parseHeader,
-                className: $candidate->className,
-                module: $candidate->module,
-                namespace: $this->namespaceForModule($candidate->module),
+                headerPath: $firstCandidate->parseHeader,
+                className: $firstCandidate->className,
+                module: $firstCandidate->module,
+                namespace: $this->namespaceForModule($firstCandidate->module),
                 outputDir: $outputDir,
                 extensionName: $extensionName,
                 qtPath: null,
-                candidateKey: $candidate->identityKey(),
+                candidateKey: null,
                 includePaths: $includePaths,
-                workerMode: 'facts',
+                classBatchFile: $batchFile,
+                workerMode: 'facts-batch',
             );
         }
 
-        return $tasks;
+        return [
+            'tasks' => $tasks,
+            'class_total' => count($candidates),
+        ];
     }
 
     private function namespaceForModule(string $module): string

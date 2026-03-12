@@ -49,6 +49,7 @@ class GenerateCommand extends Command
             ->addOption('known-classes-file', null, InputOption::VALUE_REQUIRED, 'Path to a JSON file containing known class names for enum worker mode')
             ->addOption('class-namespaces-file', null, InputOption::VALUE_REQUIRED, 'Path to a JSON file containing class-to-namespace mappings')
             ->addOption('class-headers-file', null, InputOption::VALUE_REQUIRED, 'Path to a JSON file containing class-to-header mappings')
+            ->addOption('class-batch-file', null, InputOption::VALUE_REQUIRED, 'Path to a JSON file containing batch class/task-key entries for facts worker mode')
             ->addOption('task-key', null, InputOption::VALUE_REQUIRED, 'Internal worker correlation key')
             ->addOption('worker-mode', null, InputOption::VALUE_REQUIRED, 'Internal worker mode for build pipelines', 'generate')
             ->addOption('build-mode', null, InputOption::VALUE_NONE, 'Emit machine-readable JSON and apply conservative filtering');
@@ -150,7 +151,7 @@ class GenerateCommand extends Command
         }
 
         $workerMode = (string) $input->getOption('worker-mode');
-        if (!in_array($workerMode, ['generate', 'probe', 'facts', 'enum-facts'], true)) {
+        if (!in_array($workerMode, ['generate', 'probe', 'facts', 'facts-batch', 'enum-facts'], true)) {
             return $this->renderFailure(
                 $output,
                 true,
@@ -196,6 +197,46 @@ class GenerateCommand extends Command
                 $payload['task_key'] = $taskKey;
             }
             $output->writeln($this->encodeJson($payload));
+
+            return self::SUCCESS;
+        }
+
+        if ($workerMode === 'facts-batch') {
+            try {
+                $batchEntries = $this->resolveClassBatchEntries($input, $className, $taskKey);
+            } catch (\RuntimeException $e) {
+                return $this->renderFailure(
+                    $output,
+                    true,
+                    $className,
+                    $headerPath,
+                    'class_batch_load_failed',
+                    $e->getMessage(),
+                );
+            }
+
+            $batchClassNames = array_values(array_map(
+                static fn(array $entry): string => $entry['class'],
+                $batchEntries,
+            ));
+            $batchFacts = $service->prepareDiscoveryFactsBatch($headerPath, $batchClassNames, $includePaths);
+            $batchResults = [];
+            foreach ($batchFacts as $index => $payload) {
+                if (!is_array($payload)) {
+                    continue;
+                }
+                $entry = $batchEntries[$index] ?? null;
+                if (is_array($entry) && is_string($entry['task_key'] ?? null) && $entry['task_key'] !== '') {
+                    $payload['task_key'] = $entry['task_key'];
+                }
+                $batchResults[] = $payload;
+            }
+
+            $output->writeln($this->encodeJson([
+                'status' => 'ok',
+                'header' => $headerPath,
+                'results' => $batchResults,
+            ]));
 
             return self::SUCCESS;
         }
@@ -432,6 +473,53 @@ class GenerateCommand extends Command
             array_map(static fn(mixed $value): string => is_string($value) ? trim($value) : '', $decoded),
             static fn(string $value): bool => $value !== '',
         ));
+    }
+
+    /**
+     * @return list<array{class: string, task_key: string|null}>
+     */
+    private function resolveClassBatchEntries(InputInterface $input, string $defaultClassName, ?string $defaultTaskKey): array
+    {
+        $classBatchFile = $input->getOption('class-batch-file');
+        if (!is_string($classBatchFile) || trim($classBatchFile) === '') {
+            return [[
+                'class' => $defaultClassName,
+                'task_key' => $defaultTaskKey,
+            ]];
+        }
+
+        if (!is_file($classBatchFile)) {
+            throw new \RuntimeException(sprintf('Class batch file not found: %s', $classBatchFile));
+        }
+
+        $decoded = json_decode((string) file_get_contents($classBatchFile), true);
+        if (!is_array($decoded)) {
+            throw new \RuntimeException(sprintf('Class batch file is not valid JSON: %s', $classBatchFile));
+        }
+
+        $entries = [];
+        foreach ($decoded as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $className = is_string($entry['class'] ?? null) ? trim((string) $entry['class']) : '';
+            if ($className === '') {
+                continue;
+            }
+
+            $taskKey = is_string($entry['task_key'] ?? null) ? trim((string) $entry['task_key']) : null;
+            $entries[] = [
+                'class' => $className,
+                'task_key' => $taskKey !== '' ? $taskKey : null,
+            ];
+        }
+
+        if ($entries === []) {
+            throw new \RuntimeException(sprintf('Class batch file is empty: %s', $classBatchFile));
+        }
+
+        return $entries;
     }
 
     /**

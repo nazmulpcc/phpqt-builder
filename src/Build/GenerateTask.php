@@ -21,6 +21,7 @@ readonly class GenerateTask
         public ?string $candidateKey = null,
         public array $includePaths = [],
         public ?string $allowedClassesFile = null,
+        public ?string $classBatchFile = null,
         public ?string $classNamespacesFile = null,
         public ?string $classHeadersFile = null,
         public array $allowedClasses = [],
