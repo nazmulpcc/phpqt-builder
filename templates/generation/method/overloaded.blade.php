@@ -45,6 +45,14 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
         RETURN_THROWS();
     }
 
+#if !defined(ZTS)
+    zend_throw_exception_ex(
+        zend_ce_runtime_exception,
+        0,
+        "Qt\\Core\\QThread::start() task mode requires a ZTS PHP build (thread start/management APIs are unavailable on NTS)."
+    );
+    RETURN_THROWS();
+#else
     if (!intern->native_is_generated_subclass || intern->native_is_virtual_trampoline) {
         zend_throw_error(NULL, "QThread task mode requires a non-overridden generated QThread instance.");
         RETURN_THROWS();
@@ -106,6 +114,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
         zend_throw_error(NULL, "%s", _qt_start_error.c_str());
         RETURN_THROWS();
     }
+#endif
 
     return;
 @else

@@ -78,6 +78,16 @@ static zend_always_inline zend_class_entry *qt_qthreadruntime_default_exception_
 #endif
 }
 
+static zend_always_inline void qt_qthreadruntime_throw_nts_runtime_exception(const char *method_name)
+{
+    zend_throw_exception_ex(
+        zend_ce_runtime_exception,
+        0,
+        "%s requires a ZTS PHP build (thread start/management APIs are unavailable on NTS).",
+        method_name
+    );
+}
+
 static size_t qt_qthreadruntime_env_queue_depth()
 {
     const char *raw = getenv("QT_QTHREADRUNTIME_MAX_QUEUE_DEPTH");
@@ -3633,7 +3643,7 @@ PHP_METHOD(QThreadRuntime, start)
     ZEND_PARSE_PARAMETERS_NONE();
 
 #if !defined(ZTS)
-    zend_throw_error(NULL, "Qt\\Core\\QThreadRuntime requires a ZTS PHP build.");
+    qt_qthreadruntime_throw_nts_runtime_exception("Qt\\Core\\QThreadRuntime::start()");
     RETURN_THROWS();
 #else
     qt_qthreadruntime_state *state = qt_qthreadruntime_fetch_state(ZEND_THIS);
@@ -3658,7 +3668,7 @@ PHP_METHOD(QThreadRuntime, setBootstrapScript)
     ZEND_PARSE_PARAMETERS_END();
 
 #if !defined(ZTS)
-    zend_throw_error(NULL, "Qt\\Core\\QThreadRuntime requires a ZTS PHP build.");
+    qt_qthreadruntime_throw_nts_runtime_exception("Qt\\Core\\QThreadRuntime::setBootstrapScript()");
     RETURN_THROWS();
 #else
     qt_qthreadruntime_state *state = qt_qthreadruntime_fetch_state(ZEND_THIS);
@@ -3688,7 +3698,7 @@ PHP_METHOD(QThreadRuntime, submit)
     ZEND_PARSE_PARAMETERS_END();
 
 #if !defined(ZTS)
-    zend_throw_error(NULL, "Qt\\Core\\QThreadRuntime requires a ZTS PHP build.");
+    qt_qthreadruntime_throw_nts_runtime_exception("Qt\\Core\\QThreadRuntime::submit()");
     RETURN_THROWS();
 #else
     qt_qthreadruntime_state *state = qt_qthreadruntime_fetch_state(ZEND_THIS);
@@ -3768,7 +3778,7 @@ PHP_METHOD(QThreadRuntime, on)
     ZEND_PARSE_PARAMETERS_END();
 
 #if !defined(ZTS)
-    zend_throw_error(NULL, "Qt\\Core\\QThreadRuntime requires a ZTS PHP build.");
+    qt_qthreadruntime_throw_nts_runtime_exception("Qt\\Core\\QThreadRuntime::on()");
     RETURN_THROWS();
 #else
     if (!qt_qthreadruntime_event_name_valid(event_name)) {
@@ -3802,7 +3812,8 @@ PHP_METHOD(QThreadRuntime, off)
     ZEND_PARSE_PARAMETERS_END();
 
 #if !defined(ZTS)
-    RETURN_FALSE;
+    qt_qthreadruntime_throw_nts_runtime_exception("Qt\\Core\\QThreadRuntime::off()");
+    RETURN_THROWS();
 #else
     qt_qthreadruntime_state *state = qt_qthreadruntime_fetch_state(ZEND_THIS);
     if (state == NULL) {
@@ -3822,7 +3833,8 @@ PHP_METHOD(QThreadRuntime, drainEvents)
     ZEND_PARSE_PARAMETERS_END();
 
 #if !defined(ZTS)
-    RETURN_LONG(0);
+    qt_qthreadruntime_throw_nts_runtime_exception("Qt\\Core\\QThreadRuntime::drainEvents()");
+    RETURN_THROWS();
 #else
     qt_qthreadruntime_state *state = qt_qthreadruntime_fetch_state(ZEND_THIS);
     if (state == NULL) {
@@ -3847,7 +3859,8 @@ PHP_METHOD(QThreadRuntime, send)
     ZEND_PARSE_PARAMETERS_END();
 
 #if !defined(ZTS)
-    RETURN_FALSE;
+    qt_qthreadruntime_throw_nts_runtime_exception("Qt\\Core\\QThreadRuntime::send()");
+    RETURN_THROWS();
 #else
     if (!qt_qthreadruntime_event_name_valid(event_name)) {
         zend_argument_value_error(2, "must be a non-empty event name");
@@ -3893,7 +3906,7 @@ PHP_METHOD(QThreadRuntime, publish)
     ZEND_PARSE_PARAMETERS_END();
 
 #if !defined(ZTS)
-    zend_throw_error(NULL, "Qt\\Core\\QThreadRuntime requires a ZTS PHP build.");
+    qt_qthreadruntime_throw_nts_runtime_exception("Qt\\Core\\QThreadRuntime::publish()");
     RETURN_THROWS();
 #else
     std::string error;
@@ -3917,7 +3930,8 @@ PHP_METHOD(QThreadRuntime, receive)
     ZEND_PARSE_PARAMETERS_END();
 
 #if !defined(ZTS)
-    RETURN_NULL();
+    qt_qthreadruntime_throw_nts_runtime_exception("Qt\\Core\\QThreadRuntime::receive()");
+    RETURN_THROWS();
 #else
     bool has_message = false;
     std::string error;
@@ -3946,7 +3960,7 @@ PHP_METHOD(QThreadRuntime, await)
     ZEND_PARSE_PARAMETERS_END();
 
 #if !defined(ZTS)
-    zend_throw_error(NULL, "Qt\\Core\\QThreadRuntime requires a ZTS PHP build.");
+    qt_qthreadruntime_throw_nts_runtime_exception("Qt\\Core\\QThreadRuntime::await()");
     RETURN_THROWS();
 #else
     qt_qthreadruntime_state *state = qt_qthreadruntime_fetch_state(ZEND_THIS);
@@ -4005,7 +4019,8 @@ PHP_METHOD(QThreadRuntime, cancel)
     ZEND_PARSE_PARAMETERS_END();
 
 #if !defined(ZTS)
-    RETURN_FALSE;
+    qt_qthreadruntime_throw_nts_runtime_exception("Qt\\Core\\QThreadRuntime::cancel()");
+    RETURN_THROWS();
 #else
     qt_qthreadruntime_state *state = qt_qthreadruntime_fetch_state(ZEND_THIS);
     if (state == NULL) {
@@ -4025,7 +4040,8 @@ PHP_METHOD(QThreadRuntime, stop)
     ZEND_PARSE_PARAMETERS_END();
 
 #if !defined(ZTS)
-    RETURN_FALSE;
+    qt_qthreadruntime_throw_nts_runtime_exception("Qt\\Core\\QThreadRuntime::stop()");
+    RETURN_THROWS();
 #else
     qt_qthreadruntime_state *state = qt_qthreadruntime_fetch_state(ZEND_THIS);
     if (state == NULL) {

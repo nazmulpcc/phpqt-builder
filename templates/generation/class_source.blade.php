@@ -1894,6 +1894,14 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, on)
         Z_PARAM_ZVAL(listener)
     ZEND_PARSE_PARAMETERS_END();
 
+#if !defined(ZTS)
+    zend_throw_exception_ex(
+        zend_ce_runtime_exception,
+        0,
+        "Qt\\Core\\QThread::on() requires a ZTS PHP build (thread start/management APIs are unavailable on NTS)."
+    );
+    RETURN_THROWS();
+#else
     if (ZSTR_LEN(event_name) == 0) {
         zend_argument_value_error(1, "must be a non-empty event name");
         RETURN_THROWS();
@@ -1919,6 +1927,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, on)
     }
 
     RETURN_LONG((zend_long) listener_id);
+#endif
 }
 
 /* off */
@@ -1929,6 +1938,14 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, off)
         Z_PARAM_LONG(listener_id)
     ZEND_PARSE_PARAMETERS_END();
 
+#if !defined(ZTS)
+    zend_throw_exception_ex(
+        zend_ce_runtime_exception,
+        0,
+        "Qt\\Core\\QThread::off() requires a ZTS PHP build (thread start/management APIs are unavailable on NTS)."
+    );
+    RETURN_THROWS();
+#else
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
     if (intern->extra_storage == NULL) {
         RETURN_FALSE;
@@ -1938,6 +1955,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, off)
         static_cast<qt_qthread_task_host *>(intern->extra_storage),
         (uint64_t) listener_id
     ));
+#endif
 }
 
 /* drainEvents */
@@ -1949,6 +1967,14 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, drainEvents)
         Z_PARAM_LONG(max_items)
     ZEND_PARSE_PARAMETERS_END();
 
+#if !defined(ZTS)
+    zend_throw_exception_ex(
+        zend_ce_runtime_exception,
+        0,
+        "Qt\\Core\\QThread::drainEvents() requires a ZTS PHP build (thread start/management APIs are unavailable on NTS)."
+    );
+    RETURN_THROWS();
+#else
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
     if (intern->extra_storage == NULL) {
         RETURN_LONG(0);
@@ -1958,6 +1984,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, drainEvents)
         static_cast<qt_qthread_task_host *>(intern->extra_storage),
         max_items
     ));
+#endif
 }
 
 /* send */
@@ -1972,6 +1999,14 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, send)
         Z_PARAM_ARRAY(payload)
     ZEND_PARSE_PARAMETERS_END();
 
+#if !defined(ZTS)
+    zend_throw_exception_ex(
+        zend_ce_runtime_exception,
+        0,
+        "Qt\\Core\\QThread::send() requires a ZTS PHP build (thread start/management APIs are unavailable on NTS)."
+    );
+    RETURN_THROWS();
+#else
     if (ZSTR_LEN(event_name) == 0) {
         zend_argument_value_error(1, "must be a non-empty event name");
         RETURN_THROWS();
@@ -2004,6 +2039,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, send)
     }
 
     RETURN_BOOL(ok);
+#endif
 }
 
 /* startFuture */
@@ -2012,7 +2048,11 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, startFuture)
     qt_runtime_owner_safe_point();
 
 #if !defined(ZTS)
-    zend_throw_error(NULL, "QThread::startFuture() requires a ZTS PHP build.");
+    zend_throw_exception_ex(
+        zend_ce_runtime_exception,
+        0,
+        "Qt\\Core\\QThread::startFuture() requires a ZTS PHP build (thread start/management APIs are unavailable on NTS)."
+    );
     RETURN_THROWS();
 #else
     zend_string *callable = NULL;
@@ -2112,6 +2152,14 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, publish)
         Z_PARAM_ARRAY(payload)
     ZEND_PARSE_PARAMETERS_END();
 
+#if !defined(ZTS)
+    zend_throw_exception_ex(
+        zend_ce_runtime_exception,
+        0,
+        "Qt\\Core\\QThread::publish() requires a ZTS PHP build (thread start/management APIs are unavailable on NTS)."
+    );
+    RETURN_THROWS();
+#else
     std::string error;
     if (!qt_qthreadruntime_worker_publish_zval(event_name, payload, &error)) {
         if (!error.empty()) {
@@ -2122,6 +2170,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, publish)
     }
 
     RETURN_TRUE;
+#endif
 }
 
 /* receive */
@@ -2133,6 +2182,14 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, receive)
         Z_PARAM_LONG(timeout_ms)
     ZEND_PARSE_PARAMETERS_END();
 
+#if !defined(ZTS)
+    zend_throw_exception_ex(
+        zend_ce_runtime_exception,
+        0,
+        "Qt\\Core\\QThread::receive() requires a ZTS PHP build (thread start/management APIs are unavailable on NTS)."
+    );
+    RETURN_THROWS();
+#else
     bool has_message = false;
     std::string error;
     if (!qt_qthreadruntime_worker_receive_zval(timeout_ms, return_value, &has_message, &error)) {
@@ -2146,6 +2203,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, receive)
     if (!has_message) {
         RETURN_NULL();
     }
+#endif
 }
 
 @endif
