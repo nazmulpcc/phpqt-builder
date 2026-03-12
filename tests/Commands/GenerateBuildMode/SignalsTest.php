@@ -58,6 +58,12 @@ it('generates signal apis and retains protected slots', function (): void {
         Assert::assertStringContainsString('qt_should_delete_native', $cpp);
         Assert::assertStringContainsString('if (qt_should_delete_native(intern->native_ptr, intern->prevent_destroy)) {', $cpp);
         Assert::assertStringContainsString('if (qt_runtime_is_shutdown_in_progress()) {', $cpp);
+        Assert::assertStringContainsString('if (!qt_runtime_can_call_zend()) {', $cpp);
+        Assert::assertStringContainsString('if (qt_runtime_can_call_zend()) {', $cpp);
+        Assert::assertStringContainsString('return qt_runtime_enqueue_owner_task([invoke]() mutable {', $cpp);
+        Assert::assertStringContainsString('qt_runtime_owner_safe_point();', $cpp);
+        Assert::assertStringContainsString('qt_signal_dispatch([_qt_handle]() mutable {', $cpp);
+        Assert::assertStringNotContainsString('qt_signal_callback_clear(handle);', $cpp);
         Assert::assertStringContainsString('zend_string_equals_literal(signalSignature, "triggered()")', $cpp);
         Assert::assertStringContainsString('static_cast<void (QSignalFixture::*)(int)>(&QSignalFixture::valueChanged)', $cpp);
         Assert::assertStringContainsString('ZEND_ME(Qt_Core_QSignalFixture, onTriggered,', $cpp);
@@ -299,6 +305,51 @@ it('includes signals with trailing qprivatesignal callback args stripped', funct
         Assert::assertStringContainsString('_qt_arg_0', $cpp);
         Assert::assertStringContainsString('qt_signal_callback_invoke(_qt_callback, 1, _qt_params);', $cpp);
         Assert::assertStringContainsString('qt_signal_callback_invoke(_qt_callback, 0, NULL);', $cpp);
+});
+
+it('marshals borrowed qobject signal refs through snapshot handles', function (): void {
+        $fixtureRoot = qt_fixture_path('signals-qt');
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-borrowed-signals-' . bin2hex(random_bytes(4));
+        $classHeadersFile = $outputDir . '/class_headers.json';
+
+        mkdir($outputDir, 0755, true);
+        file_put_contents($classHeadersFile, json_encode([
+            'QBorrowedSignalFixture' => $fixtureRoot . '/include/QtCore/qborrowedsignalfixture.h',
+            'QObject' => $fixtureRoot . '/include/QtCore/qobject.h',
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+        $command = new GenerateCommand(FakeSystemInformation::passing());
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qborrowedsignalfixture.h',
+            'class' => 'QBorrowedSignalFixture',
+            '--qt-path' => $fixtureRoot,
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+            ],
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--class-headers-file' => $classHeadersFile,
+            '--allowed-classes' => 'QBorrowedSignalFixture,QObject',
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode);
+
+        $payload = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        Assert::assertSame('ok', $payload['status']);
+        Assert::assertNotContains('peerReady', array_column($payload['skipped_methods'], 'name'));
+
+        $stub = (string) file_get_contents($outputDir . '/classes/qt_qborrowedsignalfixture.stub.php');
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qborrowedsignalfixture.cpp');
+
+        Assert::assertStringContainsString('public function onPeerReady(callable $callback): \\Qt\\Core\\QMetaObjectConnection {}', $stub);
+        Assert::assertStringContainsString('QPointer<QObject> _qt_snapshot_0(static_cast<QObject *>(', $cpp);
+        Assert::assertStringContainsString('if (_qt_snapshot_0.isNull()) {', $cpp);
+        Assert::assertStringContainsString('qt_qobject_wrap_native(&_qt_params[0],', $cpp);
+        Assert::assertStringNotContainsString('Skipping borrowed signal callback off owner thread.', $cpp);
 });
 
 it('filters connect methods by name', function (): void {

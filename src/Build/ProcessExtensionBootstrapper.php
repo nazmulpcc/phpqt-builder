@@ -11,10 +11,19 @@ class ProcessExtensionBootstrapper implements ExtensionBootstrapper
 {
     public function __construct(private readonly SystemInformation $systemInformation) {}
 
-    public function bootstrap(ExtensionBuildContext $context, int $jobs, ?callable $onEvent = null): BootstrapResult
+    public function bootstrap(ExtensionBuildContext $context, int $jobs, bool $useCcache = false, ?callable $onEvent = null): BootstrapResult
     {
         $metadataDir = $context->metadataDir();
         @mkdir($metadataDir, 0755, true);
+        $buildEnv = null;
+
+        if ($useCcache) {
+            $ccache = $this->requireExecutable('ccache');
+            $buildEnv = [
+                'CC' => $ccache . ' cc',
+                'CXX' => $ccache . ' c++',
+            ];
+        }
 
         $phpize = $this->requireExecutable('phpize');
         $steps = [];
@@ -43,8 +52,8 @@ class ProcessExtensionBootstrapper implements ExtensionBootstrapper
             $configureCommand[] = '--with-php-config=' . $phpConfig;
         }
 
-        $steps[] = $this->runStep('configure', $configureCommand, $context->outputDir, $metadataDir, $onEvent);
-        $steps[] = $this->runStep('make', ['make', '-j' . max(1, $jobs)], $context->outputDir, $metadataDir, $onEvent);
+        $steps[] = $this->runStep('configure', $configureCommand, $context->outputDir, $metadataDir, $onEvent, $buildEnv);
+        $steps[] = $this->runStep('make', ['make', '-j' . max(1, $jobs)], $context->outputDir, $metadataDir, $onEvent, $buildEnv);
 
         return new BootstrapResult($steps);
     }
@@ -61,8 +70,9 @@ class ProcessExtensionBootstrapper implements ExtensionBootstrapper
 
     /**
      * @param list<string> $command
+     * @param array<string, string>|null $env
      */
-    private function runStep(string $name, array $command, string $workingDirectory, string $metadataDir, ?callable $onEvent = null): BootstrapStep
+    private function runStep(string $name, array $command, string $workingDirectory, string $metadataDir, ?callable $onEvent = null, ?array $env = null): BootstrapStep
     {
         $startedAt = microtime(true);
 
@@ -78,7 +88,7 @@ class ProcessExtensionBootstrapper implements ExtensionBootstrapper
             ]);
         }
 
-        $process = new Process($command, $workingDirectory);
+        $process = new Process($command, $workingDirectory, $env);
         $process->setTimeout(null);
         $process->run();
 

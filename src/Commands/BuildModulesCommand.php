@@ -59,6 +59,7 @@ class BuildModulesCommand extends Command
             ->addOption('output', 'o', InputOption::VALUE_REQUIRED, 'Base output directory; each module is written under <output>/<Module>', 'build')
             ->addOption('force', 'F', InputOption::VALUE_NONE, 'Clear each selected module build root before starting')
             ->addOption('no-build', null, InputOption::VALUE_NONE, 'Generate sources only and skip phpize/configure/make')
+            ->addOption('ccache', null, InputOption::VALUE_NEGATABLE, 'Use ccache for configure/make when available')
             ->addOption('jobs', 'j', InputOption::VALUE_REQUIRED, 'Number of parallel discovery/bootstrap workers');
     }
 
@@ -85,6 +86,12 @@ class BuildModulesCommand extends Command
         $qtPath = $input->getOption('qt-path') !== null ? (string) $input->getOption('qt-path') : null;
         $extensionVersion = (string) $input->getOption('ext-version');
         $bootstrapEnabled = !(bool) $input->getOption('no-build');
+        try {
+            $useCcache = $this->resolveCcacheUsage($input);
+        } catch (\RuntimeException $e) {
+            $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
+            return self::FAILURE;
+        }
         $pipeline = new BuildPipeline($this->bootstrapper, $this->discoveryService);
         $qtResolver = new QtInstallationResolver($this->systemInformation);
 
@@ -170,6 +177,7 @@ class BuildModulesCommand extends Command
                 linkModules: $nativeModules,
                 importIncludeRoots: [$sharedRoot, $sharedClassesDir],
                 includeBuildInfoSupport: $module === 'QtCore',
+                includeThreadRuntimeSupport: $module === 'QtCore',
                 runtimeManifest: $runtimeManifest,
                 currentQtModule: $module,
                 buildMode: RuntimeManifest::MODE_MODULAR,
@@ -207,6 +215,7 @@ class BuildModulesCommand extends Command
                 $context,
                 $jobs,
                 $bootstrapEnabled,
+                $useCcache,
                 $totalWriteStats,
                 $output,
             );
@@ -663,5 +672,22 @@ class BuildModulesCommand extends Command
         $detected = trim((string) shell_exec($command . ' 2>/dev/null'));
 
         return max(1, (int) $detected ?: 1);
+    }
+
+    private function resolveCcacheUsage(InputInterface $input): bool
+    {
+        $option = $input->getOption('ccache');
+        $ccachePath = $this->systemInformation->findExecutable('ccache');
+        $hasCcache = is_string($ccachePath) && $ccachePath !== '';
+
+        if ($option === false) {
+            return false;
+        }
+
+        if ($option === true && !$hasCcache) {
+            throw new \RuntimeException('The --ccache option was set but ccache is not available on PATH.');
+        }
+
+        return $hasCcache;
     }
 }

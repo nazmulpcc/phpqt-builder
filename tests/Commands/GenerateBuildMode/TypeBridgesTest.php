@@ -1116,5 +1116,5 @@ CPP);
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qnodeid__qt3dcore.cpp');
         Assert::assertStringContainsString('Qt3DCore::QNodeId _result = Qt3DCore::QNodeId::createId();', $cpp);
         Assert::assertStringContainsString('_ret_intern->native_ptr = new Qt3DCore::QNodeId(std::move(_result));', $cpp);
-        Assert::assertStringContainsString('intern->native_ptr->equals(*qt_qnodeid__qt3dcore_from_obj(Z_OBJ_P(other))->native_ptr);', $cpp);
+        Assert::assertStringContainsString('intern->native_ptr->equals(*qt_qnodeid_from_obj(Z_OBJ_P(other))->native_ptr);', $cpp);
 });

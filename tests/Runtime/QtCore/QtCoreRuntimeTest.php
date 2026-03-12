@@ -2,6 +2,18 @@
 
 declare(strict_types=1);
 
+/**
+ * @return array<string, mixed>
+ */
+function qt_runtime_thread_payload(string $fixture, array $env = [], int $timeout = 5): array
+{
+    if (!defined('PHP_ZTS') || (int) PHP_ZTS !== 1) {
+        test()->markTestSkipped('QThread runtime tests require a ZTS PHP build.');
+    }
+
+    return qt_runtime_payload($fixture, $env, $timeout);
+}
+
 it('covers qobject lifecycle and property notifications', function (): void {
     $payload = qt_runtime_payload('QtCore/qobject_properties.php');
 
@@ -81,4 +93,283 @@ it('exits cleanly on qcoreapplication quit with qobject signal callbacks', funct
         ->and($payload['about_to_quit_hits'])->toBe(0)
         ->and($payload['notify_hits'])->toBe(1)
         ->and($payload['connections_are_objects'])->toBeTrue();
+});
+
+it('dispatches qthread signals safely back to request thread', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_signal_dispatch_safety.php');
+
+    expect($payload['started_hits'])->toBe(1)
+        ->and($payload['finished_hits'])->toBe(1)
+        ->and($payload['timed_out'])->toBeFalse()
+        ->and($payload['connections_are_objects'])->toBeTrue();
+});
+
+it('dispatches qthread signals without requiring a qcoreapplication event loop', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_signal_dispatch_no_event_loop.php');
+
+    expect($payload['started_hits'])->toBeGreaterThanOrEqual(1)
+        ->and($payload['finished_hits'])->toBeGreaterThanOrEqual(1)
+        ->and($payload['timed_out'])->toBeFalse()
+        ->and($payload['wait_ok'])->toBeTrue()
+        ->and($payload['connections_are_objects'])->toBeTrue();
+});
+
+it('dispatches qthread virtual overrides back to owner thread', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_virtual_dispatch.php');
+
+    expect($payload['wait_ok'])->toBeTrue()
+        ->and($payload['run_hits'])->toBe(1)
+        ->and($payload['finished_hits'])->toBe(1)
+        ->and($payload['timed_out'])->toBeFalse();
+});
+
+it('handles burst cross-thread signal dispatch without timing out', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_signal_burst_stress.php');
+
+    expect($payload['timed_out'])->toBeFalse()
+        ->and($payload['wait_all_ok'])->toBeTrue()
+        ->and($payload['started_hits'])->toBe($payload['thread_count'])
+        ->and($payload['finished_hits'])->toBe($payload['thread_count']);
+});
+
+it('runs qthread task mode with sequential reuse and event streaming', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_qthread_task_mode_basic.php');
+
+    expect($payload['first_timed_out'])->toBeFalse()
+        ->and($payload['second_timed_out'])->toBeFalse()
+        ->and($payload['first_wait_ok'])->toBeTrue()
+        ->and($payload['second_wait_ok'])->toBeTrue()
+        ->and($payload['after_first'])->toBe(5)
+        ->and($payload['after_second'])->toBe(8)
+        ->and($payload['listener_removed'])->toBeTrue()
+        ->and($payload['is_finished'])->toBeTrue()
+        ->and($payload['is_running'])->toBeFalse();
+});
+
+it('keeps qthread task events flowing when one worker finishes earlier', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_qthread_task_mode_shutdown_isolation.php');
+
+    expect($payload['timed_out'])->toBeFalse()
+        ->and($payload['a_done'])->toBeTrue()
+        ->and($payload['b_done'])->toBeTrue()
+        ->and($payload['b_result_after_a_done'])->toBeTrue()
+        ->and($payload['b_progress_total'])->toBeGreaterThan(0)
+        ->and($payload['b_progress_after_a_done'])->toBeGreaterThan(0)
+        ->and($payload['wait_a'])->toBeTrue()
+        ->and($payload['wait_b'])->toBeTrue()
+        ->and($payload['off_a_progress'])->toBeTrue()
+        ->and($payload['off_b_progress'])->toBeTrue()
+        ->and($payload['off_a_result'])->toBeTrue()
+        ->and($payload['off_b_result'])->toBeTrue();
+});
+
+it('covers qthread task-mode sequential reuse and owner context parity', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_qthread_task_parity_reuse.php');
+
+    expect($payload['owner_current_thread_object'])->toBeTrue()
+        ->and($payload['owner_thread_id_type'])->not->toBe('')
+        ->and($payload['stack_applied'])->toBeTrue()
+        ->and($payload['started_hits'])->toBeGreaterThanOrEqual(2)
+        ->and($payload['finished_hits'])->toBeGreaterThanOrEqual(2)
+        ->and($payload['run1_running_observed'])->toBeTrue()
+        ->and($payload['run1_timed_out'])->toBeFalse()
+        ->and($payload['run1_wait_ok'])->toBeTrue()
+        ->and($payload['run1_finished_after_wait'])->toBeTrue()
+        ->and($payload['run1_running_after_wait'])->toBeFalse()
+        ->and($payload['run1_status'])->toBe('done')
+        ->and($payload['run2_running_observed'])->toBeTrue()
+        ->and($payload['run2_timed_out'])->toBeFalse()
+        ->and($payload['run2_wait_ok'])->toBeTrue()
+        ->and($payload['run2_finished_after_wait'])->toBeTrue()
+        ->and($payload['run2_running_after_wait'])->toBeFalse()
+        ->and($payload['run2_status'])->toBe('done')
+        ->and($payload['disconnect_started'])->toBeTrue()
+        ->and($payload['disconnect_finished'])->toBeTrue()
+        ->and($payload['off_result'])->toBeTrue();
+});
+
+it('covers qthread task-mode interruption request/read semantics', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_qthread_task_parity_interrupt.php');
+
+    expect($payload['timed_out'])->toBeFalse()
+        ->and($payload['wait_ok'])->toBeTrue()
+        ->and($payload['finished_after_wait'])->toBeTrue()
+        ->and($payload['running_after_wait'])->toBeFalse()
+        ->and($payload['interrupt_requested'])->toBeTrue()
+        ->and($payload['interruption_state_after_request'])->toBeTrue()
+        ->and($payload['status'])->toBe('interrupted')
+        ->and($payload['off_progress'])->toBeTrue()
+        ->and($payload['off_result'])->toBeTrue();
+});
+
+it('covers qthread task-mode quit/exit compatibility', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_qthread_task_parity_quit_exit.php');
+
+    expect($payload['timed_out'])->toBeFalse()
+        ->and($payload['wait_ok'])->toBeTrue()
+        ->and($payload['finished_after_wait'])->toBeTrue()
+        ->and($payload['running_after_wait'])->toBeFalse()
+        ->and($payload['quit_exit_called'])->toBeTrue()
+        ->and($payload['status'])->toBe('done')
+        ->and($payload['off_progress'])->toBeTrue()
+        ->and($payload['off_result'])->toBeTrue();
+});
+
+it('covers qthread task-mode setPriority while running', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_qthread_task_parity_priority_running.php');
+
+    expect($payload['timed_out'])->toBeFalse()
+        ->and($payload['wait_ok'])->toBeTrue()
+        ->and($payload['finished_after_wait'])->toBeTrue()
+        ->and($payload['running_after_wait'])->toBeFalse()
+        ->and($payload['priority_set_called'])->toBeTrue()
+        ->and($payload['status'])->toBe('done')
+        ->and($payload['off_progress'])->toBeTrue()
+        ->and($payload['off_result'])->toBeTrue();
+});
+
+it('runs blocking worker jobs in parallel isolated runtimes', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_runtime_parallel.php');
+
+    expect($payload['parallel_window_ok'])->toBeTrue()
+        ->and($payload['error_propagated'])->toBeTrue()
+        ->and($payload['runtime_a_enqueued'])->toBeGreaterThanOrEqual(1)
+        ->and($payload['runtime_b_enqueued'])->toBeGreaterThanOrEqual(1)
+        ->and($payload['stop_a'])->toBeTrue()
+        ->and($payload['stop_b'])->toBeTrue();
+});
+
+it('enforces bounded worker queue limits with deterministic rejection accounting', function (): void {
+    $payload = qt_runtime_thread_payload(
+        'QtCore/thread_runtime_queue_limits.php',
+        ['QT_QTHREADRUNTIME_MAX_QUEUE_DEPTH' => '1'],
+        10,
+    );
+
+    expect($payload['queue_max_depth'])->toBe(1)
+        ->and($payload['accepted'])->toBeGreaterThan(0)
+        ->and($payload['rejected'])->toBeGreaterThan(0)
+        ->and($payload['rejected_full'])->toBeGreaterThan(0)
+        ->and($payload['stopped'])->toBeTrue();
+});
+
+it('returns null on await timeout and records timeout counters', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_runtime_timeout.php', [], 10);
+
+    expect($payload['first_is_null'])->toBeTrue()
+        ->and($payload['second_is_zero'])->toBeTrue()
+        ->and($payload['timeouts'])->toBeGreaterThanOrEqual(1)
+        ->and($payload['stopped'])->toBeTrue();
+});
+
+it('handles shutdown race with queued jobs without worker crashes', function (): void {
+    $payload = qt_runtime_thread_payload(
+        'QtCore/thread_runtime_shutdown_race.php',
+        ['QT_QTHREADRUNTIME_MAX_QUEUE_DEPTH' => '8'],
+        10,
+    );
+
+    expect($payload['stop_ok'])->toBeTrue()
+        ->and($payload['submitted'])->toBeGreaterThan(0)
+        ->and($payload['stats_running'])->toBeFalse()
+        ->and($payload['stats_worker_crash'])->toBe(0)
+        ->and($payload['stats_canceled'])->toBeGreaterThanOrEqual(0);
+});
+
+it('accepts array callable descriptors and rejects closure callables deterministically', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_runtime_callable_forms.php', [], 10);
+
+    expect($payload['array_callable_object'])->toBeTrue()
+        ->and($payload['array_callable_class'])->toBe('DateTimeImmutable')
+        ->and($payload['non_static_rejected'])->toBeTrue()
+        ->and($payload['unknown_class_rejected'])->toBeFalse()
+        ->and($payload['unknown_class_errored_on_await'])->toBeTrue()
+        ->and($payload['closure_rejected'])->toBeTrue()
+        ->and($payload['stopped'])->toBeTrue();
+});
+
+it('loads worker bootstrap script into isolated runtime context', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_runtime_bootstrap_script.php', [], 10);
+
+    expect($payload['sum'])->toBe(42)
+        ->and($payload['worker_bootstrap_failed'])->toBeFalse()
+        ->and($payload['stopped'])->toBeTrue()
+        ->and($payload['main_has_function'])->toBeFalse();
+});
+
+it('executes bootstrap-defined array callables inside worker runtime', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_runtime_bootstrap_array_callable.php', [], 10);
+
+    expect($payload['result'])->toBe(42)
+        ->and($payload['await_errored'])->toBeFalse()
+        ->and($payload['worker_bootstrap_failed'])->toBeFalse()
+        ->and($payload['stopped'])->toBeTrue()
+        ->and($payload['main_has_class'])->toBeFalse();
+});
+
+it('rejects unsupported cross-runtime payload values deterministically', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_runtime_payload_validation.php', [], 10);
+
+    expect($payload['resource_rejected'])->toBeTrue()
+        ->and($payload['closure_rejected'])->toBeTrue()
+        ->and($payload['normal_value'])->toBe(9)
+        ->and($payload['stopped'])->toBeTrue();
+});
+
+it('streams worker events to owner listeners with dynamic event names', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_runtime_event_publish.php', [], 10);
+
+    expect($payload['result'])->toBe(123)
+        ->and($payload['progress_count'])->toBeGreaterThanOrEqual(5)
+        ->and($payload['decompressed_count'])->toBeGreaterThanOrEqual(2)
+        ->and($payload['progress_first'])->toBe(1)
+        ->and($payload['off_invalid'])->toBeFalse()
+        ->and($payload['off_progress'])->toBeTrue()
+        ->and($payload['off_decompressed'])->toBeTrue()
+        ->and($payload['drained'])->toBeGreaterThan(0)
+        ->and($payload['events_out_enqueued'])->toBeGreaterThanOrEqual(7)
+        ->and($payload['events_out_drained'])->toBeGreaterThanOrEqual(7)
+        ->and($payload['stopped'])->toBeTrue();
+});
+
+it('supports owner-to-worker commands through send/receive', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_runtime_event_send_receive.php', [], 10);
+
+    expect($payload['send_missing'])->toBeFalse()
+        ->and($payload['send_pause'])->toBeTrue()
+        ->and($payload['send_resume'])->toBeTrue()
+        ->and($payload['send_stop'])->toBeTrue()
+        ->and($payload['result'])->toBeArray()
+        ->and($payload['ack_count'])->toBeGreaterThanOrEqual(3)
+        ->and($payload['drained'])->toBeGreaterThan(0)
+        ->and($payload['events_in_enqueued'])->toBeGreaterThanOrEqual(3)
+        ->and($payload['events_in_drained'])->toBeGreaterThanOrEqual(3)
+        ->and($payload['stopped'])->toBeTrue();
+});
+
+it('drops newest worker events when outbound event queue is full', function (): void {
+    $payload = qt_runtime_thread_payload(
+        'QtCore/thread_runtime_event_burst_drop.php',
+        ['QT_QTHREADRUNTIME_EVENT_OUT_QUEUE_DEPTH' => '8'],
+        10,
+    );
+
+    expect($payload['published'])->toBeGreaterThan(0)
+        ->and($payload['received'])->toBeGreaterThan(0)
+        ->and($payload['received'])->toBeLessThanOrEqual($payload['published'])
+        ->and($payload['drained'])->toBeGreaterThan(0)
+        ->and($payload['events_out_enqueued'])->toBe($payload['published'])
+        ->and($payload['events_out_dropped_full'])->toBeGreaterThan(0)
+        ->and($payload['stopped'])->toBeTrue();
+});
+
+it('isolates listener exceptions and continues dispatch', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_runtime_event_listener_exception.php', [], 10);
+
+    expect($payload['result'])->toBe(7)
+        ->and($payload['first_hits'])->toBeGreaterThan(0)
+        ->and($payload['second_hits'])->toBeGreaterThan(0)
+        ->and($payload['second_hits'])->toBe($payload['first_hits'])
+        ->and($payload['listener_dispatch_errors'])->toBeGreaterThan(0)
+        ->and($payload['stopped'])->toBeTrue();
 });

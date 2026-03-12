@@ -1805,6 +1805,20 @@ class TypeBridge
         return sprintf('ZVAL_NULL(%s);', $zvalVar);
     }
 
+    public function signalArgMarshallingMode(string $phpType, string $cppType): string
+    {
+        if ($this->signalArgUsesBorrowedWrap($phpType, $cppType)) {
+            return 'borrowed_qobject_snapshot';
+        }
+
+        $strategy = $this->returnStrategyForCpp($phpType, $cppType);
+        if (in_array($strategy, ['scalar', 'string', 'qobject_pointer', 'value_object', 'array'], true)) {
+            return 'by_value';
+        }
+
+        return 'unsupported';
+    }
+
     public function signalArgUsesBorrowedWrap(string $phpType, string $cppType): bool
     {
         if (!$this->isObjectType($phpType) || $this->isValueType($phpType)) {
@@ -1829,6 +1843,10 @@ class TypeBridge
             return false;
         }
 
+        if ($typeName === 'QObject') {
+            return true;
+        }
+
         foreach ($this->currentClassMetadata as $metadata) {
             if (!is_array($metadata)) {
                 continue;
@@ -1843,6 +1861,11 @@ class TypeBridge
         }
 
         return false;
+    }
+
+    public function nativeClassNameForPhpAndCppType(string $phpType, string $cppType): string
+    {
+        return $this->nativeCppClassNameForPhpAndCppType($phpType, $cppType);
     }
 
     public function zvalToNativeReturnExpr(string $phpType, string $cppType, string $zvalPtrExpr, bool $nullable = false): string

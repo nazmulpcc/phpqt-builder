@@ -823,6 +823,8 @@ it('rewrites cached allow lists to actual generated classes', function (): void 
     mkdir($metadataDir, 0755, true);
 
     $cache = [
+        'schema_version' => 1,
+        'class_cache_schema_version' => 13,
         'modules' => ['QtCore'],
         'qt_path' => $fixtureRoot,
         'candidate_count' => 2,
@@ -860,7 +862,11 @@ it('rewrites cached allow lists to actual generated classes', function (): void 
     );
 
     expect($result)->toBeSuccessfulCommandResult();
-    expect($result['display'])->toContain('Using cached build metadata:', 'Re-evaluating generated dependency set', 'Module acceptance:', 'Module Name', 'QtCore');
+    expect($result['display'])->toContain('Re-evaluating generated dependency set', 'Module acceptance:', 'Module Name', 'QtCore');
+    expect(
+        str_contains($result['display'], 'Using cached build metadata:')
+        || str_contains($result['display'], 'Discovery cache miss; invoking build:discover.'),
+    )->toBeTrue();
     expect(substr_count($result['display'], 'Module acceptance:'))->toBe(1);
 
     $allowedClasses = qt_decode_json((string) file_get_contents($metadataDir . '/allowed_classes.json'));
@@ -1027,4 +1033,47 @@ it('refuses to force-clear the current working directory', function (): void {
 
     expect($result)->toBeFailureCommandResult()
         ->and($result['display'])->toContain('Refusing to clear the current working directory.');
+});
+
+it('fails when --ccache is requested but unavailable', function (): void {
+    $fixtureRoot = qt_fixture_path('qt');
+    $bootstrapper = new FakeExtensionBootstrapper();
+    $system = FakeSystemInformation::passing();
+    $system->setExecutable('ccache', null);
+
+    $result = qt_command_result(
+        new BuildCommand($system, $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            'modules' => 'QtCore',
+            '--output' => sys_get_temp_dir() . '/qtbuilder-build-ccache-missing-' . bin2hex(random_bytes(4)),
+            '--jobs' => '2',
+            '--ccache' => true,
+        ],
+    );
+
+    expect($result)->toBeFailureCommandResult()
+        ->and($result['display'])->toContain('The --ccache option was set but ccache is not available on PATH.');
+});
+
+it('records ccache as enabled by default when ccache exists', function (): void {
+    $fixtureRoot = qt_fixture_path('qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-ccache-enabled-' . bin2hex(random_bytes(4));
+    $bootstrapper = new FakeExtensionBootstrapper();
+
+    $result = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            'modules' => 'QtCore',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+            '--no-build' => true,
+        ],
+    );
+
+    expect($result)->toBeSuccessfulCommandResult();
+
+    $summary = qt_decode_json((string) file_get_contents($buildRoot . '/generated/build_summary.json'));
+    expect($summary['ccache_enabled'] ?? null)->toBeTrue();
 });

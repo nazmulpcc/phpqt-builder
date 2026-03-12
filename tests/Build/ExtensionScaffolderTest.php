@@ -146,23 +146,49 @@ it('registers parents before children in extension source', function (): void {
         ->and($source)->toContain(
             'static std::atomic_bool qt_shutdown_in_progress{false};',
             'static std::atomic_bool qt_about_to_quit_hooked{false};',
+            'ZEND_DECLARE_MODULE_GLOBALS(qt)',
+            'static void php_qt_init_globals(zend_qt_globals *globals)',
+            'bool qt_runtime_is_owner_thread(void)',
+            'bool qt_runtime_can_call_zend(void)',
             'bool qt_runtime_is_shutdown_in_progress(void)',
             'void qt_runtime_mark_shutdown_in_progress(void)',
             'void qt_runtime_try_hook_about_to_quit(void)',
+            'bool qt_runtime_enqueue_owner_task(std::function<void()> task)',
+            'void qt_runtime_schedule_owner_drain(void)',
+            'void qt_runtime_drain_owner_tasks(zend_long max_items)',
+            'void qt_runtime_owner_safe_point(void)',
+            'void qt_runtime_record_virtual_timeout(void)',
             'static inline void qt_runtime_shutdown_qcoreapplication(void)',
             'PHP_RINIT_FUNCTION(qt)',
             'PHP_RSHUTDOWN_FUNCTION(qt)',
             'PHP_RINIT(qt)',
             'PHP_RSHUTDOWN(qt)',
+            'ZEND_INIT_MODULE_GLOBALS(qt, php_qt_init_globals, NULL);',
+            'QT_RUNTIME_G(owner_thread_id) = (zend_ulong) (uintptr_t) tsrm_thread_id();',
+            'QT_RUNTIME_G(request_active) = true;',
+            'QT_RUNTIME_G(request_active) = false;',
             '&QCoreApplication::aboutToQuit',
             'qt_runtime_shutdown_qcoreapplication();',
         );
 
     $header = (string) file_get_contents($outputDir . '/php_qt.h');
     expect($header)->toContain(
-        'bool qt_runtime_is_shutdown_in_progress(void);',
-        'void qt_runtime_mark_shutdown_in_progress(void);',
-        'void qt_runtime_try_hook_about_to_quit(void);',
+        'ZEND_BEGIN_MODULE_GLOBALS(qt)',
+        'zend_ulong owner_thread_id;',
+        'bool request_active;',
+        'ZEND_END_MODULE_GLOBALS(qt)',
+        'ZEND_EXTERN_MODULE_GLOBALS(qt)',
+        '# define QT_RUNTIME_G(v) ZEND_MODULE_GLOBALS_ACCESSOR(qt, v)',
+        'bool qt_runtime_is_owner_thread(void);',
+        'bool qt_runtime_can_call_zend(void);',
+            'bool qt_runtime_is_shutdown_in_progress(void);',
+            'void qt_runtime_mark_shutdown_in_progress(void);',
+            'void qt_runtime_try_hook_about_to_quit(void);',
+            'bool qt_runtime_enqueue_owner_task(std::function<void()> task);',
+            'void qt_runtime_schedule_owner_drain(void);',
+            'void qt_runtime_drain_owner_tasks(zend_long max_items);',
+            'void qt_runtime_owner_safe_point(void);',
+            'void qt_runtime_record_virtual_timeout(void);',
     );
 });
 
@@ -204,6 +230,42 @@ it('registers typed dependencies before consumers', function (): void {
 
     expect(strpos($source, 'PHP_MINIT(qt_qtexttableformat)'))
         ->toBeLessThan(strpos($source, 'PHP_MINIT(qt_qtexttable)'));
+});
+
+it('emits qthreadruntime support minit and shutdown hook when enabled', function (): void {
+    $outputDir = qt_temp_dir('qtbuilder-scaffolder-threadruntime-') . '/ext';
+    $installation = new QtInstallation(
+        rootPath: '/opt/qt',
+        osFamily: 'Darwin',
+        includeRoots: ['/opt/qt/include'],
+        libraryRoots: ['/opt/qt/lib'],
+        moduleHeaderRoots: ['QtCore' => '/opt/qt/include/QtCore'],
+        tools: [],
+    );
+    $context = new ExtensionBuildContext(
+        extensionName: 'qt',
+        extensionVersion: '0.1.0',
+        buildRootDir: dirname($outputDir),
+        outputDir: $outputDir,
+        installation: $installation,
+        modules: ['QtCore'],
+        includeThreadRuntimeSupport: true,
+    );
+
+    $scaffolder = new ExtensionScaffolder();
+    $scaffolder->prepare($context);
+    $scaffolder->finalize($context);
+
+    $source = (string) file_get_contents($outputDir . '/qt.cpp');
+
+    expect($source)->toContain(
+        'PHP_MINIT(qt_qthreadruntime)',
+        'PHP_MINIT(qt_qfuture)',
+        'PHP_MINIT(qt_qpromise)',
+        'qt_qthreadruntime_is_worker_request_context()',
+        'qt_qthreadruntime_shutdown_all(2000);',
+        'qt_qthreadruntime_phpinfo_rows();',
+    );
 });
 
 it('uses a generated header guard that does not collide with qt', function (): void {

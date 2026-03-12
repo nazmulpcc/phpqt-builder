@@ -428,6 +428,7 @@ class BuildPipeline
                 ...($request->importedAbi?->includeDirs() ?? []),
             ])),
             includeBuildInfoSupport: true,
+            includeThreadRuntimeSupport: true,
             runtimeManifest: $runtimeManifest,
             buildMode: RuntimeManifest::MODE_MONOLITHIC,
         );
@@ -474,6 +475,7 @@ class BuildPipeline
             $context,
             $request->jobs,
             $request->bootstrapEnabled,
+            $request->useCcache,
             $totalWriteStats,
             $output,
         );
@@ -497,6 +499,7 @@ class BuildPipeline
             'bootstrap_error' => $bootstrap['error'],
             'bootstrap_skipped' => $bootstrap['skipped'],
             'bootstrap_disabled' => $bootstrap['disabled'],
+            'ccache_enabled' => $request->useCcache,
             'timings' => $timings,
             'file_writes' => [
                 'comparator' => $scaffolder->writeComparatorName(),
@@ -1621,6 +1624,11 @@ class BuildPipeline
             $fileWriteStats->merge($generator->lastWriteStats());
         }
 
+        if ($context->includeThreadRuntimeSupport) {
+            $generator->generateThreadRuntimeSupport($outputDir);
+            $fileWriteStats->merge($generator->lastWriteStats());
+        }
+
         return [
             'file_write_stats' => $fileWriteStats,
             'classmap' => $classmap,
@@ -1708,6 +1716,7 @@ class BuildPipeline
         ExtensionBuildContext $context,
         int $jobs,
         bool $bootstrapEnabled,
+        bool $useCcache,
         FileWriteStats $totalWriteStats,
         OutputInterface $output,
     ): array {
@@ -1735,7 +1744,7 @@ class BuildPipeline
             $output->writeln('<info>Bootstrapping extension build tree...</info>');
 
             try {
-                $bootstrapResult = $this->bootstrapper->bootstrap($context, $jobs, function (array $event) use ($output): void {
+                $bootstrapResult = $this->bootstrapper->bootstrap($context, $jobs, $useCcache, function (array $event) use ($output): void {
                     $this->renderBootstrapEvent($output, $event);
                 });
             } catch (\RuntimeException $e) {

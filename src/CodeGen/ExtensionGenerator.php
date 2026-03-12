@@ -164,6 +164,16 @@ class ExtensionGenerator
     /**
      * @return list<string>
      */
+    public function generateThreadRuntimeSupport(string $outputDir): array
+    {
+        $this->lastWriteStats = new FileWriteStats();
+
+        return $this->writeThreadRuntimeSupport($outputDir);
+    }
+
+    /**
+     * @return list<string>
+     */
     public function generateEnumHolderSupport(string $outputDir, EnumHolderDefinition $definition): array
     {
         $this->lastWriteStats = new FileWriteStats();
@@ -290,6 +300,38 @@ class ExtensionGenerator
         );
         $this->lastWriteStats->record($stubResult);
         $files[] = $stubFile;
+
+        return $files;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function writeThreadRuntimeSupport(string $outputDir): array
+    {
+        $files = [];
+
+        $supportFiles = [
+            ['qt_qthreadruntime.h', 'generation.support.qthreadruntime_header'],
+            ['qt_qthreadruntime.cpp', 'generation.support.qthreadruntime_source'],
+            ['qt_qthreadruntime.stub.php', 'generation.support.qthreadruntime_stub'],
+            ['qt_qfuture.h', 'generation.support.qfuture_header'],
+            ['qt_qfuture.cpp', 'generation.support.qfuture_source'],
+            ['qt_qfuture.stub.php', 'generation.support.qfuture_stub'],
+            ['qt_qpromise.h', 'generation.support.qpromise_header'],
+            ['qt_qpromise.cpp', 'generation.support.qpromise_source'],
+            ['qt_qpromise.stub.php', 'generation.support.qpromise_stub'],
+        ];
+
+        foreach ($supportFiles as [$filename, $view]) {
+            $path = $outputDir . '/' . $filename;
+            $result = $this->fileWriter->write(
+                $path,
+                $this->cleanOutput($this->blade->run($view, [])),
+            );
+            $this->lastWriteStats->record($result);
+            $files[] = $path;
+        }
 
         return $files;
     }

@@ -71,7 +71,9 @@ it('borrows signal refs only for qobject-derived class types', function (): void
     ], [], 'QBluetoothDeviceDiscoveryAgent');
 
     expect($bridge->signalArgUsesBorrowedWrap('\\Qt\\Bluetooth\\QBluetoothDeviceInfo', 'const QBluetoothDeviceInfo &'))->toBeFalse()
-        ->and($bridge->signalArgUsesBorrowedWrap('\\Qt\\Core\\QObject', 'QObject &'))->toBeTrue();
+        ->and($bridge->signalArgUsesBorrowedWrap('\\Qt\\Core\\QObject', 'QObject &'))->toBeTrue()
+        ->and($bridge->signalArgMarshallingMode('\\Qt\\Core\\QObject', 'QObject &'))->toBe('borrowed_qobject_snapshot')
+        ->and($bridge->signalArgMarshallingMode('int', 'int'))->toBe('by_value');
 });
 
 it('converts int128 values through decimal strings', function (): void {

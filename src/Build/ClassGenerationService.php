@@ -1482,6 +1482,11 @@ class ClassGenerationService
             }
 
             $phpType = $this->typeMapper->map($cppType);
+            $marshallingMode = $this->typeBridge->signalArgMarshallingMode($phpType, $cppType);
+            if ($marshallingMode === 'borrowed_qobject_snapshot') {
+                continue;
+            }
+
             $strategy = $this->typeBridge->returnStrategyForCpp($phpType, $cppType);
             if (in_array($strategy, ['scalar', 'string', 'qobject_pointer'], true)) {
                 continue;

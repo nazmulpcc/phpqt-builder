@@ -26,6 +26,10 @@ it('reports monolithic build metadata through php --ri qt', function (): void {
         'Qt version =>',
         'built modules =>',
         'QtCore',
+        'qthreadruntime total enqueued =>',
+        'qthreadruntime total drained =>',
+        'qthreadruntime total await timeouts =>',
+        'qthreadruntime events out enqueued =>',
     );
 });
 
