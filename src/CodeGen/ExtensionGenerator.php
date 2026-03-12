@@ -311,30 +311,27 @@ class ExtensionGenerator
     {
         $files = [];
 
-        $headerFile = $outputDir . '/qt_qthreadruntime.h';
-        $sourceFile = $outputDir . '/qt_qthreadruntime.cpp';
-        $stubFile = $outputDir . '/qt_qthreadruntime.stub.php';
+        $supportFiles = [
+            ['qt_qthreadruntime.h', 'generation.support.qthreadruntime_header'],
+            ['qt_qthreadruntime.cpp', 'generation.support.qthreadruntime_source'],
+            ['qt_qthreadruntime.stub.php', 'generation.support.qthreadruntime_stub'],
+            ['qt_qfuture.h', 'generation.support.qfuture_header'],
+            ['qt_qfuture.cpp', 'generation.support.qfuture_source'],
+            ['qt_qfuture.stub.php', 'generation.support.qfuture_stub'],
+            ['qt_qpromise.h', 'generation.support.qpromise_header'],
+            ['qt_qpromise.cpp', 'generation.support.qpromise_source'],
+            ['qt_qpromise.stub.php', 'generation.support.qpromise_stub'],
+        ];
 
-        $headerResult = $this->fileWriter->write(
-            $headerFile,
-            $this->cleanOutput($this->blade->run('generation.support.qthreadruntime_header', [])),
-        );
-        $this->lastWriteStats->record($headerResult);
-        $files[] = $headerFile;
-
-        $sourceResult = $this->fileWriter->write(
-            $sourceFile,
-            $this->cleanOutput($this->blade->run('generation.support.qthreadruntime_source', [])),
-        );
-        $this->lastWriteStats->record($sourceResult);
-        $files[] = $sourceFile;
-
-        $stubResult = $this->fileWriter->write(
-            $stubFile,
-            $this->cleanOutput($this->blade->run('generation.support.qthreadruntime_stub', [])),
-        );
-        $this->lastWriteStats->record($stubResult);
-        $files[] = $stubFile;
+        foreach ($supportFiles as [$filename, $view]) {
+            $path = $outputDir . '/' . $filename;
+            $result = $this->fileWriter->write(
+                $path,
+                $this->cleanOutput($this->blade->run($view, [])),
+            );
+            $this->lastWriteStats->record($result);
+            $files[] = $path;
+        }
 
         return $files;
     }

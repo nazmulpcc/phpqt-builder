@@ -2006,6 +2006,100 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, send)
     RETURN_BOOL(ok);
 }
 
+/* startFuture */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, startFuture)
+{
+    qt_runtime_owner_safe_point();
+
+#if !defined(ZTS)
+    zend_throw_error(NULL, "QThread::startFuture() requires a ZTS PHP build.");
+    RETURN_THROWS();
+#else
+    zend_string *callable = NULL;
+    zval *args = NULL;
+    zval *priority = NULL;
+
+    ZEND_PARSE_PARAMETERS_START(1, 3)
+        Z_PARAM_STR(callable)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_ARRAY(args)
+        Z_PARAM_ZVAL(priority)
+    ZEND_PARSE_PARAMETERS_END();
+
+    if (ZSTR_LEN(callable) == 0) {
+        zend_argument_value_error(1, "must be a non-empty callable string");
+        RETURN_THROWS();
+    }
+
+    bool has_priority = false;
+    int priority_value = 0;
+    if (priority != NULL && Z_TYPE_P(priority) != IS_NULL) {
+        if (Z_TYPE_P(priority) != IS_LONG) {
+            zend_argument_type_error(3, "must be of type ?int when provided");
+            RETURN_THROWS();
+        }
+        has_priority = true;
+        priority_value = (int) zval_get_long(priority);
+    }
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (intern->native_ptr == NULL) {
+        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+    if (!intern->native_is_generated_subclass || intern->native_is_virtual_trampoline) {
+        zend_throw_error(NULL, "QThread task mode requires a non-overridden generated QThread instance.");
+        RETURN_THROWS();
+    }
+
+    if (intern->extra_storage == NULL) {
+        zend_throw_error(NULL, "QThread task runtime host is not initialized.");
+        RETURN_THROWS();
+    }
+
+    zval args_input;
+    if (args != NULL) {
+        ZVAL_COPY(&args_input, args);
+    } else {
+        array_init(&args_input);
+    }
+
+    std::string args_payload;
+    std::string args_error;
+    bool args_ok = qt_qthreadruntime_serialize_worker_args(&args_input, &args_payload, &args_error);
+    zval_ptr_dtor(&args_input);
+    if (!args_ok) {
+        zend_argument_value_error(2, "%s", args_error.c_str());
+        RETURN_THROWS();
+    }
+
+    std::string callable_error;
+    if (!qt_qthreadruntime_validate_callable_string(callable, &callable_error)) {
+        zend_argument_value_error(1, "%s", callable_error.c_str());
+        RETURN_THROWS();
+    }
+
+    uint64_t task_token = 0;
+    std::string start_error;
+    if (!qt_qthread_task_host_start_future(
+        static_cast<qt_qthread_task_host *>(intern->extra_storage),
+        intern->native_ptr,
+        std::string(ZSTR_VAL(callable), ZSTR_LEN(callable)),
+        args_payload,
+        has_priority,
+        priority_value,
+        &task_token,
+        &start_error
+    )) {
+        zend_throw_error(NULL, "%s", start_error.c_str());
+        RETURN_THROWS();
+    }
+
+    qt_qfuture_wrap(return_value, static_cast<qt_qthread_task_host *>(intern->extra_storage), task_token);
+#endif
+}
+
 /* publish */
 ZEND_METHOD({!! $ctx->zendClassSymbol !!}, publish)
 {
@@ -2091,6 +2185,7 @@ static const zend_function_entry {!! $ctx->filePrefix !!}_methods[] = {
     ZEND_ME({!! $ctx->zendClassSymbol !!}, off, arginfo_class_Qt_Core_QThread_off, ZEND_ACC_PUBLIC)
     ZEND_ME({!! $ctx->zendClassSymbol !!}, drainEvents, arginfo_class_Qt_Core_QThread_drainEvents, ZEND_ACC_PUBLIC)
     ZEND_ME({!! $ctx->zendClassSymbol !!}, send, arginfo_class_Qt_Core_QThread_send, ZEND_ACC_PUBLIC)
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, startFuture, arginfo_class_Qt_Core_QThread_startFuture, ZEND_ACC_PUBLIC)
     ZEND_ME({!! $ctx->zendClassSymbol !!}, publish, arginfo_class_Qt_Core_QThread_publish, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
     ZEND_ME({!! $ctx->zendClassSymbol !!}, receive, arginfo_class_Qt_Core_QThread_receive, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
 @endif

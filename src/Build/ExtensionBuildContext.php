@@ -167,7 +167,7 @@ readonly class ExtensionBuildContext
             ...$this->generatedClasses,
             ...($this->includeSignalConnectionSupport ? ['QMetaObjectConnection'] : []),
             ...($this->includeBuildInfoSupport ? ['BuildInfo'] : []),
-            ...($this->includeThreadRuntimeSupport ? ['QThreadRuntime'] : []),
+            ...($this->includeThreadRuntimeSupport ? ['QThreadRuntime', 'QFuture', 'QPromise'] : []),
         ]));
         if ($classes === []) {
             return [];

@@ -260,6 +260,8 @@ it('emits qthreadruntime support minit and shutdown hook when enabled', function
 
     expect($source)->toContain(
         'PHP_MINIT(qt_qthreadruntime)',
+        'PHP_MINIT(qt_qfuture)',
+        'PHP_MINIT(qt_qpromise)',
         'qt_qthreadruntime_is_worker_request_context()',
         'qt_qthreadruntime_shutdown_all(2000);',
         'qt_qthreadruntime_phpinfo_rows();',

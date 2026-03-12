@@ -6,6 +6,10 @@
 
 #include "qt_qthreadruntime.h"
 #include "qt_qthreadruntime_arginfo.h"
+#include "qt_qfuture.h"
+#include "qt_qfuture_arginfo.h"
+#include "qt_qpromise.h"
+#include "qt_qpromise_arginfo.h"
 #include "php_qt.h"
 
 #include <QtCore/QMetaObject>
@@ -30,15 +34,21 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 zend_class_entry *qt_ce_QThreadRuntime = NULL;
+zend_class_entry *qt_ce_QFuture = NULL;
+zend_class_entry *qt_ce_QPromise = NULL;
 zend_object_handlers qt_qthreadruntime_handlers;
+zend_object_handlers qt_qfuture_handlers;
+zend_object_handlers qt_qpromise_handlers;
 struct qt_qthread_task_host;
 static thread_local bool qt_qthreadruntime_tls_worker_request = false;
 static thread_local qt_qthreadruntime_state *qt_qthreadruntime_tls_current_state = nullptr;
 static thread_local uint64_t qt_qthreadruntime_tls_current_job_id = 0;
 static thread_local qt_qthread_task_host *qt_qthreadruntime_tls_current_task_host = nullptr;
+static thread_local uint64_t qt_qthreadruntime_tls_current_task_token = 0;
 static thread_local bool qt_qthreadruntime_tls_interrupted = false;
 static constexpr size_t QT_QTHREADRUNTIME_MAX_QUEUE_DEPTH_DEFAULT = 4096;
 static constexpr size_t QT_QTHREADRUNTIME_EVENT_QUEUE_DEPTH_DEFAULT = 4096;
@@ -159,6 +169,7 @@ struct qt_qthreadruntime_event_message {
 struct qt_qthreadruntime_listener_t {
     uint64_t id{0};
     std::string event_name;
+    uint64_t task_token_filter{0};
     zend_fcall_info fci;
     zend_fcall_info_cache fci_cache;
 };
@@ -647,7 +658,10 @@ public:
                     listeners.reserve(event_it->second.size());
                     for (uint64_t id : event_it->second) {
                         auto listener_it = listeners_by_id_.find(id);
-                        if (listener_it != listeners_by_id_.end() && listener_it->second) {
+                        if (listener_it != listeners_by_id_.end()
+                            && listener_it->second
+                            && (listener_it->second->task_token_filter == 0 || listener_it->second->task_token_filter == message.job_id)
+                        ) {
                             listeners.push_back(listener_it->second);
                         }
                     }
@@ -1278,18 +1292,25 @@ private:
 };
 
 struct qt_qthread_task_host {
+    std::atomic_uint32_t refcount_{1};
     std::mutex mutex_;
     std::condition_variable inbound_cv_;
+    std::condition_variable future_cv_;
     std::deque<qt_qthreadruntime_event_message> outbound_events_;
     std::deque<qt_qthreadruntime_event_message> inbound_events_;
     std::unordered_map<uint64_t, std::shared_ptr<qt_qthreadruntime_listener_t>> listeners_by_id_;
     std::unordered_map<std::string, std::vector<uint64_t>> listener_ids_by_event_;
+    std::unordered_map<uint64_t, qt_qthreadruntime_result> future_results_;
+    std::unordered_set<uint64_t> canceled_future_tokens_;
     uint64_t next_listener_id_{1};
+    uint64_t next_task_token_{1};
     size_t max_event_out_queue_depth_{qt_qthreadruntime_env_event_out_queue_depth()};
     size_t max_event_in_queue_depth_{qt_qthreadruntime_env_event_in_queue_depth()};
     std::string bootstrap_script_;
     std::string pending_callable_name_;
     std::string pending_args_payload_;
+    uint64_t pending_task_token_{0};
+    uint64_t active_task_token_{0};
     bool has_pending_task_{false};
     bool task_running_{false};
     bool stopping_{false};
@@ -1313,7 +1334,25 @@ struct qt_qthread_task_host {
         return true;
     }
 
+    void retain()
+    {
+        refcount_.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    void release()
+    {
+        uint32_t previous = refcount_.fetch_sub(1, std::memory_order_acq_rel);
+        if (previous == 1) {
+            delete this;
+        }
+    }
+
     bool on(const std::string &event_name, zval *listener, uint64_t *listener_id, std::string *error)
+    {
+        return onForToken(0, event_name, listener, listener_id, error);
+    }
+
+    bool onForToken(uint64_t task_token, const std::string &event_name, zval *listener, uint64_t *listener_id, std::string *error)
     {
         if (listener == nullptr || listener_id == nullptr || error == nullptr) {
             return false;
@@ -1344,6 +1383,7 @@ struct qt_qthread_task_host {
         std::lock_guard<std::mutex> lock(mutex_);
         handle->id = next_listener_id_++;
         handle->event_name = event_name;
+        handle->task_token_filter = task_token;
         listeners_by_id_[handle->id] = handle;
         listener_ids_by_event_[event_name].push_back(handle->id);
         *listener_id = handle->id;
@@ -1420,7 +1460,7 @@ struct qt_qthread_task_host {
             zval envelope;
             array_init(&envelope);
             add_assoc_stringl(&envelope, "event", message.event_name.data(), message.event_name.size());
-            add_assoc_long(&envelope, "jobId", 0);
+            add_assoc_long(&envelope, "jobId", (zend_long) message.job_id);
             add_assoc_zval(&envelope, "payload", &payload);
 
             for (const std::shared_ptr<qt_qthreadruntime_listener_t> &listener : listeners) {
@@ -1477,6 +1517,26 @@ struct qt_qthread_task_host {
 
     bool start(QThread *thread, const std::string &callable_name, const std::string &args_payload, bool has_priority, int priority, std::string *error)
     {
+        return startInternal(thread, callable_name, args_payload, has_priority, priority, 0, false, nullptr, error);
+    }
+
+    bool startFuture(QThread *thread, const std::string &callable_name, const std::string &args_payload, bool has_priority, int priority, uint64_t *task_token, std::string *error)
+    {
+        return startInternal(thread, callable_name, args_payload, has_priority, priority, 0, true, task_token, error);
+    }
+
+    bool startInternal(
+        QThread *thread,
+        const std::string &callable_name,
+        const std::string &args_payload,
+        bool has_priority,
+        int priority,
+        uint64_t forced_token,
+        bool allocate_token,
+        uint64_t *out_token,
+        std::string *error
+    )
+    {
         if (thread == nullptr) {
             if (error != nullptr) {
                 *error = "QThread native instance is not initialized.";
@@ -1509,6 +1569,16 @@ struct qt_qthread_task_host {
             pending_args_payload_ = args_payload;
             has_pending_task_ = true;
             interrupted_ = false;
+            pending_task_token_ = forced_token;
+            if (allocate_token) {
+                pending_task_token_ = next_task_token_++;
+                qt_qthreadruntime_result pending_result;
+                pending_result.ready = false;
+                future_results_[pending_task_token_] = std::move(pending_result);
+            }
+            if (out_token != nullptr) {
+                *out_token = pending_task_token_;
+            }
             bound_thread_ = thread;
             inbound_events_.clear();
         }
@@ -1524,6 +1594,7 @@ struct qt_qthread_task_host {
                 std::lock_guard<std::mutex> lock(mutex_);
                 has_pending_task_ = false;
                 task_running_ = false;
+                active_task_token_ = 0;
                 inbound_events_.clear();
                 inbound_cv_.notify_all();
             },
@@ -1547,9 +1618,13 @@ struct qt_qthread_task_host {
         }
 
         interrupted_ = true;
+        uint64_t token = active_task_token_ != 0 ? active_task_token_ : pending_task_token_;
+        if (token != 0) {
+            canceled_future_tokens_.insert(token);
+        }
         if (inbound_events_.size() < max_event_in_queue_depth_) {
             qt_qthreadruntime_event_message message;
-            message.job_id = 0;
+            message.job_id = token;
             message.event_name = "__interrupt";
             message.payload.type = qt_qthreadruntime_value_type::array_value;
             inbound_events_.push_back(std::move(message));
@@ -1562,6 +1637,137 @@ struct qt_qthread_task_host {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         return task_running_ || has_pending_task_;
+    }
+
+    bool hasFuture(uint64_t task_token)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return future_results_.find(task_token) != future_results_.end();
+    }
+
+    bool isFutureRunning(uint64_t task_token)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = future_results_.find(task_token);
+        if (it == future_results_.end()) {
+            return false;
+        }
+
+        return !it->second.ready;
+    }
+
+    bool isFutureFinished(uint64_t task_token)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = future_results_.find(task_token);
+        return it != future_results_.end() && it->second.ready;
+    }
+
+    bool isFutureCanceled(uint64_t task_token)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = future_results_.find(task_token);
+        return it != future_results_.end() && it->second.ready && it->second.canceled;
+    }
+
+    bool cancelFuture(uint64_t task_token)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = future_results_.find(task_token);
+        if (it == future_results_.end()) {
+            return false;
+        }
+        if (it->second.ready) {
+            return false;
+        }
+
+        canceled_future_tokens_.insert(task_token);
+        if (has_pending_task_ && pending_task_token_ == task_token) {
+            has_pending_task_ = false;
+            pending_task_token_ = 0;
+            pending_callable_name_.clear();
+            pending_args_payload_.clear();
+            it->second.ready = true;
+            it->second.success = false;
+            it->second.canceled = true;
+            future_cv_.notify_all();
+            inbound_cv_.notify_all();
+            return true;
+        }
+
+        if (task_running_ && active_task_token_ == task_token) {
+            interrupted_ = true;
+            if (inbound_events_.size() < max_event_in_queue_depth_) {
+                qt_qthreadruntime_event_message message;
+                message.job_id = task_token;
+                message.event_name = "__interrupt";
+                message.payload.type = qt_qthreadruntime_value_type::array_value;
+                inbound_events_.push_back(std::move(message));
+            }
+            inbound_cv_.notify_all();
+            return true;
+        }
+
+        return false;
+    }
+
+    bool waitFuture(uint64_t task_token, zend_long timeout_ms, bool *finished)
+    {
+        if (finished == nullptr) {
+            return false;
+        }
+
+        std::unique_lock<std::mutex> lock(mutex_);
+        auto it = future_results_.find(task_token);
+        if (it == future_results_.end()) {
+            return false;
+        }
+
+        auto ready = [&]() -> bool {
+            auto current = future_results_.find(task_token);
+            return current == future_results_.end() || current->second.ready;
+        };
+
+        if (timeout_ms <= 0) {
+            future_cv_.wait(lock, ready);
+        } else if (!future_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), ready)) {
+            *finished = false;
+            return true;
+        }
+
+        auto current = future_results_.find(task_token);
+        if (current == future_results_.end()) {
+            return false;
+        }
+
+        *finished = current->second.ready;
+        return true;
+    }
+
+    bool fetchFutureResult(uint64_t task_token, zend_long timeout_ms, qt_qthreadruntime_result *result, bool *timed_out)
+    {
+        if (result == nullptr || timed_out == nullptr) {
+            return false;
+        }
+
+        *timed_out = false;
+        bool finished = false;
+        if (!waitFuture(task_token, timeout_ms, &finished)) {
+            return false;
+        }
+        if (!finished) {
+            *timed_out = true;
+            return true;
+        }
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = future_results_.find(task_token);
+        if (it == future_results_.end()) {
+            return false;
+        }
+
+        *result = it->second;
+        return true;
     }
 
     bool executePendingOnCurrentThread(QThread *thread)
@@ -1595,7 +1801,7 @@ struct qt_qthread_task_host {
         }
 
         qt_qthreadruntime_event_message message;
-        message.job_id = 0;
+        message.job_id = active_task_token_;
         message.event_name = event_name;
         message.payload = payload;
         outbound_events_.push_back(std::move(message));
@@ -1626,7 +1832,16 @@ struct qt_qthread_task_host {
 
         *message = std::move(inbound_events_.front());
         inbound_events_.pop_front();
+        if (message->event_name == "__interrupt") {
+            qt_qthreadruntime_tls_interrupted = true;
+        }
         return true;
+    }
+
+    bool workerIsCanceled()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return interrupted_;
     }
 
     void shutdown(zend_long timeout_ms)
@@ -1637,9 +1852,19 @@ struct qt_qthread_task_host {
             stopping_ = true;
             has_pending_task_ = false;
             task_running_ = false;
+            pending_task_token_ = 0;
+            active_task_token_ = 0;
             inbound_events_.clear();
             outbound_events_.clear();
+            for (auto &entry : future_results_) {
+                if (!entry.second.ready) {
+                    entry.second.ready = true;
+                    entry.second.success = false;
+                    entry.second.canceled = true;
+                }
+            }
             inbound_cv_.notify_all();
+            future_cv_.notify_all();
             thread = bound_thread_;
         }
 
@@ -1664,6 +1889,7 @@ struct qt_qthread_task_host {
             listener_ids_by_event_.clear();
             stopping_ = false;
             interrupted_ = false;
+            canceled_future_tokens_.clear();
         }
 
         for (const auto &listener : listeners) {
@@ -1681,6 +1907,7 @@ private:
         std::string callable_name;
         std::string args_payload;
         std::string bootstrap_script;
+        uint64_t task_token = 0;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!has_pending_task_ || stopping_) {
@@ -1689,71 +1916,147 @@ private:
             callable_name = pending_callable_name_;
             args_payload = pending_args_payload_;
             bootstrap_script = bootstrap_script_;
+            task_token = pending_task_token_;
             has_pending_task_ = false;
+            pending_task_token_ = 0;
+            active_task_token_ = task_token;
             task_running_ = true;
             interrupted_ = false;
         }
 
         qt_qthreadruntime_tls_worker_request = true;
         qt_qthreadruntime_tls_current_task_host = this;
+        qt_qthreadruntime_tls_current_task_token = task_token;
         qt_qthreadruntime_tls_interrupted = false;
         ts_resource(0);
         TSRMLS_CACHE_UPDATE();
 
         bool startup_ok = php_request_startup() == SUCCESS;
         bool bootstrap_ok = true;
+        qt_qthreadruntime_result task_result;
+        task_result.success = true;
+        task_result.canceled = false;
         if (startup_ok && !bootstrap_script.empty()) {
             std::string bootstrap_error;
             bootstrap_ok = qt_qthreadruntime_state::executeBootstrapScript(bootstrap_script, &bootstrap_error);
             if (!bootstrap_ok) {
                 php_error_docref(NULL, E_WARNING, "QThread task bootstrap failed: %s", bootstrap_error.c_str());
+                task_result = qt_qthreadruntime_state::makeErrorResult(
+                    "RuntimeException",
+                    bootstrap_error.empty() ? std::string("QThread task bootstrap failed.") : bootstrap_error
+                );
             }
+        } else if (!startup_ok) {
+            task_result = qt_qthreadruntime_state::makeErrorResult(
+                "RuntimeException",
+                "Failed to start isolated PHP request for QThread task."
+            );
         }
 
         if (startup_ok && bootstrap_ok) {
-            zval args_zv;
-            ZVAL_UNDEF(&args_zv);
-            if (qt_qthreadruntime_state::unserializeValue(args_payload, &args_zv) && Z_TYPE(args_zv) == IS_ARRAY) {
-                zval callable_zv;
-                ZVAL_STRINGL(&callable_zv, callable_name.data(), callable_name.size());
+            bool bailed_out = false;
+            zend_first_try {
+                zval args_zv;
+                ZVAL_UNDEF(&args_zv);
+                if (qt_qthreadruntime_state::unserializeValue(args_payload, &args_zv) && Z_TYPE(args_zv) == IS_ARRAY) {
+                    zval callable_zv;
+                    ZVAL_STRINGL(&callable_zv, callable_name.data(), callable_name.size());
 
-                uint32_t argc = (uint32_t) zend_hash_num_elements(Z_ARRVAL(args_zv));
-                std::vector<zval> params;
-                params.reserve(argc);
-                zval *entry = NULL;
-                ZEND_HASH_FOREACH_VAL(Z_ARRVAL(args_zv), entry) {
-                    zval param;
-                    ZVAL_COPY(&param, entry);
-                    params.push_back(param);
-                } ZEND_HASH_FOREACH_END();
+                    uint32_t argc = (uint32_t) zend_hash_num_elements(Z_ARRVAL(args_zv));
+                    std::vector<zval> params;
+                    params.reserve(argc);
+                    zval *entry = NULL;
+                    ZEND_HASH_FOREACH_VAL(Z_ARRVAL(args_zv), entry) {
+                        zval param;
+                        ZVAL_COPY(&param, entry);
+                        params.push_back(param);
+                    } ZEND_HASH_FOREACH_END();
 
-                zval retval;
-                ZVAL_UNDEF(&retval);
-                zend_fcall_info fci;
-                zend_fcall_info_cache fcc;
-                if (zend_fcall_info_init(&callable_zv, 0, &fci, &fcc, NULL, NULL) == SUCCESS) {
-                    fci.retval = &retval;
-                    fci.param_count = argc;
-                    fci.params = argc > 0 ? params.data() : NULL;
-                    (void) zend_call_function(&fci, &fcc);
-                    if (!Z_ISUNDEF(retval)) {
-                        zval_ptr_dtor(&retval);
+                    zval retval;
+                    ZVAL_UNDEF(&retval);
+                    zend_fcall_info fci;
+                    zend_fcall_info_cache fcc;
+                    if (zend_fcall_info_init(&callable_zv, 0, &fci, &fcc, NULL, NULL) == SUCCESS) {
+                        fci.retval = &retval;
+                        fci.param_count = argc;
+                        fci.params = argc > 0 ? params.data() : NULL;
+                        int call_status = zend_call_function(&fci, &fcc);
+                        if (call_status != SUCCESS) {
+                            task_result = qt_qthreadruntime_state::makeErrorResult(
+                                "RuntimeException",
+                                "zend_call_function() failed in QThread task runtime."
+                            );
+                        } else if (EG(exception) != NULL) {
+                            zval ex_zv;
+                            ZVAL_OBJ_COPY(&ex_zv, EG(exception));
+                            zend_clear_exception();
+
+                            zend_object *ex_obj = Z_OBJ(ex_zv);
+                            zend_long error_code = 0;
+                            std::string class_name = ex_obj != NULL && ex_obj->ce != NULL
+                                ? std::string(ZSTR_VAL(ex_obj->ce->name), ZSTR_LEN(ex_obj->ce->name))
+                                : std::string("RuntimeException");
+                            std::string message = "Worker exception.";
+                            if (ex_obj != NULL) {
+                                zval rv;
+                                zval *message_prop = zend_read_property_ex(ex_obj->ce, ex_obj, ZSTR_KNOWN(ZEND_STR_MESSAGE), 1, &rv);
+                                if (message_prop != NULL) {
+                                    zend_string *msg = zval_get_string(message_prop);
+                                    if (msg != NULL) {
+                                        message.assign(ZSTR_VAL(msg), ZSTR_LEN(msg));
+                                        zend_string_release(msg);
+                                    }
+                                }
+
+                                zval *code_prop = zend_read_property_ex(ex_obj->ce, ex_obj, ZSTR_KNOWN(ZEND_STR_CODE), 1, &rv);
+                                if (code_prop != NULL) {
+                                    error_code = zval_get_long(code_prop);
+                                }
+                            }
+                            zval_ptr_dtor(&ex_zv);
+                            task_result = qt_qthreadruntime_state::makeErrorResult(class_name, message, error_code, false);
+                        } else if (!qt_qthreadruntime_state::serializeValue(&retval, &task_result.payload)) {
+                            task_result = qt_qthreadruntime_state::makeErrorResult(
+                                "RuntimeException",
+                                "Failed to serialize QThread task result."
+                            );
+                        }
+
+                        if (!Z_ISUNDEF(retval)) {
+                            zval_ptr_dtor(&retval);
+                        }
+                    } else {
+                        task_result = qt_qthreadruntime_state::makeErrorResult(
+                            "RuntimeException",
+                            "Worker callable is not invokable in QThread task runtime."
+                        );
                     }
-                    if (EG(exception) != NULL) {
-                        zend_clear_exception();
-                    }
-                }
 
-                for (zval &param : params) {
-                    zval_ptr_dtor(&param);
-                }
-                zval_ptr_dtor(&callable_zv);
-                zval_ptr_dtor(&args_zv);
-            } else {
-                if (Z_TYPE(args_zv) != IS_UNDEF) {
+                    for (zval &param : params) {
+                        zval_ptr_dtor(&param);
+                    }
+                    zval_ptr_dtor(&callable_zv);
                     zval_ptr_dtor(&args_zv);
+                } else {
+                    if (Z_TYPE(args_zv) != IS_UNDEF) {
+                        zval_ptr_dtor(&args_zv);
+                    }
+                    task_result = qt_qthreadruntime_state::makeErrorResult(
+                        "RuntimeException",
+                        "QThread task arguments could not be decoded."
+                    );
                 }
-                php_error_docref(NULL, E_WARNING, "QThread task arguments could not be decoded.");
+            } zend_catch {
+                bailed_out = true;
+            } zend_end_try();
+
+            if (bailed_out) {
+                task_result = qt_qthreadruntime_state::makeErrorResult(
+                    "RuntimeException",
+                    "QThread worker bailed out while executing task.",
+                    0,
+                    true
+                );
             }
         }
 
@@ -1764,12 +2067,50 @@ private:
         ts_free_thread();
 
         qt_qthreadruntime_tls_current_task_host = nullptr;
+        qt_qthreadruntime_tls_current_task_token = 0;
         qt_qthreadruntime_tls_worker_request = false;
         qt_qthreadruntime_tls_interrupted = false;
 
+        qt_qthreadruntime_value terminal_payload;
+        terminal_payload.type = qt_qthreadruntime_value_type::array_value;
+        terminal_payload.array_key_is_string = {true, true};
+        terminal_payload.array_string_keys = {"status", "token"};
+        terminal_payload.array_index_keys = {0, 0};
+        qt_qthreadruntime_value status_value;
+        status_value.type = qt_qthreadruntime_value_type::string_value;
+        status_value.string_data = task_result.success ? "success" : (task_result.canceled ? "canceled" : "failed");
+        qt_qthreadruntime_value token_value;
+        token_value.type = qt_qthreadruntime_value_type::long_value;
+        token_value.long_data = (zend_long) task_token;
+        terminal_payload.array_values.push_back(std::move(status_value));
+        terminal_payload.array_values.push_back(std::move(token_value));
+
         {
             std::lock_guard<std::mutex> lock(mutex_);
+            bool cancel_requested = task_token != 0 && canceled_future_tokens_.find(task_token) != canceled_future_tokens_.end();
+            if (cancel_requested && !task_result.error.is_fatal) {
+                task_result.success = false;
+                task_result.canceled = true;
+                task_result.payload.clear();
+                task_result.error = qt_qthreadruntime_error();
+            }
+
+            if (task_token != 0) {
+                task_result.ready = true;
+                future_results_[task_token] = task_result;
+                future_cv_.notify_all();
+
+                qt_qthreadruntime_event_message message;
+                message.job_id = task_token;
+                message.event_name = "__future_terminal";
+                message.payload = std::move(terminal_payload);
+                if (outbound_events_.size() < max_event_out_queue_depth_) {
+                    outbound_events_.push_back(std::move(message));
+                }
+            }
+
             task_running_ = false;
+            active_task_token_ = 0;
             inbound_events_.clear();
             inbound_cv_.notify_all();
         }
@@ -1784,11 +2125,14 @@ private:
             return;
         }
 
+        retain();
         if (!qt_runtime_enqueue_owner_task([this]() {
             owner_event_drain_scheduled_.store(false, std::memory_order_release);
             this->drainEvents(-1);
+            this->release();
         })) {
             owner_event_drain_scheduled_.store(false, std::memory_order_release);
+            release();
         }
     }
 };
@@ -2131,6 +2475,50 @@ PHP_QT_API bool qt_qthreadruntime_worker_receive_zval(zend_long timeout_ms, zval
     return true;
 }
 
+PHP_QT_API bool qt_qthreadruntime_current_task_context(qt_qthread_task_host **host, uint64_t *task_token)
+{
+    if (host == NULL || task_token == NULL) {
+        return false;
+    }
+
+    *host = qt_qthreadruntime_tls_current_task_host;
+    *task_token = qt_qthreadruntime_tls_current_task_token;
+    return qt_qthreadruntime_tls_current_task_host != nullptr && qt_qthreadruntime_tls_current_task_token != 0;
+}
+
+PHP_QT_API bool qt_qthreadruntime_worker_is_canceled(void)
+{
+    if (qt_qthreadruntime_tls_interrupted) {
+        return true;
+    }
+
+    if (qt_qthreadruntime_tls_current_task_host != nullptr) {
+        return qt_qthreadruntime_tls_current_task_host->workerIsCanceled();
+    }
+
+    return false;
+}
+
+PHP_QT_API bool qt_qthreadruntime_worker_publish_progress(zend_long value, zend_long minimum, zend_long maximum, zend_string *text, std::string *error)
+{
+    zval payload;
+    array_init(&payload);
+    add_assoc_long(&payload, "value", value);
+    add_assoc_long(&payload, "minimum", minimum);
+    add_assoc_long(&payload, "maximum", maximum);
+    if (text != NULL) {
+        add_assoc_stringl(&payload, "text", ZSTR_VAL(text), ZSTR_LEN(text));
+    } else {
+        add_assoc_string(&payload, "text", "");
+    }
+
+    zend_string *progress_event = zend_string_init_interned("progress", sizeof("progress") - 1, 0);
+    bool ok = qt_qthreadruntime_worker_publish_zval(progress_event, &payload, error);
+    zend_string_release(progress_event);
+    zval_ptr_dtor(&payload);
+    return ok;
+}
+
 PHP_QT_API qt_qthread_task_host *qt_qthread_task_host_create(void)
 {
     return new qt_qthread_task_host();
@@ -2142,7 +2530,23 @@ PHP_QT_API void qt_qthread_task_host_destroy(qt_qthread_task_host *host)
         return;
     }
     host->shutdown(2000);
-    delete host;
+    host->release();
+}
+
+PHP_QT_API void qt_qthread_task_host_retain(qt_qthread_task_host *host)
+{
+    if (host == NULL) {
+        return;
+    }
+    host->retain();
+}
+
+PHP_QT_API void qt_qthread_task_host_release(qt_qthread_task_host *host)
+{
+    if (host == NULL) {
+        return;
+    }
+    host->release();
 }
 
 PHP_QT_API bool qt_qthread_task_host_set_bootstrap_script(qt_qthread_task_host *host, const std::string &path, std::string *error)
@@ -2155,9 +2559,19 @@ PHP_QT_API bool qt_qthread_task_host_start(qt_qthread_task_host *host, QThread *
     return host != NULL && host->start(thread, callable_name, args_payload, has_priority, priority, error);
 }
 
+PHP_QT_API bool qt_qthread_task_host_start_future(qt_qthread_task_host *host, QThread *thread, const std::string &callable_name, const std::string &args_payload, bool has_priority, int priority, uint64_t *task_token, std::string *error)
+{
+    return host != NULL && host->startFuture(thread, callable_name, args_payload, has_priority, priority, task_token, error);
+}
+
 PHP_QT_API bool qt_qthread_task_host_on(qt_qthread_task_host *host, const std::string &event_name, zval *listener, uint64_t *listener_id, std::string *error)
 {
     return host != NULL && host->on(event_name, listener, listener_id, error);
+}
+
+PHP_QT_API bool qt_qthread_task_host_on_for_token(qt_qthread_task_host *host, uint64_t task_token, const std::string &event_name, zval *listener, uint64_t *listener_id, std::string *error)
+{
+    return host != NULL && host->onForToken(task_token, event_name, listener, listener_id, error);
 }
 
 PHP_QT_API bool qt_qthread_task_host_off(qt_qthread_task_host *host, uint64_t listener_id)
@@ -2192,6 +2606,974 @@ PHP_QT_API bool qt_qthread_task_host_execute_pending(qt_qthread_task_host *host,
 {
     return host != NULL && host->executePendingOnCurrentThread(thread);
 }
+
+PHP_QT_API bool qt_qthread_task_host_future_is_valid(qt_qthread_task_host *host, uint64_t task_token)
+{
+    return host != NULL && host->hasFuture(task_token);
+}
+
+PHP_QT_API bool qt_qthread_task_host_future_is_running(qt_qthread_task_host *host, uint64_t task_token)
+{
+    return host != NULL && host->isFutureRunning(task_token);
+}
+
+PHP_QT_API bool qt_qthread_task_host_future_is_finished(qt_qthread_task_host *host, uint64_t task_token)
+{
+    return host != NULL && host->isFutureFinished(task_token);
+}
+
+PHP_QT_API bool qt_qthread_task_host_future_is_canceled(qt_qthread_task_host *host, uint64_t task_token)
+{
+    return host != NULL && host->isFutureCanceled(task_token);
+}
+
+PHP_QT_API bool qt_qthread_task_host_future_cancel(qt_qthread_task_host *host, uint64_t task_token)
+{
+    return host != NULL && host->cancelFuture(task_token);
+}
+
+PHP_QT_API bool qt_qthread_task_host_future_wait(qt_qthread_task_host *host, uint64_t task_token, zend_long timeout_ms, bool *finished)
+{
+    return host != NULL && host->waitFuture(task_token, timeout_ms, finished);
+}
+
+PHP_QT_API bool qt_qthread_task_host_future_result(qt_qthread_task_host *host, uint64_t task_token, zend_long timeout_ms, zval *return_value, bool *timed_out, bool *canceled, std::string *error_class, std::string *error_message, zend_long *error_code, std::string *internal_error)
+{
+    if (host == NULL || return_value == NULL || timed_out == NULL || canceled == NULL || error_class == NULL || error_message == NULL || error_code == NULL || internal_error == NULL) {
+        return false;
+    }
+
+    qt_qthreadruntime_result result;
+    bool timeout = false;
+    if (!host->fetchFutureResult(task_token, timeout_ms, &result, &timeout)) {
+        *internal_error = "Unknown future token.";
+        return false;
+    }
+
+    *timed_out = timeout;
+    if (timeout) {
+        ZVAL_NULL(return_value);
+        return true;
+    }
+
+    *canceled = result.canceled;
+    if (result.canceled) {
+        ZVAL_NULL(return_value);
+        return true;
+    }
+
+    if (!result.success) {
+        *error_class = result.error.class_name;
+        *error_message = result.error.message;
+        *error_code = result.error.code;
+        ZVAL_NULL(return_value);
+        return true;
+    }
+
+    zval payload;
+    if (!qt_qthreadruntime_state::unserializeValue(result.payload, &payload)) {
+        *internal_error = "Failed to unserialize QFuture result payload.";
+        return false;
+    }
+
+    ZVAL_COPY_VALUE(return_value, &payload);
+    return true;
+}
+
+enum qt_qfuture_continuation_mode : uint8_t {
+    QT_QFUTURE_CONTINUATION_THEN = 1,
+    QT_QFUTURE_CONTINUATION_ON_FAILED = 2,
+    QT_QFUTURE_CONTINUATION_ON_CANCELED = 3,
+};
+
+struct qt_qfuture_continuation_state {
+    qt_qfuture_continuation_mode mode{QT_QFUTURE_CONTINUATION_THEN};
+    zval parent_future;
+    zval handler;
+    bool resolved{false};
+    qt_qthreadruntime_result result;
+
+    qt_qfuture_continuation_state()
+    {
+        ZVAL_UNDEF(&parent_future);
+        ZVAL_UNDEF(&handler);
+    }
+
+    ~qt_qfuture_continuation_state()
+    {
+        if (!Z_ISUNDEF(parent_future)) {
+            zval_ptr_dtor(&parent_future);
+            ZVAL_UNDEF(&parent_future);
+        }
+        if (!Z_ISUNDEF(handler)) {
+            zval_ptr_dtor(&handler);
+            ZVAL_UNDEF(&handler);
+        }
+    }
+};
+
+static thread_local zend_long qt_qpromise_tls_progress_minimum = 0;
+static thread_local zend_long qt_qpromise_tls_progress_maximum = 100;
+
+static qt_qthreadruntime_result qt_qfuture_result_from_exception_object(zval *exception_zv, const char *fallback_message)
+{
+    qt_qthreadruntime_result result;
+    result.success = false;
+    result.canceled = false;
+
+    std::string class_name = "RuntimeException";
+    std::string message = fallback_message != nullptr ? std::string(fallback_message) : std::string("Future continuation failed.");
+    zend_long code = 0;
+    if (exception_zv != nullptr && Z_TYPE_P(exception_zv) == IS_OBJECT) {
+        zend_object *ex_obj = Z_OBJ_P(exception_zv);
+        if (ex_obj != nullptr && ex_obj->ce != nullptr) {
+            class_name.assign(ZSTR_VAL(ex_obj->ce->name), ZSTR_LEN(ex_obj->ce->name));
+        }
+        zval rv;
+        zval *message_prop = zend_read_property_ex(Z_OBJCE_P(exception_zv), ex_obj, ZSTR_KNOWN(ZEND_STR_MESSAGE), 1, &rv);
+        if (message_prop != NULL) {
+            zend_string *msg = zval_get_string(message_prop);
+            if (msg != NULL) {
+                message.assign(ZSTR_VAL(msg), ZSTR_LEN(msg));
+                zend_string_release(msg);
+            }
+        }
+
+        zval *code_prop = zend_read_property_ex(Z_OBJCE_P(exception_zv), ex_obj, ZSTR_KNOWN(ZEND_STR_CODE), 1, &rv);
+        if (code_prop != NULL) {
+            code = zval_get_long(code_prop);
+        }
+    }
+
+    result.error.class_name = std::move(class_name);
+    result.error.message = std::move(message);
+    result.error.code = code;
+    return result;
+}
+
+static qt_qthreadruntime_result qt_qfuture_result_from_current_exception(const char *fallback_message)
+{
+    if (EG(exception) == NULL) {
+        return qt_qthreadruntime_state::makeErrorResult(
+            "RuntimeException",
+            fallback_message != nullptr ? std::string(fallback_message) : std::string("Future continuation failed.")
+        );
+    }
+
+    zval exception_zv;
+    ZVAL_OBJ_COPY(&exception_zv, EG(exception));
+    zend_clear_exception();
+    qt_qthreadruntime_result result = qt_qfuture_result_from_exception_object(&exception_zv, fallback_message);
+    zval_ptr_dtor(&exception_zv);
+    return result;
+}
+
+static bool qt_qfuture_serialize_success(zval *value, qt_qthreadruntime_result *result, const char *error_message)
+{
+    if (value == nullptr || result == nullptr) {
+        return false;
+    }
+
+    if (!qt_qthreadruntime_state::serializeValue(value, &result->payload)) {
+        *result = qt_qthreadruntime_state::makeErrorResult(
+            "RuntimeException",
+            error_message != nullptr ? std::string(error_message) : std::string("Failed to serialize continuation result.")
+        );
+        return false;
+    }
+
+    result->success = true;
+    result->canceled = false;
+    return true;
+}
+
+static bool qt_qfuture_call_method_bool(zval *object, const char *method_name, zend_long arg0, bool with_arg, bool *result_bool)
+{
+    if (object == nullptr || result_bool == nullptr) {
+        return false;
+    }
+
+    zval method;
+    zval retval;
+    zval params[1];
+    ZVAL_STRING(&method, method_name);
+    ZVAL_UNDEF(&retval);
+    if (with_arg) {
+        ZVAL_LONG(&params[0], arg0);
+    }
+
+    int status = call_user_function(
+        EG(function_table),
+        object,
+        &method,
+        &retval,
+        with_arg ? 1 : 0,
+        with_arg ? params : NULL
+    );
+    zval_ptr_dtor(&method);
+    if (status != SUCCESS || EG(exception) != NULL) {
+        if (!Z_ISUNDEF(retval)) {
+            zval_ptr_dtor(&retval);
+        }
+        return false;
+    }
+
+    *result_bool = zend_is_true(&retval);
+    zval_ptr_dtor(&retval);
+    return true;
+}
+
+static bool qt_qfuture_call_method_value(zval *object, const char *method_name, zend_long arg0, bool with_arg, zval *result_value)
+{
+    if (object == nullptr || result_value == nullptr) {
+        return false;
+    }
+
+    zval method;
+    zval retval;
+    zval params[1];
+    ZVAL_STRING(&method, method_name);
+    ZVAL_UNDEF(&retval);
+    if (with_arg) {
+        ZVAL_LONG(&params[0], arg0);
+    }
+
+    int status = call_user_function(
+        EG(function_table),
+        object,
+        &method,
+        &retval,
+        with_arg ? 1 : 0,
+        with_arg ? params : NULL
+    );
+    zval_ptr_dtor(&method);
+    if (status != SUCCESS || EG(exception) != NULL) {
+        if (!Z_ISUNDEF(retval)) {
+            zval_ptr_dtor(&retval);
+        }
+        return false;
+    }
+
+    ZVAL_COPY_VALUE(result_value, &retval);
+    return true;
+}
+
+static bool qt_qfuture_invoke_handler(zval *handler, uint32_t argc, zval *params, qt_qthreadruntime_result *result)
+{
+    if (handler == nullptr || result == nullptr) {
+        return false;
+    }
+
+    zval retval;
+    ZVAL_UNDEF(&retval);
+    zval handler_copy;
+    ZVAL_COPY(&handler_copy, handler);
+
+    int status = call_user_function(EG(function_table), NULL, &handler_copy, &retval, argc, params);
+    zval_ptr_dtor(&handler_copy);
+    if (status != SUCCESS || EG(exception) != NULL) {
+        if (!Z_ISUNDEF(retval)) {
+            zval_ptr_dtor(&retval);
+        }
+        *result = qt_qfuture_result_from_current_exception("Future continuation callback failed.");
+        return true;
+    }
+
+    (void) qt_qfuture_serialize_success(&retval, result, "Failed to serialize continuation callback result.");
+    zval_ptr_dtor(&retval);
+    return true;
+}
+
+static bool qt_qfuture_resolve_continuation(qt_qfuture_object *intern, zend_long timeout_ms, bool *timed_out, std::string *error)
+{
+    if (timed_out != nullptr) {
+        *timed_out = false;
+    }
+
+    if (intern == nullptr || intern->continuation == nullptr) {
+        return true;
+    }
+
+    qt_qfuture_continuation_state *state = intern->continuation;
+    if (state->resolved) {
+        return true;
+    }
+
+    bool parent_finished = false;
+    if (!qt_qfuture_call_method_bool(&state->parent_future, "wait", timeout_ms, true, &parent_finished)) {
+        state->result = qt_qfuture_result_from_current_exception("Failed to wait for parent future.");
+        state->resolved = true;
+        return true;
+    }
+    if (!parent_finished) {
+        if (timed_out != nullptr) {
+            *timed_out = true;
+        }
+        return true;
+    }
+
+    bool parent_canceled = false;
+    if (!qt_qfuture_call_method_bool(&state->parent_future, "isCanceled", 0, false, &parent_canceled)) {
+        state->result = qt_qfuture_result_from_current_exception("Failed to inspect parent cancellation state.");
+        state->resolved = true;
+        return true;
+    }
+
+    zval parent_result;
+    ZVAL_UNDEF(&parent_result);
+    bool parent_has_value = qt_qfuture_call_method_value(&state->parent_future, "result", 0, true, &parent_result);
+
+    zval parent_exception;
+    ZVAL_UNDEF(&parent_exception);
+    bool parent_failed = false;
+    if (!parent_has_value) {
+        if (EG(exception) != NULL) {
+            ZVAL_OBJ_COPY(&parent_exception, EG(exception));
+            zend_clear_exception();
+            parent_failed = !parent_canceled;
+        } else if (error != nullptr) {
+            *error = "Failed to fetch parent future result.";
+        }
+    }
+
+    if (state->mode == QT_QFUTURE_CONTINUATION_THEN) {
+        if (parent_canceled) {
+            state->result.success = false;
+            state->result.canceled = true;
+        } else if (parent_failed) {
+            state->result = qt_qfuture_result_from_exception_object(&parent_exception, "Parent future failed.");
+        } else {
+            zval params[1];
+            ZVAL_COPY(&params[0], &parent_result);
+            qt_qfuture_invoke_handler(&state->handler, 1, params, &state->result);
+            zval_ptr_dtor(&params[0]);
+        }
+    } else if (state->mode == QT_QFUTURE_CONTINUATION_ON_FAILED) {
+        if (parent_failed) {
+            zval params[1];
+            ZVAL_COPY(&params[0], &parent_exception);
+            qt_qfuture_invoke_handler(&state->handler, 1, params, &state->result);
+            zval_ptr_dtor(&params[0]);
+        } else if (parent_canceled) {
+            state->result.success = false;
+            state->result.canceled = true;
+        } else {
+            (void) qt_qfuture_serialize_success(&parent_result, &state->result, "Failed to serialize propagated parent result.");
+        }
+    } else { /* QT_QFUTURE_CONTINUATION_ON_CANCELED */
+        if (parent_canceled) {
+            qt_qfuture_invoke_handler(&state->handler, 0, NULL, &state->result);
+        } else if (parent_failed) {
+            state->result = qt_qfuture_result_from_exception_object(&parent_exception, "Parent future failed.");
+        } else {
+            (void) qt_qfuture_serialize_success(&parent_result, &state->result, "Failed to serialize propagated parent result.");
+        }
+    }
+
+    if (!Z_ISUNDEF(parent_result)) {
+        zval_ptr_dtor(&parent_result);
+    }
+    if (!Z_ISUNDEF(parent_exception)) {
+        zval_ptr_dtor(&parent_exception);
+    }
+
+    state->result.ready = true;
+    state->resolved = true;
+    return true;
+}
+
+static zend_object *qt_qfuture_create_object(zend_class_entry *ce)
+{
+    qt_qfuture_object *intern = (qt_qfuture_object *) zend_object_alloc(sizeof(qt_qfuture_object), ce);
+    intern->host = NULL;
+    intern->task_token = 0;
+    intern->continuation = nullptr;
+
+    zend_object_std_init(&intern->std, ce);
+    object_properties_init(&intern->std, ce);
+    return &intern->std;
+}
+
+static void qt_qfuture_free_object(zend_object *object)
+{
+    qt_qfuture_object *intern = qt_qfuture_from_obj(object);
+    if (intern->continuation != nullptr) {
+        delete intern->continuation;
+        intern->continuation = nullptr;
+    }
+
+    if (intern->host != NULL) {
+        qt_qthread_task_host_release(intern->host);
+        intern->host = NULL;
+    }
+    intern->task_token = 0;
+    zend_object_std_dtor(&intern->std);
+}
+
+static HashTable *qt_qfuture_get_gc(zend_object *object, zval **table, int *n)
+{
+    *table = NULL;
+    *n = 0;
+    return zend_std_get_properties(object);
+}
+
+PHP_QT_API void qt_qfuture_wrap(zval *return_value, qt_qthread_task_host *host, uint64_t task_token)
+{
+    if (return_value == NULL || host == NULL || task_token == 0 || qt_ce_QFuture == NULL) {
+        if (return_value != NULL) {
+            ZVAL_NULL(return_value);
+        }
+        return;
+    }
+
+    object_init_ex(return_value, qt_ce_QFuture);
+    if (UNEXPECTED(Z_TYPE_P(return_value) != IS_OBJECT)) {
+        return;
+    }
+
+    qt_qfuture_object *intern = Z_QFUTURE_P(return_value);
+    intern->host = host;
+    intern->task_token = task_token;
+    qt_qthread_task_host_retain(host);
+}
+
+static void qt_qfuture_throw_result_error(const qt_qthreadruntime_result &result)
+{
+    if (result.canceled) {
+        zend_throw_exception(zend_exception_get_default(), "Future was canceled.", 0);
+        return;
+    }
+
+    zend_class_entry *exception_ce = zend_exception_get_default();
+    if (!result.error.class_name.empty()) {
+        zend_string *class_name = zend_string_init(result.error.class_name.c_str(), result.error.class_name.size(), 0);
+        zend_class_entry *resolved_ce = zend_lookup_class_ex(class_name, NULL, 0);
+        zend_string_release(class_name);
+        if (resolved_ce != NULL && instanceof_function(resolved_ce, zend_ce_throwable)) {
+            exception_ce = resolved_ce;
+        }
+    }
+
+    const std::string &message = result.error.message.empty()
+        ? std::string("Future execution failed.")
+        : result.error.message;
+    zend_throw_exception(exception_ce, message.c_str(), result.error.code);
+}
+
+PHP_METHOD(QFuture, isValid)
+{
+    ZEND_PARSE_PARAMETERS_NONE();
+
+    qt_qfuture_object *intern = Z_QFUTURE_P(ZEND_THIS);
+    if (intern->continuation != nullptr) {
+        RETURN_BOOL(Z_TYPE(intern->continuation->parent_future) == IS_OBJECT);
+    }
+
+    RETURN_BOOL(intern->host != NULL && intern->task_token != 0 && qt_qthread_task_host_future_is_valid(intern->host, intern->task_token));
+}
+
+PHP_METHOD(QFuture, isRunning)
+{
+    ZEND_PARSE_PARAMETERS_NONE();
+    qt_qfuture_object *intern = Z_QFUTURE_P(ZEND_THIS);
+    if (intern->continuation != nullptr) {
+        RETURN_BOOL(!intern->continuation->resolved);
+    }
+
+    if (intern->host == NULL || intern->task_token == 0) {
+        RETURN_FALSE;
+    }
+    RETURN_BOOL(qt_qthread_task_host_future_is_running(intern->host, intern->task_token));
+}
+
+PHP_METHOD(QFuture, isFinished)
+{
+    ZEND_PARSE_PARAMETERS_NONE();
+    qt_qfuture_object *intern = Z_QFUTURE_P(ZEND_THIS);
+    if (intern->continuation != nullptr) {
+        bool timed_out = false;
+        std::string error;
+        (void) qt_qfuture_resolve_continuation(intern, 1, &timed_out, &error);
+        RETURN_BOOL(intern->continuation->resolved);
+    }
+
+    if (intern->host == NULL || intern->task_token == 0) {
+        RETURN_FALSE;
+    }
+    RETURN_BOOL(qt_qthread_task_host_future_is_finished(intern->host, intern->task_token));
+}
+
+PHP_METHOD(QFuture, isCanceled)
+{
+    ZEND_PARSE_PARAMETERS_NONE();
+    qt_qfuture_object *intern = Z_QFUTURE_P(ZEND_THIS);
+    if (intern->continuation != nullptr) {
+        bool timed_out = false;
+        std::string error;
+        (void) qt_qfuture_resolve_continuation(intern, 0, &timed_out, &error);
+        RETURN_BOOL(intern->continuation->resolved && intern->continuation->result.canceled);
+    }
+
+    if (intern->host == NULL || intern->task_token == 0) {
+        RETURN_FALSE;
+    }
+    RETURN_BOOL(qt_qthread_task_host_future_is_canceled(intern->host, intern->task_token));
+}
+
+PHP_METHOD(QFuture, cancel)
+{
+    ZEND_PARSE_PARAMETERS_NONE();
+    qt_qfuture_object *intern = Z_QFUTURE_P(ZEND_THIS);
+    if (intern->continuation != nullptr) {
+        RETURN_FALSE;
+    }
+    if (intern->host == NULL || intern->task_token == 0) {
+        RETURN_FALSE;
+    }
+    RETURN_BOOL(qt_qthread_task_host_future_cancel(intern->host, intern->task_token));
+}
+
+PHP_METHOD(QFuture, wait)
+{
+    zend_long timeout_ms = 0;
+    ZEND_PARSE_PARAMETERS_START(0, 1)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_LONG(timeout_ms)
+    ZEND_PARSE_PARAMETERS_END();
+
+    qt_qfuture_object *intern = Z_QFUTURE_P(ZEND_THIS);
+    if (intern->continuation != nullptr) {
+        bool timed_out = false;
+        std::string error;
+        if (!qt_qfuture_resolve_continuation(intern, timeout_ms, &timed_out, &error)) {
+            zend_throw_error(NULL, "%s", error.empty() ? "Failed to resolve future continuation." : error.c_str());
+            RETURN_THROWS();
+        }
+        RETURN_BOOL(!timed_out && intern->continuation->resolved);
+    }
+
+    if (intern->host == NULL || intern->task_token == 0) {
+        RETURN_FALSE;
+    }
+
+    bool finished = false;
+    if (!qt_qthread_task_host_future_wait(intern->host, intern->task_token, timeout_ms, &finished)) {
+        RETURN_FALSE;
+    }
+    RETURN_BOOL(finished);
+}
+
+PHP_METHOD(QFuture, result)
+{
+    zend_long timeout_ms = 0;
+    ZEND_PARSE_PARAMETERS_START(0, 1)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_LONG(timeout_ms)
+    ZEND_PARSE_PARAMETERS_END();
+
+    qt_qfuture_object *intern = Z_QFUTURE_P(ZEND_THIS);
+    if (intern->continuation != nullptr) {
+        bool timed_out = false;
+        std::string error;
+        if (!qt_qfuture_resolve_continuation(intern, timeout_ms, &timed_out, &error)) {
+            zend_throw_error(NULL, "%s", error.empty() ? "Failed to resolve future continuation." : error.c_str());
+            RETURN_THROWS();
+        }
+        if (timed_out || !intern->continuation->resolved) {
+            zend_throw_error(NULL, "Future result timed out.");
+            RETURN_THROWS();
+        }
+
+        if (!intern->continuation->result.success) {
+            qt_qfuture_throw_result_error(intern->continuation->result);
+            RETURN_THROWS();
+        }
+
+        zval payload;
+        if (!qt_qthreadruntime_state::unserializeValue(intern->continuation->result.payload, &payload)) {
+            zend_throw_error(NULL, "Failed to unserialize continuation result payload.");
+            RETURN_THROWS();
+        }
+        ZVAL_COPY_VALUE(return_value, &payload);
+        return;
+    }
+
+    if (intern->host == NULL || intern->task_token == 0) {
+        zend_throw_error(NULL, "Invalid QFuture state.");
+        RETURN_THROWS();
+    }
+
+    bool timed_out = false;
+    bool canceled = false;
+    std::string error_class;
+    std::string error_message;
+    zend_long error_code = 0;
+    std::string internal_error;
+    if (!qt_qthread_task_host_future_result(
+        intern->host,
+        intern->task_token,
+        timeout_ms,
+        return_value,
+        &timed_out,
+        &canceled,
+        &error_class,
+        &error_message,
+        &error_code,
+        &internal_error
+    )) {
+        zend_throw_error(NULL, "%s", internal_error.empty() ? "Failed to fetch future result." : internal_error.c_str());
+        RETURN_THROWS();
+    }
+
+    if (timed_out) {
+        zend_throw_error(NULL, "Future result timed out.");
+        RETURN_THROWS();
+    }
+    if (canceled) {
+        zend_throw_exception(zend_exception_get_default(), "Future was canceled.", 0);
+        RETURN_THROWS();
+    }
+    if (!error_class.empty() || !error_message.empty() || error_code != 0) {
+        qt_qthreadruntime_result failed;
+        failed.success = false;
+        failed.canceled = false;
+        failed.error.class_name = error_class;
+        failed.error.message = error_message;
+        failed.error.code = error_code;
+        qt_qfuture_throw_result_error(failed);
+        RETURN_THROWS();
+    }
+}
+
+PHP_METHOD(QFuture, on)
+{
+    zend_string *event_name = NULL;
+    zval *listener = NULL;
+    ZEND_PARSE_PARAMETERS_START(2, 2)
+        Z_PARAM_STR(event_name)
+        Z_PARAM_ZVAL(listener)
+    ZEND_PARSE_PARAMETERS_END();
+
+    if (ZSTR_LEN(event_name) == 0) {
+        zend_argument_value_error(1, "must be a non-empty event name");
+        RETURN_THROWS();
+    }
+
+    qt_qfuture_object *intern = Z_QFUTURE_P(ZEND_THIS);
+    if (intern->continuation != nullptr) {
+        zend_throw_error(NULL, "Event listeners are not supported on continuation futures.");
+        RETURN_THROWS();
+    }
+    if (intern->host == NULL || intern->task_token == 0) {
+        zend_throw_error(NULL, "Invalid QFuture state.");
+        RETURN_THROWS();
+    }
+
+    uint64_t listener_id = 0;
+    std::string error;
+    if (!qt_qthread_task_host_on_for_token(
+        intern->host,
+        intern->task_token,
+        std::string(ZSTR_VAL(event_name), ZSTR_LEN(event_name)),
+        listener,
+        &listener_id,
+        &error
+    )) {
+        zend_throw_error(NULL, "%s", error.empty() ? "Failed to register QFuture listener." : error.c_str());
+        RETURN_THROWS();
+    }
+
+    RETURN_LONG((zend_long) listener_id);
+}
+
+PHP_METHOD(QFuture, off)
+{
+    zend_long listener_id = 0;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_LONG(listener_id)
+    ZEND_PARSE_PARAMETERS_END();
+
+    qt_qfuture_object *intern = Z_QFUTURE_P(ZEND_THIS);
+    if (intern->host == NULL || intern->continuation != nullptr) {
+        RETURN_FALSE;
+    }
+    RETURN_BOOL(qt_qthread_task_host_off(intern->host, (uint64_t) listener_id));
+}
+
+PHP_METHOD(QFuture, drainEvents)
+{
+    zend_long max_items = -1;
+    ZEND_PARSE_PARAMETERS_START(0, 1)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_LONG(max_items)
+    ZEND_PARSE_PARAMETERS_END();
+
+    qt_qfuture_object *intern = Z_QFUTURE_P(ZEND_THIS);
+    if (intern->host == NULL || intern->continuation != nullptr) {
+        RETURN_LONG(0);
+    }
+    RETURN_LONG(qt_qthread_task_host_drain_events(intern->host, max_items));
+}
+
+static void qt_qfuture_create_continuation(zval *return_value, zval *parent_future, zval *handler, qt_qfuture_continuation_mode mode)
+{
+    object_init_ex(return_value, qt_ce_QFuture);
+    if (UNEXPECTED(Z_TYPE_P(return_value) != IS_OBJECT)) {
+        return;
+    }
+
+    qt_qfuture_object *intern = Z_QFUTURE_P(return_value);
+    intern->host = NULL;
+    intern->task_token = 0;
+    intern->continuation = new qt_qfuture_continuation_state();
+    intern->continuation->mode = mode;
+    ZVAL_COPY(&intern->continuation->parent_future, parent_future);
+    ZVAL_COPY(&intern->continuation->handler, handler);
+}
+
+PHP_METHOD(QFuture, then)
+{
+    zval *handler = NULL;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_ZVAL(handler)
+    ZEND_PARSE_PARAMETERS_END();
+
+    zend_fcall_info fci;
+    zend_fcall_info_cache fcc;
+    if (zend_fcall_info_init(handler, 0, &fci, &fcc, NULL, NULL) != SUCCESS) {
+        zend_argument_value_error(1, "must be a valid callable");
+        RETURN_THROWS();
+    }
+
+    qt_qfuture_create_continuation(return_value, ZEND_THIS, handler, QT_QFUTURE_CONTINUATION_THEN);
+}
+
+PHP_METHOD(QFuture, onFailed)
+{
+    zval *handler = NULL;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_ZVAL(handler)
+    ZEND_PARSE_PARAMETERS_END();
+
+    zend_fcall_info fci;
+    zend_fcall_info_cache fcc;
+    if (zend_fcall_info_init(handler, 0, &fci, &fcc, NULL, NULL) != SUCCESS) {
+        zend_argument_value_error(1, "must be a valid callable");
+        RETURN_THROWS();
+    }
+
+    qt_qfuture_create_continuation(return_value, ZEND_THIS, handler, QT_QFUTURE_CONTINUATION_ON_FAILED);
+}
+
+PHP_METHOD(QFuture, onCanceled)
+{
+    zval *handler = NULL;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_ZVAL(handler)
+    ZEND_PARSE_PARAMETERS_END();
+
+    zend_fcall_info fci;
+    zend_fcall_info_cache fcc;
+    if (zend_fcall_info_init(handler, 0, &fci, &fcc, NULL, NULL) != SUCCESS) {
+        zend_argument_value_error(1, "must be a valid callable");
+        RETURN_THROWS();
+    }
+
+    qt_qfuture_create_continuation(return_value, ZEND_THIS, handler, QT_QFUTURE_CONTINUATION_ON_CANCELED);
+}
+
+static const zend_function_entry qt_qfuture_methods[] = {
+    ZEND_ME(QFuture, isValid, arginfo_class_Qt_Core_QFuture_isValid, ZEND_ACC_PUBLIC)
+    ZEND_ME(QFuture, isRunning, arginfo_class_Qt_Core_QFuture_isRunning, ZEND_ACC_PUBLIC)
+    ZEND_ME(QFuture, isFinished, arginfo_class_Qt_Core_QFuture_isFinished, ZEND_ACC_PUBLIC)
+    ZEND_ME(QFuture, isCanceled, arginfo_class_Qt_Core_QFuture_isCanceled, ZEND_ACC_PUBLIC)
+    ZEND_ME(QFuture, cancel, arginfo_class_Qt_Core_QFuture_cancel, ZEND_ACC_PUBLIC)
+    ZEND_ME(QFuture, wait, arginfo_class_Qt_Core_QFuture_wait, ZEND_ACC_PUBLIC)
+    ZEND_ME(QFuture, result, arginfo_class_Qt_Core_QFuture_result, ZEND_ACC_PUBLIC)
+    ZEND_ME(QFuture, on, arginfo_class_Qt_Core_QFuture_on, ZEND_ACC_PUBLIC)
+    ZEND_ME(QFuture, off, arginfo_class_Qt_Core_QFuture_off, ZEND_ACC_PUBLIC)
+    ZEND_ME(QFuture, drainEvents, arginfo_class_Qt_Core_QFuture_drainEvents, ZEND_ACC_PUBLIC)
+    ZEND_ME(QFuture, then, arginfo_class_Qt_Core_QFuture_then, ZEND_ACC_PUBLIC)
+    ZEND_ME(QFuture, onFailed, arginfo_class_Qt_Core_QFuture_onFailed, ZEND_ACC_PUBLIC)
+    ZEND_ME(QFuture, onCanceled, arginfo_class_Qt_Core_QFuture_onCanceled, ZEND_ACC_PUBLIC)
+    ZEND_FE_END
+};
+
+static zend_object *qt_qpromise_create_object(zend_class_entry *ce)
+{
+    qt_qpromise_object *intern = (qt_qpromise_object *) zend_object_alloc(sizeof(qt_qpromise_object), ce);
+    intern->worker_context_only = true;
+    zend_object_std_init(&intern->std, ce);
+    object_properties_init(&intern->std, ce);
+    return &intern->std;
+}
+
+static void qt_qpromise_free_object(zend_object *object)
+{
+    qt_qpromise_object *intern = qt_qpromise_from_obj(object);
+    intern->worker_context_only = true;
+    zend_object_std_dtor(&intern->std);
+}
+
+static HashTable *qt_qpromise_get_gc(zend_object *object, zval **table, int *n)
+{
+    *table = NULL;
+    *n = 0;
+    return zend_std_get_properties(object);
+}
+
+PHP_METHOD(QPromise, current)
+{
+    ZEND_PARSE_PARAMETERS_NONE();
+#if !defined(ZTS)
+    RETURN_NULL();
+#else
+    qt_qthread_task_host *host = nullptr;
+    uint64_t token = 0;
+    if (!qt_qthreadruntime_current_task_context(&host, &token)) {
+        RETURN_NULL();
+    }
+
+    object_init_ex(return_value, qt_ce_QPromise);
+    if (UNEXPECTED(Z_TYPE_P(return_value) != IS_OBJECT)) {
+        RETURN_NULL();
+    }
+    qt_qpromise_object *intern = Z_QPROMISE_P(return_value);
+    intern->worker_context_only = true;
+#endif
+}
+
+PHP_METHOD(QPromise, publish)
+{
+    zend_string *event_name = NULL;
+    zval *payload = NULL;
+    ZEND_PARSE_PARAMETERS_START(1, 2)
+        Z_PARAM_STR(event_name)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_ARRAY(payload)
+    ZEND_PARSE_PARAMETERS_END();
+
+#if !defined(ZTS)
+    RETURN_FALSE;
+#else
+    std::string error;
+    if (!qt_qthreadruntime_worker_publish_zval(event_name, payload, &error)) {
+        if (!error.empty()) {
+            zend_throw_error(NULL, "%s", error.c_str());
+            RETURN_THROWS();
+        }
+        RETURN_FALSE;
+    }
+    RETURN_TRUE;
+#endif
+}
+
+PHP_METHOD(QPromise, receive)
+{
+    zend_long timeout_ms = 0;
+    ZEND_PARSE_PARAMETERS_START(0, 1)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_LONG(timeout_ms)
+    ZEND_PARSE_PARAMETERS_END();
+
+#if !defined(ZTS)
+    RETURN_NULL();
+#else
+    bool has_message = false;
+    std::string error;
+    if (!qt_qthreadruntime_worker_receive_zval(timeout_ms, return_value, &has_message, &error)) {
+        if (!error.empty()) {
+            zend_throw_error(NULL, "%s", error.c_str());
+            RETURN_THROWS();
+        }
+        RETURN_NULL();
+    }
+    if (!has_message) {
+        RETURN_NULL();
+    }
+#endif
+}
+
+PHP_METHOD(QPromise, isCanceled)
+{
+    ZEND_PARSE_PARAMETERS_NONE();
+#if !defined(ZTS)
+    RETURN_FALSE;
+#else
+    RETURN_BOOL(qt_qthreadruntime_worker_is_canceled());
+#endif
+}
+
+PHP_METHOD(QPromise, setProgressRange)
+{
+    zend_long minimum = 0;
+    zend_long maximum = 0;
+    ZEND_PARSE_PARAMETERS_START(2, 2)
+        Z_PARAM_LONG(minimum)
+        Z_PARAM_LONG(maximum)
+    ZEND_PARSE_PARAMETERS_END();
+    qt_qpromise_tls_progress_minimum = minimum;
+    qt_qpromise_tls_progress_maximum = maximum;
+}
+
+PHP_METHOD(QPromise, setProgressValue)
+{
+    zend_long value = 0;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_LONG(value)
+    ZEND_PARSE_PARAMETERS_END();
+
+#if !defined(ZTS)
+    return;
+#else
+    std::string error;
+    if (!qt_qthreadruntime_worker_publish_progress(
+        value,
+        qt_qpromise_tls_progress_minimum,
+        qt_qpromise_tls_progress_maximum,
+        NULL,
+        &error
+    ) && !error.empty()) {
+        php_error_docref(NULL, E_WARNING, "%s", error.c_str());
+    }
+#endif
+}
+
+PHP_METHOD(QPromise, setProgressValueAndText)
+{
+    zend_long value = 0;
+    zend_string *text = NULL;
+    ZEND_PARSE_PARAMETERS_START(2, 2)
+        Z_PARAM_LONG(value)
+        Z_PARAM_STR(text)
+    ZEND_PARSE_PARAMETERS_END();
+
+#if !defined(ZTS)
+    return;
+#else
+    std::string error;
+    if (!qt_qthreadruntime_worker_publish_progress(
+        value,
+        qt_qpromise_tls_progress_minimum,
+        qt_qpromise_tls_progress_maximum,
+        text,
+        &error
+    ) && !error.empty()) {
+        php_error_docref(NULL, E_WARNING, "%s", error.c_str());
+    }
+#endif
+}
+
+static const zend_function_entry qt_qpromise_methods[] = {
+    ZEND_ME(QPromise, current, arginfo_class_Qt_Core_QPromise_current, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    ZEND_ME(QPromise, publish, arginfo_class_Qt_Core_QPromise_publish, ZEND_ACC_PUBLIC)
+    ZEND_ME(QPromise, receive, arginfo_class_Qt_Core_QPromise_receive, ZEND_ACC_PUBLIC)
+    ZEND_ME(QPromise, isCanceled, arginfo_class_Qt_Core_QPromise_isCanceled, ZEND_ACC_PUBLIC)
+    ZEND_ME(QPromise, setProgressRange, arginfo_class_Qt_Core_QPromise_setProgressRange, ZEND_ACC_PUBLIC)
+    ZEND_ME(QPromise, setProgressValue, arginfo_class_Qt_Core_QPromise_setProgressValue, ZEND_ACC_PUBLIC)
+    ZEND_ME(QPromise, setProgressValueAndText, arginfo_class_Qt_Core_QPromise_setProgressValueAndText, ZEND_ACC_PUBLIC)
+    ZEND_FE_END
+};
 
 static zend_object *qt_qthreadruntime_create_object(zend_class_entry *ce)
 {
@@ -2714,6 +4096,44 @@ PHP_MINIT_FUNCTION(qt_qthreadruntime)
     qt_qthreadruntime_handlers.clone_obj = NULL;
     qt_qthreadruntime_handlers.get_gc = qt_qthreadruntime_get_gc;
     qt_ce_QThreadRuntime->default_object_handlers = &qt_qthreadruntime_handlers;
+
+    return SUCCESS;
+}
+
+PHP_MINIT_FUNCTION(qt_qfuture)
+{
+    zend_class_entry ce;
+    INIT_NS_CLASS_ENTRY(ce, "Qt\\Core", "QFuture", qt_qfuture_methods);
+    ce.create_object = qt_qfuture_create_object;
+
+    qt_ce_QFuture = zend_register_internal_class(&ce);
+    qt_ce_QFuture->ce_flags |= ZEND_ACC_FINAL;
+
+    memcpy(&qt_qfuture_handlers, &std_object_handlers, sizeof(zend_object_handlers));
+    qt_qfuture_handlers.offset = XtOffsetOf(qt_qfuture_object, std);
+    qt_qfuture_handlers.free_obj = qt_qfuture_free_object;
+    qt_qfuture_handlers.clone_obj = NULL;
+    qt_qfuture_handlers.get_gc = qt_qfuture_get_gc;
+    qt_ce_QFuture->default_object_handlers = &qt_qfuture_handlers;
+
+    return SUCCESS;
+}
+
+PHP_MINIT_FUNCTION(qt_qpromise)
+{
+    zend_class_entry ce;
+    INIT_NS_CLASS_ENTRY(ce, "Qt\\Core", "QPromise", qt_qpromise_methods);
+    ce.create_object = qt_qpromise_create_object;
+
+    qt_ce_QPromise = zend_register_internal_class(&ce);
+    qt_ce_QPromise->ce_flags |= ZEND_ACC_FINAL;
+
+    memcpy(&qt_qpromise_handlers, &std_object_handlers, sizeof(zend_object_handlers));
+    qt_qpromise_handlers.offset = XtOffsetOf(qt_qpromise_object, std);
+    qt_qpromise_handlers.free_obj = qt_qpromise_free_object;
+    qt_qpromise_handlers.clone_obj = NULL;
+    qt_qpromise_handlers.get_gc = qt_qpromise_get_gc;
+    qt_ce_QPromise->default_object_handlers = &qt_qpromise_handlers;
 
     return SUCCESS;
 }

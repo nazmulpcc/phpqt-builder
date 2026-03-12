@@ -55,6 +55,7 @@ namespace {!! $ctx->phpNamespace !!};
     public function off(int $listenerId): bool {}
     public function drainEvents(int $maxItems = -1): int {}
     public function send(string $event, array $payload = []): bool {}
+    public function startFuture(string $callable, array $args = [], ?int $priority = null): \Qt\Core\QFuture {}
     public static function publish(string $event, array $payload = []): bool {}
     /** @return array{event:string,payload:array}|null */
     public static function receive(int $timeoutMs = 0): ?array {}
