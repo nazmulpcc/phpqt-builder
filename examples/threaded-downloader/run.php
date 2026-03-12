@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 require dirname(__DIR__) . '/_support/bootstrap.php';
 
-use Qt\Core\QThreadRuntime;
+use Qt\Core\QFuture;
+use Qt\Core\QThread;
 use Qt\Core\QTimer;
 use Qt\Widgets\QApplication;
 use Qt\Widgets\QHBoxLayout;
@@ -43,6 +44,37 @@ function runtime_bootstrap_script(): string
     return __DIR__ . '/worker_runtime_bootstrap.php';
 }
 
+/**
+ * @return array{thread:QThread,future:QFuture}
+ */
+function start_thread_task(string $callable, array $args): array
+{
+    $thread = new QThread(null, runtime_bootstrap_script());
+    $future = $thread->startFuture($callable, $args);
+
+    return ['thread' => $thread, 'future' => $future];
+}
+
+/**
+ * @param array{thread:QThread,future:QFuture}|null $task
+ */
+function stop_thread_task(?array $task, int $timeoutMs = 2000): void
+{
+    if ($task === null) {
+        return;
+    }
+
+    try {
+        $task['future']->cancel();
+    } catch (Throwable) {
+    }
+
+    try {
+        $task['thread']->wait($timeoutMs);
+    } catch (Throwable) {
+    }
+}
+
 example_section('Threaded Downloader');
 
 if (!extension_loaded('curl')) {
@@ -54,7 +86,8 @@ try {
         QApplication::class,
         QWidget::class,
         QTimer::class,
-        QThreadRuntime::class,
+        QThread::class,
+        QFuture::class,
     ]);
 } catch (Throwable $throwable) {
     example_fail($throwable->getMessage() . ' Build with QtCore and QtWidgets modules.');
@@ -67,7 +100,7 @@ if (!is_file(runtime_bootstrap_script())) {
 $app = new QApplication();
 $window = new QWidget();
 $window->resize(900, 700);
-$window->setWindowTitle('Threaded Downloader (QThreadRuntime + cURL)');
+$window->setWindowTitle('Threaded Downloader (QThread + QFuture + cURL)');
 $window->setStyleSheet(<<<'CSS'
 QWidget { background: #f8fafc; color: #0f172a; font-size: 13px; }
 QLabel[role="title"] { font-size: 20px; font-weight: 700; }
@@ -85,7 +118,7 @@ $root->setContentsMargins(18, 18, 18, 18);
 $title = new QLabel('Threaded Downloader');
 $title->setProperty('role', 'title');
 $desc = new QLabel(
-    'Parallel byte-range download using QThreadRuntime workers. Each worker builds its own cURL handle in an isolated PHP runtime.'
+    'Parallel byte-range download using QThread task mode workers. Each worker runs blocking cURL in an isolated PHP runtime.'
 );
 $desc->setWordWrap(true);
 
@@ -167,11 +200,11 @@ $finalOutputPath = '';
 $sessionDir = '';
 $sourceUrl = '';
 
-/** @var array{runtime:QThreadRuntime,jobId:int}|null $probeTask */
+/** @var array{thread:QThread,future:QFuture}|null $probeTask */
 $probeTask = null;
-/** @var array<int, array{index:int,runtime:QThreadRuntime,jobId:int,start:int,end:int,total:int,path:string,done:bool,error:?string}> $rangeTasks */
+/** @var array<int, array{index:int,thread:QThread,future:QFuture,start:int,end:int,total:int,path:string,done:bool,error:?string}> $rangeTasks */
 $rangeTasks = [];
-/** @var array{runtime:QThreadRuntime,jobId:int}|null $mergeTask */
+/** @var array{thread:QThread,future:QFuture}|null $mergeTask */
 $mergeTask = null;
 
 $activeThreadRows = 0;
@@ -187,6 +220,7 @@ $resetThreadProgress = static function (int $activeCount) use (
     $activeThreadRows = $activeCount;
     $threadProgressTitle->setVisible($activeCount > 0);
     $threadProgressWidget->setVisible($activeCount > 0);
+
     for ($i = 0; $i < 32; $i++) {
         if ($i < $activeCount) {
             $threadProgressRows[$i]->setVisible(true);
@@ -201,41 +235,17 @@ $resetThreadProgress = static function (int $activeCount) use (
     }
 };
 
-$stopRuntime = static function (?QThreadRuntime $runtime, int $timeoutMs = 2000): void {
-    if ($runtime === null) {
-        return;
-    }
-
-    try {
-        $runtime->stop($timeoutMs);
-    } catch (Throwable) {
-    }
-};
-
-$cleanupActiveTasks = static function (int $timeoutMs = 2000) use (&$probeTask, &$rangeTasks, &$mergeTask, $stopRuntime): void {
-    if ($probeTask !== null) {
-        $stopRuntime($probeTask['runtime'], $timeoutMs);
-        $probeTask = null;
-    }
+$cleanupActiveTasks = static function (int $timeoutMs = 2000) use (&$probeTask, &$rangeTasks, &$mergeTask): void {
+    stop_thread_task($probeTask, $timeoutMs);
+    $probeTask = null;
 
     foreach ($rangeTasks as $task) {
-        $stopRuntime($task['runtime'], $timeoutMs);
+        stop_thread_task(['thread' => $task['thread'], 'future' => $task['future']], $timeoutMs);
     }
     $rangeTasks = [];
 
-    if ($mergeTask !== null) {
-        $stopRuntime($mergeTask['runtime'], $timeoutMs);
-        $mergeTask = null;
-    }
-};
-
-$startRuntimeTask = static function (string $method, array $args) use ($appendLog): array {
-    $runtime = new QThreadRuntime();
-    $runtime->setBootstrapScript(runtime_bootstrap_script());
-    $runtime->start();
-    $jobId = $runtime->submit(['ThreadedDownloaderWorkerTasks', $method], $args);
-    $appendLog(sprintf('Started worker job: %s', $method));
-    return ['runtime' => $runtime, 'jobId' => $jobId];
+    stop_thread_task($mergeTask, $timeoutMs);
+    $mergeTask = null;
 };
 
 $failRun = static function (string $status, string $reason) use (
@@ -274,9 +284,7 @@ $progressTimer->onTimeout(static function () use (
     &$rangeTasks,
     &$mergeTask,
     $appendLog,
-    $startRuntimeTask,
     $failRun,
-    $stopRuntime,
     $statusLabel,
     $progressLabel,
     $outputLabel,
@@ -292,22 +300,24 @@ $progressTimer->onTimeout(static function () use (
 
         $downloaded = 0;
         foreach ($partPaths as $i => $path) {
-            if (is_file($path)) {
-                $size = (int) filesize($path);
-                $downloaded += $size;
+            if (!is_file($path)) {
+                continue;
+            }
 
-                if (isset($rangeTasks[$i]) && $rangeTasks[$i]['total'] > 0 && $i < $activeThreadRows) {
-                    $partTotal = $rangeTasks[$i]['total'];
-                    $partPct = (int) round(min(100.0, ($size / $partTotal) * 100.0));
-                    $threadProgressBars[$i]->setValue($partPct);
-                    $threadProgressLabels[$i]->setText(sprintf(
-                        'Thread %d: %d%% (%d/%d)',
-                        $i + 1,
-                        $partPct,
-                        $size,
-                        $partTotal
-                    ));
-                }
+            $size = (int) filesize($path);
+            $downloaded += $size;
+
+            if (isset($rangeTasks[$i]) && $rangeTasks[$i]['total'] > 0 && $i < $activeThreadRows) {
+                $partTotal = $rangeTasks[$i]['total'];
+                $partPct = (int) round(min(100.0, ($size / $partTotal) * 100.0));
+                $threadProgressBars[$i]->setValue($partPct);
+                $threadProgressLabels[$i]->setText(sprintf(
+                    'Thread %d: %d%% (%d/%d)',
+                    $i + 1,
+                    $partPct,
+                    $size,
+                    $partTotal
+                ));
             }
         }
 
@@ -326,18 +336,18 @@ $progressTimer->onTimeout(static function () use (
                 return;
             }
 
+            if (!$probeTask['future']->wait(1)) {
+                return;
+            }
+
             try {
-                $result = $probeTask['runtime']->await($probeTask['jobId'], 1);
+                $result = $probeTask['future']->result();
             } catch (Throwable $throwable) {
                 $failRun('probe failed', 'Probe failed: ' . $throwable->getMessage());
                 return;
             }
 
-            if ($result === null) {
-                return;
-            }
-
-            $stopRuntime($probeTask['runtime']);
+            stop_thread_task($probeTask);
             $probeTask = null;
 
             if (!is_array($result) || !isset($result['size'])) {
@@ -377,7 +387,7 @@ $progressTimer->onTimeout(static function () use (
                 $path = $partPaths[$i];
 
                 try {
-                    $task = $startRuntimeTask('downloadRangeToFile', [$sourceUrl, $start, $end, $path]);
+                    $task = start_thread_task('ThreadedDownloaderWorkerTasks::downloadRangeToFile', [$sourceUrl, $start, $end, $path]);
                 } catch (Throwable $throwable) {
                     $failRun('failed', sprintf('Could not start range worker %d: %s', $i, $throwable->getMessage()));
                     return;
@@ -385,8 +395,8 @@ $progressTimer->onTimeout(static function () use (
 
                 $rangeTasks[$i] = [
                     'index' => $i,
-                    'runtime' => $task['runtime'],
-                    'jobId' => $task['jobId'],
+                    'thread' => $task['thread'],
+                    'future' => $task['future'],
                     'start' => $start,
                     'end' => $end,
                     'total' => ($end - $start) + 1,
@@ -410,23 +420,23 @@ $progressTimer->onTimeout(static function () use (
                     continue;
                 }
 
-                try {
-                    $result = $task['runtime']->await($task['jobId'], 1);
-                } catch (Throwable $throwable) {
-                    $task['done'] = true;
-                    $task['error'] = $throwable->getMessage();
-                    $stopRuntime($task['runtime']);
-                    $failed = true;
-                    continue;
-                }
-
-                if ($result === null) {
+                if (!$task['future']->wait(1)) {
                     $allDone = false;
                     continue;
                 }
 
+                try {
+                    $result = $task['future']->result();
+                } catch (Throwable $throwable) {
+                    $task['done'] = true;
+                    $task['error'] = $throwable->getMessage();
+                    stop_thread_task(['thread' => $task['thread'], 'future' => $task['future']]);
+                    $failed = true;
+                    continue;
+                }
+
                 $task['done'] = true;
-                $stopRuntime($task['runtime']);
+                stop_thread_task(['thread' => $task['thread'], 'future' => $task['future']]);
 
                 if (!is_array($result) || !($result['ok'] ?? false)) {
                     $task['error'] = 'Invalid worker result payload.';
@@ -459,7 +469,7 @@ $progressTimer->onTimeout(static function () use (
             $stage = 'merge';
 
             try {
-                $mergeTask = $startRuntimeTask('mergeParts', [$partPaths, $finalOutputPath]);
+                $mergeTask = start_thread_task('ThreadedDownloaderWorkerTasks::mergeParts', [$partPaths, $finalOutputPath]);
             } catch (Throwable $throwable) {
                 $failRun('merge failed', 'Could not start merge worker: ' . $throwable->getMessage());
             }
@@ -473,18 +483,18 @@ $progressTimer->onTimeout(static function () use (
                 return;
             }
 
+            if (!$mergeTask['future']->wait(1)) {
+                return;
+            }
+
             try {
-                $result = $mergeTask['runtime']->await($mergeTask['jobId'], 1);
+                $result = $mergeTask['future']->result();
             } catch (Throwable $throwable) {
                 $failRun('merge failed', 'Merge failed: ' . $throwable->getMessage());
                 return;
             }
 
-            if ($result === null) {
-                return;
-            }
-
-            $stopRuntime($mergeTask['runtime']);
+            stop_thread_task($mergeTask);
             $mergeTask = null;
 
             if (!is_array($result) || !($result['ok'] ?? false)) {
@@ -520,7 +530,6 @@ $app->onAboutToQuit(static function () use (
     $busy = false;
     $stage = 'idle';
     $progressTimer->stop();
-    // During app shutdown, avoid destroying runtimes while their QThread is alive.
     $cleanupActiveTasks(120000);
 });
 
@@ -537,7 +546,6 @@ $downloadButton->onClicked(static function (bool $checked = false) use (
     &$rangeTasks,
     &$mergeTask,
     $cleanupActiveTasks,
-    $startRuntimeTask,
     $urlInput,
     $threadInput,
     $downloadButton,
@@ -606,7 +614,7 @@ $downloadButton->onClicked(static function (bool $checked = false) use (
         $resetThreadProgress($threads);
         $appendLog('Starting probe worker for URL: ' . $url);
 
-        $probeTask = $startRuntimeTask('probe', [$url]);
+        $probeTask = start_thread_task('ThreadedDownloaderWorkerTasks::probe', [$url]);
     } catch (Throwable $throwable) {
         $busy = false;
         $stage = 'idle';
@@ -621,4 +629,4 @@ $downloadButton->onClicked(static function (bool $checked = false) use (
 });
 
 $window->show();
-QApplication::exec();
+$app->exec();

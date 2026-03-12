@@ -49,7 +49,7 @@ php -dextension=$PWD/build/ext/.libs/qt.so examples/<example>/run.php
 - `bluetooth-scan-connect`
   An easy Bluetooth demo to scan nearby devices, inspect services, and attempt a socket connection.
 - `threaded-downloader`
-  A range-based downloader using `QThreadRuntime` worker runtimes for per-part downloads and a final merge worker.
+  A range-based downloader using `QThread` task mode and `QFuture` workers for per-part downloads and a final merge worker.
 
 ## Data model
 
