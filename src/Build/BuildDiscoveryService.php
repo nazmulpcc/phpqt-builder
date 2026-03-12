@@ -725,7 +725,9 @@ class BuildDiscoveryService
                     'reason_message' => $result->reasonMessage,
                 ];
 
-                $this->writeClassStructureCache($metadataDir, $candidate, $includePaths, $payload);
+                $cacheCandidate = $this->cacheCandidateForPayload($candidate, $payload);
+                $this->writeClassStructureCache($metadataDir, $cacheCandidate, $includePaths, $payload);
+                $this->writeReferencedNestedClassStructureCaches($metadataDir, $candidate, $includePaths, $payload);
                 $this->recordClassStructurePayload(
                     $candidate,
                     $payload,
@@ -1211,6 +1213,18 @@ class BuildDiscoveryService
     private function classCachePath(string $metadataDir, HeaderCandidate $candidate): string
     {
         $safeClassName = preg_replace('/[^A-Za-z0-9_.-]/', '_', $candidate->resolvedGenerationId()) ?? $candidate->resolvedGenerationId();
+        $stableSuffix = substr(sha1(implode('|', [
+            $candidate->module,
+            $candidate->className,
+            $candidate->parseHeader,
+        ])), 0, 12);
+
+        return $this->classCacheDir($metadataDir) . '/' . $safeClassName . '__' . $stableSuffix . '.json';
+    }
+
+    private function legacyClassCachePath(string $metadataDir, HeaderCandidate $candidate): string
+    {
+        $safeClassName = preg_replace('/[^A-Za-z0-9_.-]/', '_', $candidate->resolvedGenerationId()) ?? $candidate->resolvedGenerationId();
 
         return $this->classCacheDir($metadataDir) . '/' . $safeClassName . '.json';
     }
@@ -1221,38 +1235,49 @@ class BuildDiscoveryService
      */
     private function readClassStructureCache(string $metadataDir, HeaderCandidate $candidate, array $includePaths): ?array
     {
-        $path = $this->classCachePath($metadataDir, $candidate);
-        if (!is_file($path)) {
-            return null;
+        foreach ($this->classStructureCacheLookupCandidates($candidate) as $lookupCandidate) {
+            $paths = array_values(array_unique([
+                $this->classCachePath($metadataDir, $lookupCandidate),
+                $this->legacyClassCachePath($metadataDir, $lookupCandidate),
+            ]));
+
+            foreach ($paths as $path) {
+                if (!is_file($path)) {
+                    continue;
+                }
+
+                $decoded = json_decode((string) file_get_contents($path), true);
+                if (!is_array($decoded)) {
+                    continue;
+                }
+
+                if (($decoded['schema_version'] ?? null) !== self::CLASS_CACHE_SCHEMA_VERSION) {
+                    continue;
+                }
+
+                $cacheKey = (string) ($decoded['cache_key'] ?? '');
+                if ($cacheKey === '' || !hash_equals($this->classStructureCacheKey($lookupCandidate, $includePaths), $cacheKey)) {
+                    continue;
+                }
+
+                $currentMtime = @filemtime($lookupCandidate->parseHeader);
+                $currentSize = @filesize($lookupCandidate->parseHeader);
+                if (($decoded['parse_header_mtime'] ?? null) !== ($currentMtime !== false ? $currentMtime : null)) {
+                    continue;
+                }
+
+                if (($decoded['parse_header_size'] ?? null) !== ($currentSize !== false ? $currentSize : null)) {
+                    continue;
+                }
+
+                $payload = $decoded['payload'] ?? null;
+                if (is_array($payload)) {
+                    return $payload;
+                }
+            }
         }
 
-        $decoded = json_decode((string) file_get_contents($path), true);
-        if (!is_array($decoded)) {
-            return null;
-        }
-
-        if (($decoded['schema_version'] ?? null) !== self::CLASS_CACHE_SCHEMA_VERSION) {
-            return null;
-        }
-
-        $cacheKey = (string) ($decoded['cache_key'] ?? '');
-        if ($cacheKey === '' || !hash_equals($this->classStructureCacheKey($candidate, $includePaths), $cacheKey)) {
-            return null;
-        }
-
-        $currentMtime = @filemtime($candidate->parseHeader);
-        $currentSize = @filesize($candidate->parseHeader);
-        if (($decoded['parse_header_mtime'] ?? null) !== ($currentMtime !== false ? $currentMtime : null)) {
-            return null;
-        }
-
-        if (($decoded['parse_header_size'] ?? null) !== ($currentSize !== false ? $currentSize : null)) {
-            return null;
-        }
-
-        $payload = $decoded['payload'] ?? null;
-
-        return is_array($payload) ? $payload : null;
+        return null;
     }
 
     /**
@@ -1297,6 +1322,101 @@ class BuildDiscoveryService
         ], JSON_UNESCAPED_SLASHES);
 
         return sha1($encoded !== false ? $encoded : $candidate->identityKey());
+    }
+
+    /**
+     * @return list<HeaderCandidate>
+     */
+    private function classStructureCacheLookupCandidates(HeaderCandidate $candidate): array
+    {
+        $candidates = [$candidate];
+
+        if ($candidate->qualifiedClassName !== null || $candidate->generationId !== null) {
+            $candidates[] = new HeaderCandidate(
+                module: $candidate->module,
+                className: $candidate->className,
+                publicHeader: $candidate->publicHeader,
+                parseHeader: $candidate->parseHeader,
+            );
+        }
+
+        /** @var array<string, HeaderCandidate> $unique */
+        $unique = [];
+        foreach ($candidates as $item) {
+            $unique[$item->resolvedGenerationId()] = $item;
+        }
+
+        return array_values($unique);
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     */
+    private function cacheCandidateForPayload(HeaderCandidate $candidate, array $payload): HeaderCandidate
+    {
+        if (($payload['status'] ?? null) !== 'ok') {
+            return $candidate;
+        }
+
+        $classData = $payload['class_data'] ?? null;
+        if (!is_array($classData)) {
+            return $candidate;
+        }
+
+        $qualifiedName = is_string($classData['qualified_name'] ?? null)
+            ? trim((string) $classData['qualified_name'])
+            : '';
+
+        return $candidate->withQualifiedClassName($qualifiedName !== '' ? $qualifiedName : null);
+    }
+
+    /**
+     * @param list<string> $includePaths
+     * @param array<string, mixed> $payload
+     */
+    private function writeReferencedNestedClassStructureCaches(
+        string $metadataDir,
+        HeaderCandidate $ownerCandidate,
+        array $includePaths,
+        array $payload,
+    ): void {
+        foreach ((array) ($payload['referenced_nested_class_data'] ?? []) as $nestedClassData) {
+            if (!is_array($nestedClassData)) {
+                continue;
+            }
+
+            $nestedName = is_string($nestedClassData['name'] ?? null)
+                ? trim((string) $nestedClassData['name'])
+                : '';
+            $nestedQualifiedName = is_string($nestedClassData['qualified_name'] ?? null)
+                ? trim((string) $nestedClassData['qualified_name'])
+                : '';
+            if ($nestedName === '' || $nestedQualifiedName === '') {
+                continue;
+            }
+
+            $identity = GeneratedTypeIdentity::fromNames($nestedName, $nestedQualifiedName, $ownerCandidate->module);
+            $nestedCandidate = new HeaderCandidate(
+                module: $ownerCandidate->module,
+                className: $nestedName,
+                publicHeader: $ownerCandidate->publicHeader,
+                parseHeader: $ownerCandidate->parseHeader,
+                qualifiedClassName: $identity->canonicalKey,
+                generationId: $identity->generationId,
+            );
+
+            $nestedPayload = [
+                'status' => 'ok',
+                'class' => $nestedName,
+                'header' => $ownerCandidate->parseHeader,
+                'task_key' => $nestedCandidate->identityKey(),
+                'class_data' => $this->withDiscoveryModule($nestedClassData, $ownerCandidate->module),
+                'referenced_nested_class_data' => [],
+                'reason_code' => null,
+                'reason_message' => null,
+            ];
+            $this->writeClassStructureCache($metadataDir, $nestedCandidate, $includePaths, $nestedPayload);
+        }
     }
 
     /**
