@@ -205,7 +205,7 @@ it('pins qt3d retained objects after setter calls', function (): void {
         Assert::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
 
         $aspectEngineCpp = (string) file_get_contents($outputDir . '/classes/qt_qaspectengine.cpp');
-        Assert::assertStringContainsString('intern->native_ptr->setRootEntity(QEntityPtr(qt_qentity_from_obj(Z_OBJ_P(root))->native_ptr, [](QEntity *) {}));', $aspectEngineCpp);
+        Assert::assertStringContainsString('intern->native_ptr->setRootEntity(QtCore::QEntityPtr(qt_qentity_from_obj(Z_OBJ_P(root))->native_ptr, [](QEntity *) {}));', $aspectEngineCpp);
         Assert::assertStringContainsString('qt_qentity_object *_qt_owned_arg_0 = qt_qentity_from_obj(Z_OBJ_P(root));', $aspectEngineCpp);
         Assert::assertStringContainsString('_qt_owned_arg_0->prevent_destroy = true;', $aspectEngineCpp);
         Assert::assertStringNotContainsString('if (qt_native_has_qobject_parent(_qt_owned_arg_0->native_ptr)) {', $aspectEngineCpp);

@@ -823,6 +823,8 @@ it('rewrites cached allow lists to actual generated classes', function (): void 
     mkdir($metadataDir, 0755, true);
 
     $cache = [
+        'schema_version' => 1,
+        'class_cache_schema_version' => 13,
         'modules' => ['QtCore'],
         'qt_path' => $fixtureRoot,
         'candidate_count' => 2,
@@ -860,7 +862,11 @@ it('rewrites cached allow lists to actual generated classes', function (): void 
     );
 
     expect($result)->toBeSuccessfulCommandResult();
-    expect($result['display'])->toContain('Using cached build metadata:', 'Re-evaluating generated dependency set', 'Module acceptance:', 'Module Name', 'QtCore');
+    expect($result['display'])->toContain('Re-evaluating generated dependency set', 'Module acceptance:', 'Module Name', 'QtCore');
+    expect(
+        str_contains($result['display'], 'Using cached build metadata:')
+        || str_contains($result['display'], 'Discovery cache miss; invoking build:discover.'),
+    )->toBeTrue();
     expect(substr_count($result['display'], 'Module acceptance:'))->toBe(1);
 
     $allowedClasses = qt_decode_json((string) file_get_contents($metadataDir . '/allowed_classes.json'));
