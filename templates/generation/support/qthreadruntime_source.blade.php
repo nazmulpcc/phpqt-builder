@@ -69,6 +69,15 @@ static std::atomic_uint64_t qt_qthreadruntime_total_events_in_dropped_full{0};
 static std::atomic_uint64_t qt_qthreadruntime_total_events_in_dropped_shutdown{0};
 static std::atomic_uint64_t qt_qthreadruntime_total_listener_dispatch_errors{0};
 
+static zend_always_inline zend_class_entry *qt_qthreadruntime_default_exception_ce()
+{
+#if PHP_VERSION_ID >= 80500
+    return zend_ce_exception;
+#else
+    return zend_exception_get_default();
+#endif
+}
+
 static size_t qt_qthreadruntime_env_queue_depth()
 {
     const char *raw = getenv("QT_QTHREADRUNTIME_MAX_QUEUE_DEPTH");
@@ -3040,11 +3049,11 @@ PHP_QT_API void qt_qfuture_wrap(zval *return_value, qt_qthread_task_host *host, 
 static void qt_qfuture_throw_result_error(const qt_qthreadruntime_result &result)
 {
     if (result.canceled) {
-        zend_throw_exception(zend_exception_get_default(), "Future was canceled.", 0);
+        zend_throw_exception(qt_qthreadruntime_default_exception_ce(), "Future was canceled.", 0);
         return;
     }
 
-    zend_class_entry *exception_ce = zend_exception_get_default();
+    zend_class_entry *exception_ce = qt_qthreadruntime_default_exception_ce();
     if (!result.error.class_name.empty()) {
         zend_string *class_name = zend_string_init(result.error.class_name.c_str(), result.error.class_name.size(), 0);
         zend_class_entry *resolved_ce = zend_lookup_class_ex(class_name, NULL, 0);
@@ -3230,7 +3239,7 @@ PHP_METHOD(QFuture, result)
         RETURN_THROWS();
     }
     if (canceled) {
-        zend_throw_exception(zend_exception_get_default(), "Future was canceled.", 0);
+        zend_throw_exception(qt_qthreadruntime_default_exception_ce(), "Future was canceled.", 0);
         RETURN_THROWS();
     }
     if (!error_class.empty() || !error_message.empty() || error_code != 0) {
@@ -3961,7 +3970,7 @@ PHP_METHOD(QThreadRuntime, await)
     }
 
     if (!result.success) {
-        zend_class_entry *exception_ce = zend_exception_get_default();
+        zend_class_entry *exception_ce = qt_qthreadruntime_default_exception_ce();
         if (!result.error.class_name.empty()) {
             zend_string *class_name = zend_string_init(result.error.class_name.c_str(), result.error.class_name.size(), 0);
             zend_class_entry *resolved_ce = zend_lookup_class_ex(class_name, NULL, 0);
