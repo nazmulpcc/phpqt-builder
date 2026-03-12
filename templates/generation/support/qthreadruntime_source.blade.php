@@ -81,7 +81,7 @@ static zend_always_inline zend_class_entry *qt_qthreadruntime_default_exception_
 static zend_always_inline void qt_qthreadruntime_throw_nts_runtime_exception(const char *method_name)
 {
     zend_throw_exception_ex(
-        zend_ce_runtime_exception,
+        qt_runtime_exception_ce(),
         0,
         "%s requires a ZTS PHP build (thread start/management APIs are unavailable on NTS).",
         method_name
@@ -3975,7 +3975,7 @@ PHP_METHOD(QThreadRuntime, await)
         RETURN_NULL();
     }
     if (status == qt_qthreadruntime_await_status::unknown) {
-        zend_throw_error(NULL, "Unknown job id %" ZEND_LONG_FMT ".", job_id);
+        zend_throw_error(NULL, "Unknown job id %lld.", (long long) job_id);
         RETURN_THROWS();
     }
 

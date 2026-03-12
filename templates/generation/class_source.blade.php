@@ -1896,7 +1896,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, on)
 
 #if !defined(ZTS)
     zend_throw_exception_ex(
-        zend_ce_runtime_exception,
+        qt_runtime_exception_ce(),
         0,
         "Qt\\Core\\QThread::on() requires a ZTS PHP build (thread start/management APIs are unavailable on NTS)."
     );
@@ -1940,7 +1940,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, off)
 
 #if !defined(ZTS)
     zend_throw_exception_ex(
-        zend_ce_runtime_exception,
+        qt_runtime_exception_ce(),
         0,
         "Qt\\Core\\QThread::off() requires a ZTS PHP build (thread start/management APIs are unavailable on NTS)."
     );
@@ -1969,7 +1969,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, drainEvents)
 
 #if !defined(ZTS)
     zend_throw_exception_ex(
-        zend_ce_runtime_exception,
+        qt_runtime_exception_ce(),
         0,
         "Qt\\Core\\QThread::drainEvents() requires a ZTS PHP build (thread start/management APIs are unavailable on NTS)."
     );
@@ -2001,7 +2001,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, send)
 
 #if !defined(ZTS)
     zend_throw_exception_ex(
-        zend_ce_runtime_exception,
+        qt_runtime_exception_ce(),
         0,
         "Qt\\Core\\QThread::send() requires a ZTS PHP build (thread start/management APIs are unavailable on NTS)."
     );
@@ -2049,7 +2049,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, startFuture)
 
 #if !defined(ZTS)
     zend_throw_exception_ex(
-        zend_ce_runtime_exception,
+        qt_runtime_exception_ce(),
         0,
         "Qt\\Core\\QThread::startFuture() requires a ZTS PHP build (thread start/management APIs are unavailable on NTS)."
     );
@@ -2154,7 +2154,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, publish)
 
 #if !defined(ZTS)
     zend_throw_exception_ex(
-        zend_ce_runtime_exception,
+        qt_runtime_exception_ce(),
         0,
         "Qt\\Core\\QThread::publish() requires a ZTS PHP build (thread start/management APIs are unavailable on NTS)."
     );
@@ -2184,7 +2184,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, receive)
 
 #if !defined(ZTS)
     zend_throw_exception_ex(
-        zend_ce_runtime_exception,
+        qt_runtime_exception_ce(),
         0,
         "Qt\\Core\\QThread::receive() requires a ZTS PHP build (thread start/management APIs are unavailable on NTS)."
     );

@@ -152,6 +152,7 @@ it('registers parents before children in extension source', function (): void {
             'bool qt_runtime_can_call_zend(void)',
             'bool qt_runtime_is_shutdown_in_progress(void)',
             'void qt_runtime_mark_shutdown_in_progress(void)',
+            'zend_class_entry *qt_runtime_exception_ce(void)',
             'void qt_runtime_try_hook_about_to_quit(void)',
             'bool qt_runtime_enqueue_owner_task(std::function<void()> task)',
             'void qt_runtime_schedule_owner_drain(void)',
@@ -183,6 +184,7 @@ it('registers parents before children in extension source', function (): void {
         'bool qt_runtime_can_call_zend(void);',
             'bool qt_runtime_is_shutdown_in_progress(void);',
             'void qt_runtime_mark_shutdown_in_progress(void);',
+            'zend_class_entry *qt_runtime_exception_ce(void);',
             'void qt_runtime_try_hook_about_to_quit(void);',
             'bool qt_runtime_enqueue_owner_task(std::function<void()> task);',
             'void qt_runtime_schedule_owner_drain(void);',
@@ -265,7 +267,7 @@ it('emits qthreadruntime support minit and shutdown hook when enabled', function
         'qt_qthreadruntime_is_worker_request_context()',
         'qt_qthreadruntime_shutdown_all(2000);',
         'qt_qthreadruntime_phpinfo_rows();',
-    );
+    )->not->toContain('zend_ce_runtime_exception');
 });
 
 it('uses a generated header guard that does not collide with qt', function (): void {

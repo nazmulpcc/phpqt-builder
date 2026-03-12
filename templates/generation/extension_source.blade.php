@@ -95,6 +95,19 @@ bool qt_runtime_is_shutdown_in_progress(void)
     return qt_shutdown_in_progress.load(std::memory_order_acquire);
 }
 
+zend_class_entry *qt_runtime_exception_ce(void)
+{
+    zend_string *class_name = zend_string_init("RuntimeException", sizeof("RuntimeException") - 1, 0);
+    zend_class_entry *ce = zend_lookup_class_ex(class_name, NULL, ZEND_FETCH_CLASS_NO_AUTOLOAD);
+    zend_string_release(class_name);
+
+    if (ce != NULL && instanceof_function(ce, zend_ce_throwable)) {
+        return ce;
+    }
+
+    return zend_ce_exception;
+}
+
 static inline void qt_runtime_drop_owner_tasks(bool count_as_shutdown = false)
 {
     size_t dropped = 0;

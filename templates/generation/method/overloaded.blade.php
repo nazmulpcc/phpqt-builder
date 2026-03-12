@@ -47,7 +47,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
 
 #if !defined(ZTS)
     zend_throw_exception_ex(
-        zend_ce_runtime_exception,
+        qt_runtime_exception_ce(),
         0,
         "Qt\\Core\\QThread::start() task mode requires a ZTS PHP build (thread start/management APIs are unavailable on NTS)."
     );
