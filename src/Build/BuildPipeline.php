@@ -15,6 +15,7 @@ use QtBuilder\Support\GeneratedTypeIdentity;
 use QtBuilder\Support\ModuleNamespace;
 use Symfony\Component\Console\Helper\ProgressBar;
 use Symfony\Component\Console\Helper\Table;
+use Symfony\Component\Console\Output\NullOutput;
 use Symfony\Component\Console\Output\OutputInterface;
 
 class BuildPipeline
@@ -348,6 +349,48 @@ class BuildPipeline
         $skippedClasses = $generation['skipped_classes'];
         $skippedMethods = $generation['skipped_methods'];
         $errors = $generation['errors'];
+
+        $enumCacheCandidates = $acceptedCandidates;
+        $enumCachePreparedClassData = $preparedClassDataByClass;
+        $enumCacheSkippedClasses = $skippedClasses;
+
+        $enumCacheWarmShape = $this->discoveryService->prepareClassStructures(
+            $acceptedCandidates,
+            $request->outputDir,
+            $request->installation->includeRoots,
+            $metadataDir,
+            $request->jobs,
+            new NullOutput(),
+            $request->extensionName,
+        );
+        if ($enumCacheWarmShape['errors'] === []) {
+            $enumCacheCandidates = $enumCacheWarmShape['accepted_candidates'];
+            $enumCachePreparedClassData = $enumCacheWarmShape['prepared_class_data'];
+            $enumCacheSkippedClasses = [...$skippedClasses, ...$enumCacheWarmShape['skipped_classes']];
+        }
+
+        $enumCacheClassNamespaces = $this->classNamespaces($enumCacheCandidates, $request->importedAbi);
+        $enumCandidateHeaders = (new EnumCandidateHeaderCollector())->collect(
+            $request->installation->includeRoots,
+            $enumCacheCandidates,
+            $enumCachePreparedClassData,
+        );
+        file_put_contents(
+            $metadataDir . '/enum_candidate_headers.json',
+            json_encode(array_map(
+                static fn(EnumCandidateHeader $entry): array => $entry->toArray(),
+                $enumCandidateHeaders,
+            ), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]',
+        );
+        $enumHolderCache->write(
+            $metadataDir,
+            $request->installation->includeRoots,
+            $enumCacheCandidates,
+            $enumCacheSkippedClasses,
+            $enumCacheClassNamespaces,
+            $enumRegistry,
+            $enumCandidateHeaders,
+        );
 
         $this->renderModuleAcceptance(
             $output,

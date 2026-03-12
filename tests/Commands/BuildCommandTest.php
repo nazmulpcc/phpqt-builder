@@ -925,6 +925,7 @@ it('skips bootstrap when generated files are unchanged and module binary exists'
     );
 
     expect($second)->toBeSuccessfulCommandResult()
+        ->and($second['display'])->toContain('Enum holder cache: hit')
         ->and($second['display'])->toContain('No generated file changes detected; skipping bootstrap.')
         ->and($bootstrapper->contexts)->toHaveCount(1);
 
