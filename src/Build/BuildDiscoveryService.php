@@ -7,6 +7,7 @@ namespace QtBuilder\Build;
 use QtBuilder\Filtering\ClassExposurePolicy;
 use QtBuilder\Qt\QtInstallation;
 use QtBuilder\Scanning\HeaderCandidate;
+use QtBuilder\Support\CppName;
 use QtBuilder\Scanning\ModuleHeaderScanner;
 use QtBuilder\Support\GeneratedTypeIdentity;
 use QtBuilder\Support\ModuleNamespace;
@@ -798,98 +799,101 @@ class BuildDiscoveryService
         $skippedByClass = [];
         /** @var array<string, array{module: string|null, class: string, header: string, reason_code: string|null, reason_message: string|null}> $errorsByClass */
         $errorsByClass = [];
-        $resolved = $this->fixedPointEngine->run(
-            ['viable_candidates' => $viableCandidates],
-            function (int $passes, array $state) use (
-                $importedAvailableClasses,
+        $dependencyMap = $this->candidateDependencyMap($viableCandidates, $preparedClassDataByClass);
+        $reverseDependencyMap = $this->reverseDependencyMap($dependencyMap);
+        $dirtyCandidates = array_fill_keys(array_keys($viableCandidates), true);
+        $passes = 0;
+
+        while (true) {
+            $dirtyKeys = array_values(array_filter(
+                array_keys($dirtyCandidates),
+                static fn(string $key): bool => isset($viableCandidates[$key]),
+            ));
+            sort($dirtyKeys);
+
+            if ($dirtyKeys === []) {
+                break;
+            }
+            $passes++;
+
+            $allowedClasses = array_keys($viableCandidates);
+            $allowedClasses = array_values(array_unique([...$allowedClasses, ...$importedAvailableClasses]));
+            sort($allowedClasses);
+
+            if ($passes > 1) {
+                $output->writeln(sprintf(
+                    '<comment>Rechecking discovery dependencies (pass %d, %d class(es)).</comment>',
+                    $passes,
+                    count($dirtyKeys),
+                ));
+            }
+
+            $progressBar = $this->createProgressBar(
                 $output,
-                $preparedClassDataByClass,
-                $preferExternalDependencyReasons,
-                &$skippedByClass,
-                &$errorsByClass,
-            ): array {
-                $viableCandidates = $state['viable_candidates'];
-                $allowedClasses = array_keys($viableCandidates);
-                $allowedClasses = array_values(array_unique([...$allowedClasses, ...$importedAvailableClasses]));
-                sort($allowedClasses);
+                count($dirtyKeys),
+                'qt_discovery',
+                'Discovery pass ' . $passes,
+            );
+            $progressBar?->start();
 
-                if ($passes > 1) {
-                    $output->writeln(sprintf(
-                        '<comment>Rechecking discovery dependencies (pass %d, %d class(es)).</comment>',
-                        $passes,
-                        count($viableCandidates),
-                    ));
-                }
-
-                $progressBar = $this->createProgressBar(
-                    $output,
-                    count($viableCandidates),
-                    'qt_discovery',
-                    'Discovery pass ' . $passes,
-                );
-                $progressBar?->start();
-
-                $nextViableCandidates = [];
-                foreach ($viableCandidates as $className => $candidate) {
-                    $classData = $preparedClassDataByClass[$className] ?? null;
-                    if (!is_array($classData)) {
-                        $errorsByClass[$className] = [
-                            'module' => $candidate->module,
-                            'class' => $className,
-                            'header' => $candidate->parseHeader,
-                            'reason_code' => 'missing_class_data',
-                            'reason_message' => 'Prepared class data is missing from the class cache.',
-                        ];
-                        $progressBar?->advance();
-                        continue;
-                    }
-
-                    $result = $this->generationService->generateFromPreparedData(
-                        $classData,
-                        $candidate->parseHeader,
-                        $allowedClasses,
-                        $preparedClassDataByClass,
-                        $preferExternalDependencyReasons,
-                    );
-
-                    if ($result->status === 'ok') {
-                        $nextViableCandidates[$className] = $candidate;
-                        unset($skippedByClass[$className], $errorsByClass[$className]);
-                        $progressBar?->advance();
-                        continue;
-                    }
-
-                    $skippedByClass[$className] = [
-                        'module' => $candidate->module,
-                        'class' => $result->className,
-                        'header' => $result->headerPath,
-                        'reason_code' => $result->reasonCode,
-                        'reason_message' => $result->reasonMessage,
-                    ];
-                    unset($errorsByClass[$className]);
+            $removedCandidates = [];
+            foreach ($dirtyKeys as $className) {
+                $candidate = $viableCandidates[$className] ?? null;
+                if (!$candidate instanceof HeaderCandidate) {
                     $progressBar?->advance();
+                    continue;
                 }
 
-                if ($progressBar !== null) {
-                    $progressBar->finish();
-                    $output->write(PHP_EOL);
+                $classData = $preparedClassDataByClass[$className] ?? null;
+                if (!is_array($classData)) {
+                    $errorsByClass[$className] = [
+                        'module' => $candidate->module,
+                        'class' => $className,
+                        'header' => $candidate->parseHeader,
+                        'reason_code' => 'missing_class_data',
+                        'reason_message' => 'Prepared class data is missing from the class cache.',
+                    ];
+                    $progressBar?->advance();
+                    continue;
                 }
 
-                $changed = array_keys($nextViableCandidates) !== array_keys($viableCandidates);
+                $result = $this->generationService->generateFromPreparedData(
+                    $classData,
+                    $candidate->parseHeader,
+                    $allowedClasses,
+                    $preparedClassDataByClass,
+                    $preferExternalDependencyReasons,
+                );
 
-                return [
-                    'state' => ['viable_candidates' => $nextViableCandidates],
-                    'changed' => $changed,
-                    'has_errors' => $errorsByClass !== [],
-                    'is_empty' => $nextViableCandidates === [],
+                if ($result->status === 'ok') {
+                    unset($skippedByClass[$className], $errorsByClass[$className]);
+                    $progressBar?->advance();
+                    continue;
+                }
+
+                unset($viableCandidates[$className], $errorsByClass[$className]);
+                $removedCandidates[] = $className;
+                $skippedByClass[$className] = [
+                    'module' => $candidate->module,
+                    'class' => $result->className,
+                    'header' => $result->headerPath,
+                    'reason_code' => $result->reasonCode,
+                    'reason_message' => $result->reasonMessage,
                 ];
-            },
-        );
+                $progressBar?->advance();
+            }
 
-        /** @var array{viable_candidates: array<string, HeaderCandidate>} $resolvedState */
-        $resolvedState = $resolved['state'];
-        $viableCandidates = $resolvedState['viable_candidates'];
-        $passes = $resolved['passes'];
+            if ($progressBar !== null) {
+                $progressBar->finish();
+                $output->write(PHP_EOL);
+            }
+
+            if ($errorsByClass !== [] || $viableCandidates === [] || $removedCandidates === []) {
+                break;
+            }
+
+            $dirtyCandidates = $this->impactedDependents($removedCandidates, $reverseDependencyMap, $viableCandidates);
+        }
 
         $allowedClasses = array_keys($viableCandidates);
         sort($allowedClasses);
@@ -901,6 +905,198 @@ class BuildDiscoveryService
             'passes' => $passes,
             'errors' => array_values($errorsByClass),
         ];
+    }
+
+    /**
+     * @param array<string, HeaderCandidate> $candidates
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @return array<string, list<string>>
+     */
+    private function candidateDependencyMap(array $candidates, array $preparedClassDataByClass): array
+    {
+        $candidateKeys = array_keys($candidates);
+        $candidateSet = array_fill_keys($candidateKeys, true);
+
+        /** @var array<string, list<string>> $shortNameIndex */
+        $shortNameIndex = [];
+        foreach ($candidateKeys as $candidateKey) {
+            $shortName = CppName::unqualify($candidateKey);
+            $shortNameIndex[$shortName] ??= [];
+            $shortNameIndex[$shortName][] = $candidateKey;
+        }
+
+        /** @var array<string, list<string>> $dependencyMap */
+        $dependencyMap = [];
+        foreach ($candidateKeys as $candidateKey) {
+            $classData = $preparedClassDataByClass[$candidateKey] ?? null;
+            if (!is_array($classData)) {
+                $dependencyMap[$candidateKey] = [];
+                continue;
+            }
+
+            $dependencies = $this->extractCandidateDependencies($candidateKey, $classData, $candidateSet, $shortNameIndex);
+            sort($dependencies);
+            $dependencyMap[$candidateKey] = $dependencies;
+        }
+
+        return $dependencyMap;
+    }
+
+    /**
+     * @param array<string, bool> $candidateSet
+     * @param array<string, list<string>> $shortNameIndex
+     * @param array<string, mixed> $classData
+     * @return list<string>
+     */
+    private function extractCandidateDependencies(
+        string $candidateKey,
+        array $classData,
+        array $candidateSet,
+        array $shortNameIndex,
+    ): array {
+        $dependencies = [];
+        $typeHints = [];
+
+        foreach ((array) ($classData['bases'] ?? []) as $baseType) {
+            if (is_string($baseType) && trim($baseType) !== '') {
+                $typeHints[] = $baseType;
+            }
+        }
+
+        foreach ((array) ($classData['methods'] ?? []) as $method) {
+            if (!is_array($method)) {
+                continue;
+            }
+
+            $returnType = is_string($method['type'] ?? null) ? trim((string) $method['type']) : '';
+            if ($returnType !== '') {
+                $typeHints[] = $returnType;
+            }
+
+            foreach ((array) ($method['parameters'] ?? []) as $parameter) {
+                if (!is_array($parameter)) {
+                    continue;
+                }
+
+                $parameterType = is_string($parameter['type'] ?? null) ? trim((string) $parameter['type']) : '';
+                if ($parameterType !== '') {
+                    $typeHints[] = $parameterType;
+                }
+            }
+        }
+
+        foreach ((array) ($classData['properties'] ?? []) as $property) {
+            if (!is_array($property)) {
+                continue;
+            }
+
+            $propertyType = is_string($property['type'] ?? null) ? trim((string) $property['type']) : '';
+            if ($propertyType !== '') {
+                $typeHints[] = $propertyType;
+            }
+        }
+
+        foreach ($typeHints as $typeHint) {
+            foreach ($this->typeIdentifierHints($typeHint) as $identifier) {
+                if (isset($candidateSet[$identifier])) {
+                    $dependencies[$identifier] = true;
+                }
+
+                foreach (($shortNameIndex[$identifier] ?? []) as $resolvedKey) {
+                    $dependencies[$resolvedKey] = true;
+                }
+
+                if (str_contains($identifier, '::')) {
+                    $shortName = CppName::unqualify($identifier);
+                    foreach (($shortNameIndex[$shortName] ?? []) as $resolvedKey) {
+                        $dependencies[$resolvedKey] = true;
+                    }
+                }
+            }
+        }
+
+        unset($dependencies[$candidateKey]);
+
+        return array_keys($dependencies);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function typeIdentifierHints(string $type): array
+    {
+        $matchCount = preg_match_all(
+            '/\b[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*\b/',
+            $type,
+            $matches,
+        );
+        if (!is_int($matchCount) || $matchCount === 0) {
+            return [];
+        }
+
+        $hints = [];
+        foreach ((array) ($matches[0] ?? []) as $token) {
+            if (!is_string($token)) {
+                continue;
+            }
+
+            $token = trim($token);
+            if ($token === '' || in_array($token, ['const', 'volatile', 'unsigned', 'signed', 'short', 'long'], true)) {
+                continue;
+            }
+            if (in_array($token, ['void', 'bool', 'char', 'int', 'float', 'double', 'qreal', 'size_t'], true)) {
+                continue;
+            }
+
+            $hints[$token] = true;
+        }
+
+        return array_keys($hints);
+    }
+
+    /**
+     * @param array<string, list<string>> $dependencyMap
+     * @return array<string, list<string>>
+     */
+    private function reverseDependencyMap(array $dependencyMap): array
+    {
+        /** @var array<string, array<string, bool>> $reverse */
+        $reverse = [];
+
+        foreach ($dependencyMap as $className => $dependencies) {
+            foreach ($dependencies as $dependency) {
+                $reverse[$dependency] ??= [];
+                $reverse[$dependency][$className] = true;
+            }
+        }
+
+        $resolved = [];
+        foreach ($reverse as $dependency => $dependents) {
+            $resolved[$dependency] = array_keys($dependents);
+        }
+
+        return $resolved;
+    }
+
+    /**
+     * @param list<string> $removedCandidates
+     * @param array<string, list<string>> $reverseDependencyMap
+     * @param array<string, HeaderCandidate> $viableCandidates
+     * @return array<string, bool>
+     */
+    private function impactedDependents(array $removedCandidates, array $reverseDependencyMap, array $viableCandidates): array
+    {
+        $dirty = [];
+        foreach ($removedCandidates as $removedClass) {
+            foreach (($reverseDependencyMap[$removedClass] ?? []) as $dependentClass) {
+                if (!isset($viableCandidates[$dependentClass])) {
+                    continue;
+                }
+                $dirty[$dependentClass] = true;
+            }
+        }
+
+        return $dirty;
     }
 
     private function supplementalMissingClass(?string $reasonCode, ?string $reasonMessage): ?string

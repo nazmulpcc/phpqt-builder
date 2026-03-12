@@ -862,7 +862,7 @@ it('rewrites cached allow lists to actual generated classes', function (): void 
     );
 
     expect($result)->toBeSuccessfulCommandResult();
-    expect($result['display'])->toContain('Re-evaluating generated dependency set', 'Module acceptance:', 'Module Name', 'QtCore');
+    expect($result['display'])->toContain('Generate analysis pass 1', 'Module acceptance:', 'Module Name', 'QtCore');
     expect(
         str_contains($result['display'], 'Using cached build metadata:')
         || str_contains($result['display'], 'Discovery cache miss; invoking build:discover.'),
@@ -892,7 +892,7 @@ it('rewrites cached allow lists to actual generated classes', function (): void 
         ->and($supplementalCandidates[0]['trigger_reason'])->toBe('unsupported_parent_class');
 
     $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
-    expect($summary['generation_passes'])->toBe(2)
+    expect($summary['generation_passes'])->toBe(1)
         ->and($summary['generated_classes'])->toBe(2)
         ->and($summary['skipped_classes'])->toBe(1);
 });
