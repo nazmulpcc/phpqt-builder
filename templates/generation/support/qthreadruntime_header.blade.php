@@ -12,7 +12,9 @@
 #endif
 
 #include "php.h"
+#include <cstdint>
 #include <memory>
+#include <string>
 
 #ifndef PHP_QT_API
 # if defined(PHP_WIN32)
@@ -41,9 +43,30 @@ static inline qt_qthreadruntime_object *qt_qthreadruntime_from_obj(zend_object *
 
 #define Z_QTHREADRUNTIME_P(zv) qt_qthreadruntime_from_obj(Z_OBJ_P(zv))
 
+class QThread;
+struct qt_qthread_task_host;
+
 PHP_MINIT_FUNCTION(qt_qthreadruntime);
 PHP_QT_API void qt_qthreadruntime_shutdown_all(zend_long timeout_ms);
 PHP_QT_API bool qt_qthreadruntime_is_worker_request_context(void);
 PHP_QT_API void qt_qthreadruntime_phpinfo_rows(void);
+PHP_QT_API bool qt_qthreadruntime_payload_supported_for_worker(zval *value);
+PHP_QT_API bool qt_qthreadruntime_worker_publish_zval(zend_string *event_name, zval *payload, std::string *error);
+PHP_QT_API bool qt_qthreadruntime_worker_receive_zval(zend_long timeout_ms, zval *return_value, bool *has_message, std::string *error);
+PHP_QT_API bool qt_qthreadruntime_validate_callable_string(zend_string *callable, std::string *error);
+PHP_QT_API bool qt_qthreadruntime_serialize_worker_args(zval *args, std::string *out_payload, std::string *error);
+PHP_QT_API bool qt_qthreadruntime_set_thread_interrupted(bool interrupted);
+
+PHP_QT_API qt_qthread_task_host *qt_qthread_task_host_create(void);
+PHP_QT_API void qt_qthread_task_host_destroy(qt_qthread_task_host *host);
+PHP_QT_API bool qt_qthread_task_host_set_bootstrap_script(qt_qthread_task_host *host, const std::string &path, std::string *error);
+PHP_QT_API bool qt_qthread_task_host_start(qt_qthread_task_host *host, QThread *thread, const std::string &callable_name, const std::string &args_payload, bool has_priority, int priority, std::string *error);
+PHP_QT_API bool qt_qthread_task_host_on(qt_qthread_task_host *host, const std::string &event_name, zval *listener, uint64_t *listener_id, std::string *error);
+PHP_QT_API bool qt_qthread_task_host_off(qt_qthread_task_host *host, uint64_t listener_id);
+PHP_QT_API zend_long qt_qthread_task_host_drain_events(qt_qthread_task_host *host, zend_long max_items);
+PHP_QT_API bool qt_qthread_task_host_send(qt_qthread_task_host *host, const std::string &event_name, zval *payload, std::string *error);
+PHP_QT_API bool qt_qthread_task_host_on_owner_interruption_request(qt_qthread_task_host *host);
+PHP_QT_API bool qt_qthread_task_host_is_task_running(qt_qthread_task_host *host);
+PHP_QT_API bool qt_qthread_task_host_execute_pending(qt_qthread_task_host *host, QThread *thread);
 
 #endif /* QT_QTHREADRUNTIME_H */

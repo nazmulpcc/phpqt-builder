@@ -32,7 +32,13 @@ namespace {!! $ctx->phpNamespace !!};
     $modifiers = $method->access;
     if ($method->isStatic) $modifiers .= ' static';
 @endphp
-@if($method->isConstructor)
+@if($ctx->nativeCppType === 'QThread' && $method->isConstructor)
+    {!! $modifiers !!} function __construct(\Qt\Core\QObject|null $parent = null, ?string $bootstrapScript = null) {}
+
+@elseif($ctx->nativeCppType === 'QThread' && $method->name === 'start')
+    {!! $modifiers !!} function start(int|string|null $taskOrPriority = null, array $args = [], ?int $priority = null): void {}
+
+@elseif($method->isConstructor)
     {!! $modifiers !!} function __construct(@foreach($method->params as $param){!! $ctx->stubParamType($param) !!} @if($param->isByRef)&@endif${!! $param->name !!}@if($param->isOptional) = {!! $ctx->stubDefault($param) !!}@endif @if(!$loop->last), @endif @endforeach) {}
 
 @elseif($method->isAbstractMethod)
@@ -43,6 +49,16 @@ namespace {!! $ctx->phpNamespace !!};
 
 @endif
 @endforeach
+@if($ctx->nativeCppType === 'QThread')
+
+    public function on(string $event, callable $listener): int {}
+    public function off(int $listenerId): bool {}
+    public function drainEvents(int $maxItems = -1): int {}
+    public function send(string $event, array $payload = []): bool {}
+    public static function publish(string $event, array $payload = []): bool {}
+    /** @return array{event:string,payload:array}|null */
+    public static function receive(int $timeoutMs = 0): ?array {}
+@endif
 @if($ctx->nativeCppType === 'QString')
     public function __toString(): string {}
 

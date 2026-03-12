@@ -6,7 +6,10 @@
 
 #include "qt_qthreadruntime.h"
 #include "qt_qthreadruntime_arginfo.h"
+#include "php_qt.h"
 
+#include <QtCore/QMetaObject>
+#include <QtCore/QPointer>
 #include <QtCore/QThread>
 #include <TSRM.h>
 #include <Zend/zend_closures.h>
@@ -31,8 +34,14 @@
 
 zend_class_entry *qt_ce_QThreadRuntime = NULL;
 zend_object_handlers qt_qthreadruntime_handlers;
+struct qt_qthread_task_host;
 static thread_local bool qt_qthreadruntime_tls_worker_request = false;
+static thread_local qt_qthreadruntime_state *qt_qthreadruntime_tls_current_state = nullptr;
+static thread_local uint64_t qt_qthreadruntime_tls_current_job_id = 0;
+static thread_local qt_qthread_task_host *qt_qthreadruntime_tls_current_task_host = nullptr;
+static thread_local bool qt_qthreadruntime_tls_interrupted = false;
 static constexpr size_t QT_QTHREADRUNTIME_MAX_QUEUE_DEPTH_DEFAULT = 4096;
+static constexpr size_t QT_QTHREADRUNTIME_EVENT_QUEUE_DEPTH_DEFAULT = 4096;
 static std::atomic_uint64_t qt_qthreadruntime_total_enqueued{0};
 static std::atomic_uint64_t qt_qthreadruntime_total_drained{0};
 static std::atomic_uint64_t qt_qthreadruntime_total_canceled{0};
@@ -40,6 +49,15 @@ static std::atomic_uint64_t qt_qthreadruntime_total_rejected_full{0};
 static std::atomic_uint64_t qt_qthreadruntime_total_rejected_stopping{0};
 static std::atomic_uint64_t qt_qthreadruntime_total_timeouts{0};
 static std::atomic_uint64_t qt_qthreadruntime_total_worker_crash{0};
+static std::atomic_uint64_t qt_qthreadruntime_total_events_out_enqueued{0};
+static std::atomic_uint64_t qt_qthreadruntime_total_events_out_drained{0};
+static std::atomic_uint64_t qt_qthreadruntime_total_events_out_dropped_full{0};
+static std::atomic_uint64_t qt_qthreadruntime_total_events_out_dropped_shutdown{0};
+static std::atomic_uint64_t qt_qthreadruntime_total_events_in_enqueued{0};
+static std::atomic_uint64_t qt_qthreadruntime_total_events_in_drained{0};
+static std::atomic_uint64_t qt_qthreadruntime_total_events_in_dropped_full{0};
+static std::atomic_uint64_t qt_qthreadruntime_total_events_in_dropped_shutdown{0};
+static std::atomic_uint64_t qt_qthreadruntime_total_listener_dispatch_errors{0};
 
 static size_t qt_qthreadruntime_env_queue_depth()
 {
@@ -52,6 +70,38 @@ static size_t qt_qthreadruntime_env_queue_depth()
     long parsed = strtol(raw, &end, 10);
     if (end == raw || parsed <= 0) {
         return QT_QTHREADRUNTIME_MAX_QUEUE_DEPTH_DEFAULT;
+    }
+
+    return (size_t) parsed;
+}
+
+static size_t qt_qthreadruntime_env_event_out_queue_depth()
+{
+    const char *raw = getenv("QT_QTHREADRUNTIME_EVENT_OUT_QUEUE_DEPTH");
+    if (raw == NULL || *raw == '\0') {
+        return QT_QTHREADRUNTIME_EVENT_QUEUE_DEPTH_DEFAULT;
+    }
+
+    char *end = NULL;
+    long parsed = strtol(raw, &end, 10);
+    if (end == raw || parsed <= 0) {
+        return QT_QTHREADRUNTIME_EVENT_QUEUE_DEPTH_DEFAULT;
+    }
+
+    return (size_t) parsed;
+}
+
+static size_t qt_qthreadruntime_env_event_in_queue_depth()
+{
+    const char *raw = getenv("QT_QTHREADRUNTIME_EVENT_IN_QUEUE_DEPTH");
+    if (raw == NULL || *raw == '\0') {
+        return QT_QTHREADRUNTIME_EVENT_QUEUE_DEPTH_DEFAULT;
+    }
+
+    char *end = NULL;
+    long parsed = strtol(raw, &end, 10);
+    if (end == raw || parsed <= 0) {
+        return QT_QTHREADRUNTIME_EVENT_QUEUE_DEPTH_DEFAULT;
     }
 
     return (size_t) parsed;
@@ -79,6 +129,40 @@ struct qt_qthreadruntime_job {
     std::atomic_bool canceled{false};
 };
 
+enum class qt_qthreadruntime_value_type : uint8_t {
+    null_value = 0,
+    bool_value,
+    long_value,
+    double_value,
+    string_value,
+    array_value,
+};
+
+struct qt_qthreadruntime_value {
+    qt_qthreadruntime_value_type type{qt_qthreadruntime_value_type::null_value};
+    bool bool_data{false};
+    zend_long long_data{0};
+    double double_data{0.0};
+    std::string string_data;
+    std::vector<bool> array_key_is_string;
+    std::vector<zend_ulong> array_index_keys;
+    std::vector<std::string> array_string_keys;
+    std::vector<qt_qthreadruntime_value> array_values;
+};
+
+struct qt_qthreadruntime_event_message {
+    uint64_t job_id{0};
+    std::string event_name;
+    qt_qthreadruntime_value payload;
+};
+
+struct qt_qthreadruntime_listener_t {
+    uint64_t id{0};
+    std::string event_name;
+    zend_fcall_info fci;
+    zend_fcall_info_cache fci_cache;
+};
+
 enum class qt_qthreadruntime_await_status {
     ready,
     timeout,
@@ -86,6 +170,167 @@ enum class qt_qthreadruntime_await_status {
 };
 
 class qt_qthreadruntime_state;
+
+static bool qt_qthreadruntime_zval_to_value(zval *value, qt_qthreadruntime_value *out, std::string *error)
+{
+    if (value == nullptr || out == nullptr) {
+        return false;
+    }
+
+    if (Z_ISREF_P(value)) {
+        if (error != nullptr) {
+            *error = "Event payload references are not supported.";
+        }
+        return false;
+    }
+
+    switch (Z_TYPE_P(value)) {
+        case IS_NULL:
+            out->type = qt_qthreadruntime_value_type::null_value;
+            return true;
+        case IS_FALSE:
+        case IS_TRUE:
+            out->type = qt_qthreadruntime_value_type::bool_value;
+            out->bool_data = Z_TYPE_P(value) == IS_TRUE;
+            return true;
+        case IS_LONG:
+            out->type = qt_qthreadruntime_value_type::long_value;
+            out->long_data = Z_LVAL_P(value);
+            return true;
+        case IS_DOUBLE:
+            out->type = qt_qthreadruntime_value_type::double_value;
+            out->double_data = Z_DVAL_P(value);
+            return true;
+        case IS_STRING:
+            out->type = qt_qthreadruntime_value_type::string_value;
+            out->string_data.assign(Z_STRVAL_P(value), Z_STRLEN_P(value));
+            return true;
+        case IS_ARRAY: {
+            out->type = qt_qthreadruntime_value_type::array_value;
+            HashTable *ht = Z_ARRVAL_P(value);
+            out->array_key_is_string.reserve(zend_hash_num_elements(ht));
+            out->array_index_keys.reserve(zend_hash_num_elements(ht));
+            out->array_string_keys.reserve(zend_hash_num_elements(ht));
+            out->array_values.reserve(zend_hash_num_elements(ht));
+
+            zend_ulong index_key = 0;
+            zend_string *string_key = NULL;
+            zval *entry = NULL;
+            ZEND_HASH_FOREACH_KEY_VAL(ht, index_key, string_key, entry) {
+                qt_qthreadruntime_value child;
+                if (!qt_qthreadruntime_zval_to_value(entry, &child, error)) {
+                    return false;
+                }
+
+                bool is_string_key = string_key != NULL;
+                out->array_key_is_string.push_back(is_string_key);
+                out->array_index_keys.push_back(index_key);
+                if (is_string_key) {
+                    out->array_string_keys.emplace_back(ZSTR_VAL(string_key), ZSTR_LEN(string_key));
+                } else {
+                    out->array_string_keys.emplace_back();
+                }
+                out->array_values.push_back(std::move(child));
+            } ZEND_HASH_FOREACH_END();
+            return true;
+        }
+        default:
+            if (error != nullptr) {
+                *error = "Event payload supports only null/bool/int/float/string/array values.";
+            }
+            return false;
+    }
+}
+
+static bool qt_qthreadruntime_value_to_zval(const qt_qthreadruntime_value &value, zval *out)
+{
+    if (out == nullptr) {
+        return false;
+    }
+
+    switch (value.type) {
+        case qt_qthreadruntime_value_type::null_value:
+            ZVAL_NULL(out);
+            return true;
+        case qt_qthreadruntime_value_type::bool_value:
+            ZVAL_BOOL(out, value.bool_data);
+            return true;
+        case qt_qthreadruntime_value_type::long_value:
+            ZVAL_LONG(out, value.long_data);
+            return true;
+        case qt_qthreadruntime_value_type::double_value:
+            ZVAL_DOUBLE(out, value.double_data);
+            return true;
+        case qt_qthreadruntime_value_type::string_value:
+            ZVAL_STRINGL(out, value.string_data.data(), value.string_data.size());
+            return true;
+        case qt_qthreadruntime_value_type::array_value: {
+            array_init_size(out, (uint32_t) value.array_values.size());
+            for (size_t i = 0; i < value.array_values.size(); ++i) {
+                zval entry;
+                ZVAL_NULL(&entry);
+                if (!qt_qthreadruntime_value_to_zval(value.array_values[i], &entry)) {
+                    zval_ptr_dtor(out);
+                    ZVAL_NULL(out);
+                    return false;
+                }
+
+                if (i < value.array_key_is_string.size() && value.array_key_is_string[i]) {
+                    const std::string &key = i < value.array_string_keys.size() ? value.array_string_keys[i] : std::string();
+                    add_assoc_zval_ex(out, key.data(), key.size(), &entry);
+                } else {
+                    zend_ulong index = i < value.array_index_keys.size() ? value.array_index_keys[i] : (zend_ulong) i;
+                    add_index_zval(out, index, &entry);
+                }
+            }
+            return true;
+        }
+        default:
+            ZVAL_NULL(out);
+            return false;
+    }
+}
+
+static inline void qt_qthreadruntime_listener_clear(const std::shared_ptr<qt_qthreadruntime_listener_t> &listener)
+{
+    if (!listener) {
+        return;
+    }
+
+    listener->fci.params = NULL;
+    listener->fci.param_count = 0;
+    listener->fci.retval = NULL;
+    if (!Z_ISUNDEF(listener->fci.function_name)) {
+        zval_ptr_dtor(&listener->fci.function_name);
+        ZVAL_UNDEF(&listener->fci.function_name);
+    }
+}
+
+static bool qt_qthreadruntime_listener_invoke(const std::shared_ptr<qt_qthreadruntime_listener_t> &listener, zval *arg)
+{
+    if (!listener || !qt_runtime_can_call_zend() || arg == NULL) {
+        return false;
+    }
+
+    zval retval;
+    ZVAL_NULL(&retval);
+
+    zval *prev_params = listener->fci.params;
+    uint32_t prev_param_count = listener->fci.param_count;
+    zval *prev_retval = listener->fci.retval;
+
+    listener->fci.params = arg;
+    listener->fci.param_count = 1;
+    listener->fci.retval = &retval;
+
+    bool ok = zend_call_function(&listener->fci, &listener->fci_cache) == SUCCESS;
+    listener->fci.params = prev_params;
+    listener->fci.param_count = prev_param_count;
+    listener->fci.retval = prev_retval;
+    zval_ptr_dtor(&retval);
+
+    return ok;
+}
 
 class qt_qthreadruntime_worker_thread final : public QThread {
 public:
@@ -130,6 +375,7 @@ public:
 #else
         stopping_ = false;
         worker_bootstrap_failed_ = false;
+        owner_event_drain_scheduled_.store(false, std::memory_order_release);
         worker_thread_ = std::make_unique<qt_qthreadruntime_worker_thread>(shared_from_this());
         worker_thread_->start();
         running_ = true;
@@ -139,12 +385,26 @@ public:
 
     bool stop(zend_long timeout_ms)
     {
+        std::vector<std::shared_ptr<qt_qthreadruntime_listener_t>> listeners_to_clear;
+
         std::unique_lock<std::mutex> lock(mutex_);
         if (!running_) {
+            listeners_to_clear.reserve(listeners_by_id_.size());
+            for (const auto &entry : listeners_by_id_) {
+                listeners_to_clear.push_back(entry.second);
+            }
+            listeners_by_id_.clear();
+            listener_ids_by_event_.clear();
+            stats_listeners_registered_ = 0;
+            lock.unlock();
+            for (const auto &listener : listeners_to_clear) {
+                qt_qthreadruntime_listener_clear(listener);
+            }
             return true;
         }
 
         stopping_ = true;
+        dropEventQueuesLocked(true);
         while (!queue_.empty()) {
             std::shared_ptr<qt_qthreadruntime_job> job = queue_.front();
             queue_.pop_front();
@@ -161,9 +421,11 @@ public:
             results_[job->id] = std::move(canceled_result);
             stats_canceled_++;
             qt_qthreadruntime_total_canceled.fetch_add(1, std::memory_order_acq_rel);
+            inbound_events_by_job_.erase(job->id);
         }
 
         result_cv_.notify_all();
+        inbound_cv_.notify_all();
         job_cv_.notify_all();
         lock.unlock();
 
@@ -180,7 +442,18 @@ public:
         lock.lock();
         running_ = false;
         worker_thread_.reset();
+        listeners_to_clear.reserve(listeners_by_id_.size());
+        for (const auto &entry : listeners_by_id_) {
+            listeners_to_clear.push_back(entry.second);
+        }
+        listeners_by_id_.clear();
+        listener_ids_by_event_.clear();
+        stats_listeners_registered_ = 0;
         lock.unlock();
+
+        for (const auto &listener : listeners_to_clear) {
+            qt_qthreadruntime_listener_clear(listener);
+        }
 
         return stopped;
     }
@@ -224,6 +497,7 @@ public:
 
         jobs_[job->id] = job;
         queue_.push_back(job);
+        inbound_events_by_job_.emplace(job->id, std::deque<qt_qthreadruntime_event_message>());
         stats_enqueued_++;
         qt_qthreadruntime_total_enqueued.fetch_add(1, std::memory_order_acq_rel);
         *job_id = job->id;
@@ -274,6 +548,250 @@ public:
         return qt_qthreadruntime_await_status::ready;
     }
 
+    bool addListener(const std::string &event_name, zval *listener, uint64_t *listener_id, std::string *error)
+    {
+        if (listener == nullptr || listener_id == nullptr || error == nullptr) {
+            return false;
+        }
+
+        if (!qt_runtime_can_call_zend()) {
+            *error = "Listeners can only be registered from owner request thread.";
+            return false;
+        }
+
+        std::shared_ptr<qt_qthreadruntime_listener_t> handle = std::make_shared<qt_qthreadruntime_listener_t>();
+        memset(&handle->fci, 0, sizeof(handle->fci));
+        memset(&handle->fci_cache, 0, sizeof(handle->fci_cache));
+        ZVAL_UNDEF(&handle->fci.function_name);
+
+        char *fci_error = NULL;
+        if (zend_fcall_info_init(listener, 0, &handle->fci, &handle->fci_cache, NULL, &fci_error) != SUCCESS) {
+            if (fci_error != NULL) {
+                *error = std::string("Invalid listener: ") + fci_error;
+                efree(fci_error);
+            } else {
+                *error = "Invalid listener.";
+            }
+            return false;
+        }
+        Z_TRY_ADDREF(handle->fci.function_name);
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (stopping_) {
+            qt_qthreadruntime_listener_clear(handle);
+            *error = "Worker runtime is stopping.";
+            return false;
+        }
+
+        handle->id = next_listener_id_++;
+        handle->event_name = event_name;
+
+        listeners_by_id_[handle->id] = handle;
+        listener_ids_by_event_[event_name].push_back(handle->id);
+        stats_listeners_registered_ = listeners_by_id_.size();
+
+        *listener_id = handle->id;
+        return true;
+    }
+
+    bool removeListener(uint64_t listener_id)
+    {
+        std::shared_ptr<qt_qthreadruntime_listener_t> handle;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto it = listeners_by_id_.find(listener_id);
+            if (it == listeners_by_id_.end()) {
+                return false;
+            }
+
+            handle = it->second;
+            listeners_by_id_.erase(it);
+            auto event_it = listener_ids_by_event_.find(handle->event_name);
+            if (event_it != listener_ids_by_event_.end()) {
+                std::vector<uint64_t> &ids = event_it->second;
+                ids.erase(std::remove(ids.begin(), ids.end(), listener_id), ids.end());
+                if (ids.empty()) {
+                    listener_ids_by_event_.erase(event_it);
+                }
+            }
+            stats_listeners_registered_ = listeners_by_id_.size();
+        }
+
+        qt_qthreadruntime_listener_clear(handle);
+        return true;
+    }
+
+    zend_long drainEvents(zend_long max_items)
+    {
+        if (!qt_runtime_can_call_zend() || max_items == 0) {
+            return 0;
+        }
+
+        zend_long processed = 0;
+        while (max_items < 0 || processed < max_items) {
+            qt_qthreadruntime_event_message message;
+            std::vector<std::shared_ptr<qt_qthreadruntime_listener_t>> listeners;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (outbound_events_.empty()) {
+                    break;
+                }
+
+                message = std::move(outbound_events_.front());
+                outbound_events_.pop_front();
+                stats_events_out_drained_++;
+                qt_qthreadruntime_total_events_out_drained.fetch_add(1, std::memory_order_acq_rel);
+
+                auto event_it = listener_ids_by_event_.find(message.event_name);
+                if (event_it != listener_ids_by_event_.end()) {
+                    listeners.reserve(event_it->second.size());
+                    for (uint64_t id : event_it->second) {
+                        auto listener_it = listeners_by_id_.find(id);
+                        if (listener_it != listeners_by_id_.end() && listener_it->second) {
+                            listeners.push_back(listener_it->second);
+                        }
+                    }
+                }
+            }
+
+            processed++;
+            if (listeners.empty()) {
+                continue;
+            }
+
+            zval payload;
+            if (!qt_qthreadruntime_value_to_zval(message.payload, &payload)) {
+                continue;
+            }
+
+            zval envelope;
+            array_init(&envelope);
+            add_assoc_stringl(&envelope, "event", message.event_name.data(), message.event_name.size());
+            add_assoc_long(&envelope, "jobId", (zend_long) message.job_id);
+            add_assoc_zval(&envelope, "payload", &payload);
+
+            for (const std::shared_ptr<qt_qthreadruntime_listener_t> &listener : listeners) {
+                if (!qt_qthreadruntime_listener_invoke(listener, &envelope) || EG(exception) != NULL) {
+                    if (EG(exception) != NULL) {
+                        zend_clear_exception();
+                    }
+                    stats_listener_dispatch_errors_++;
+                    qt_qthreadruntime_total_listener_dispatch_errors.fetch_add(1, std::memory_order_acq_rel);
+#if ZEND_DEBUG
+                    php_error_docref(NULL, E_WARNING, "QThreadRuntime listener for event '%s' failed.", message.event_name.c_str());
+#endif
+                }
+            }
+
+            zval_ptr_dtor(&envelope);
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!outbound_events_.empty()) {
+                scheduleOwnerEventDrain();
+            }
+        }
+
+        return processed;
+    }
+
+    bool sendCommand(uint64_t job_id, const std::string &event_name, const qt_qthreadruntime_value &payload)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!running_ || stopping_) {
+            stats_events_in_dropped_shutdown_++;
+            qt_qthreadruntime_total_events_in_dropped_shutdown.fetch_add(1, std::memory_order_acq_rel);
+            return false;
+        }
+
+        auto job_it = jobs_.find(job_id);
+        if (job_it == jobs_.end()) {
+            return false;
+        }
+
+        auto queue_it = inbound_events_by_job_.find(job_id);
+        if (queue_it == inbound_events_by_job_.end()) {
+            return false;
+        }
+
+        if (queue_it->second.size() >= max_event_in_queue_depth_) {
+            stats_events_in_dropped_full_++;
+            qt_qthreadruntime_total_events_in_dropped_full.fetch_add(1, std::memory_order_acq_rel);
+            return false;
+        }
+
+        qt_qthreadruntime_event_message message;
+        message.job_id = job_id;
+        message.event_name = event_name;
+        message.payload = payload;
+        queue_it->second.push_back(std::move(message));
+        stats_events_in_enqueued_++;
+        qt_qthreadruntime_total_events_in_enqueued.fetch_add(1, std::memory_order_acq_rel);
+        inbound_cv_.notify_all();
+        return true;
+    }
+
+    bool publishFromWorker(uint64_t job_id, const std::string &event_name, const qt_qthreadruntime_value &payload)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (stopping_ || qt_runtime_is_shutdown_in_progress()) {
+            stats_events_out_dropped_shutdown_++;
+            qt_qthreadruntime_total_events_out_dropped_shutdown.fetch_add(1, std::memory_order_acq_rel);
+            return false;
+        }
+
+        if (outbound_events_.size() >= max_event_out_queue_depth_) {
+            stats_events_out_dropped_full_++;
+            qt_qthreadruntime_total_events_out_dropped_full.fetch_add(1, std::memory_order_acq_rel);
+            return false;
+        }
+
+        qt_qthreadruntime_event_message message;
+        message.job_id = job_id;
+        message.event_name = event_name;
+        message.payload = payload;
+        outbound_events_.push_back(std::move(message));
+        stats_events_out_enqueued_++;
+        qt_qthreadruntime_total_events_out_enqueued.fetch_add(1, std::memory_order_acq_rel);
+        scheduleOwnerEventDrain();
+        return true;
+    }
+
+    bool receiveForWorker(uint64_t job_id, zend_long timeout_ms, qt_qthreadruntime_event_message *message)
+    {
+        if (message == nullptr) {
+            return false;
+        }
+
+        std::unique_lock<std::mutex> lock(mutex_);
+        auto ready = [this, job_id]() -> bool {
+            auto queue_it = inbound_events_by_job_.find(job_id);
+            return stopping_ || (queue_it != inbound_events_by_job_.end() && !queue_it->second.empty());
+        };
+
+        if (timeout_ms <= 0) {
+            inbound_cv_.wait(lock, ready);
+        } else if (!inbound_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), ready)) {
+            return false;
+        }
+
+        if (stopping_) {
+            return false;
+        }
+
+        auto queue_it = inbound_events_by_job_.find(job_id);
+        if (queue_it == inbound_events_by_job_.end() || queue_it->second.empty()) {
+            return false;
+        }
+
+        *message = std::move(queue_it->second.front());
+        queue_it->second.pop_front();
+        stats_events_in_drained_++;
+        qt_qthreadruntime_total_events_in_drained.fetch_add(1, std::memory_order_acq_rel);
+        return true;
+    }
+
     void fillStats(zval *return_value) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -291,6 +809,16 @@ public:
         add_assoc_long(return_value, "timeouts", (zend_long) stats_timeouts_);
         add_assoc_long(return_value, "worker_crash", (zend_long) stats_worker_crash_);
         add_assoc_bool(return_value, "worker_bootstrap_failed", worker_bootstrap_failed_);
+        add_assoc_long(return_value, "listeners_registered", (zend_long) stats_listeners_registered_);
+        add_assoc_long(return_value, "events_out_enqueued", (zend_long) stats_events_out_enqueued_);
+        add_assoc_long(return_value, "events_out_drained", (zend_long) stats_events_out_drained_);
+        add_assoc_long(return_value, "events_out_dropped_full", (zend_long) stats_events_out_dropped_full_);
+        add_assoc_long(return_value, "events_out_dropped_shutdown", (zend_long) stats_events_out_dropped_shutdown_);
+        add_assoc_long(return_value, "events_in_enqueued", (zend_long) stats_events_in_enqueued_);
+        add_assoc_long(return_value, "events_in_drained", (zend_long) stats_events_in_drained_);
+        add_assoc_long(return_value, "events_in_dropped_full", (zend_long) stats_events_in_dropped_full_);
+        add_assoc_long(return_value, "events_in_dropped_shutdown", (zend_long) stats_events_in_dropped_shutdown_);
+        add_assoc_long(return_value, "listener_dispatch_errors", (zend_long) stats_listener_dispatch_errors_);
     }
 
     void workerMain()
@@ -341,6 +869,7 @@ public:
                     jobs_.erase(job->id);
                     results_[job->id] = failed;
                 }
+                dropEventQueuesLocked(true);
                 result_cv_.notify_all();
                 gc_collect_cycles();
                 php_request_shutdown(NULL);
@@ -375,12 +904,27 @@ public:
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 jobs_.erase(job->id);
+                auto queue_it = inbound_events_by_job_.find(job->id);
+                if (queue_it != inbound_events_by_job_.end()) {
+                    size_t dropped = queue_it->second.size();
+                    if (dropped > 0) {
+                        stats_events_in_dropped_shutdown_ += dropped;
+                        qt_qthreadruntime_total_events_in_dropped_shutdown.fetch_add((uint64_t) dropped, std::memory_order_acq_rel);
+                    }
+                    inbound_events_by_job_.erase(queue_it);
+                }
                 result.ready = true;
                 results_[job->id] = std::move(result);
                 stats_drained_++;
                 qt_qthreadruntime_total_drained.fetch_add(1, std::memory_order_acq_rel);
             }
             result_cv_.notify_all();
+            inbound_cv_.notify_all();
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            dropEventQueuesLocked(true);
         }
 
         gc_collect_cycles();
@@ -477,8 +1021,26 @@ public:
         qt_qthreadruntime_result result;
         bool bailed_out = false;
 
+        struct qt_qthreadruntime_tls_guard {
+            qt_qthreadruntime_state *prev_state;
+            uint64_t prev_job_id;
+            explicit qt_qthreadruntime_tls_guard(qt_qthreadruntime_state *state, uint64_t job_id)
+                : prev_state(qt_qthreadruntime_tls_current_state)
+                , prev_job_id(qt_qthreadruntime_tls_current_job_id)
+            {
+                qt_qthreadruntime_tls_current_state = state;
+                qt_qthreadruntime_tls_current_job_id = job_id;
+            }
+            ~qt_qthreadruntime_tls_guard()
+            {
+                qt_qthreadruntime_tls_current_state = prev_state;
+                qt_qthreadruntime_tls_current_job_id = prev_job_id;
+            }
+        } tls_guard(this, job->id);
+
         zend_first_try {
             zval args_zv;
+            ZVAL_UNDEF(&args_zv);
             if (!unserializeValue(job->args_payload, &args_zv) || Z_TYPE(args_zv) != IS_ARRAY) {
                 if (Z_TYPE(args_zv) != IS_UNDEF) {
                     zval_ptr_dtor(&args_zv);
@@ -632,14 +1194,62 @@ public:
     }
 
 private:
+    void scheduleOwnerEventDrain()
+    {
+        bool expected = false;
+        if (!owner_event_drain_scheduled_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+            return;
+        }
+
+        std::weak_ptr<qt_qthreadruntime_state> weak = weak_from_this();
+        if (!qt_runtime_enqueue_owner_task([weak]() {
+            std::shared_ptr<qt_qthreadruntime_state> state = weak.lock();
+            if (!state) {
+                return;
+            }
+
+            state->owner_event_drain_scheduled_.store(false, std::memory_order_release);
+            state->drainEvents(-1);
+        })) {
+            owner_event_drain_scheduled_.store(false, std::memory_order_release);
+        }
+    }
+
+    void dropEventQueuesLocked(bool count_as_shutdown)
+    {
+        size_t outbound_dropped = outbound_events_.size();
+        if (count_as_shutdown && outbound_dropped > 0) {
+            stats_events_out_dropped_shutdown_ += outbound_dropped;
+            qt_qthreadruntime_total_events_out_dropped_shutdown.fetch_add((uint64_t) outbound_dropped, std::memory_order_acq_rel);
+        }
+        outbound_events_.clear();
+
+        size_t inbound_dropped = 0;
+        for (auto &entry : inbound_events_by_job_) {
+            inbound_dropped += entry.second.size();
+            entry.second.clear();
+        }
+        if (count_as_shutdown && inbound_dropped > 0) {
+            stats_events_in_dropped_shutdown_ += inbound_dropped;
+            qt_qthreadruntime_total_events_in_dropped_shutdown.fetch_add((uint64_t) inbound_dropped, std::memory_order_acq_rel);
+        }
+        inbound_events_by_job_.clear();
+    }
+
     mutable std::mutex mutex_;
     std::condition_variable job_cv_;
     std::condition_variable result_cv_;
+    std::condition_variable inbound_cv_;
     std::deque<std::shared_ptr<qt_qthreadruntime_job>> queue_;
+    std::deque<qt_qthreadruntime_event_message> outbound_events_;
+    std::unordered_map<uint64_t, std::deque<qt_qthreadruntime_event_message>> inbound_events_by_job_;
     std::unordered_map<uint64_t, std::shared_ptr<qt_qthreadruntime_job>> jobs_;
+    std::unordered_map<uint64_t, std::shared_ptr<qt_qthreadruntime_listener_t>> listeners_by_id_;
+    std::unordered_map<std::string, std::vector<uint64_t>> listener_ids_by_event_;
     std::unordered_map<uint64_t, qt_qthreadruntime_result> results_;
     std::unique_ptr<qt_qthreadruntime_worker_thread> worker_thread_;
     uint64_t next_job_id_{1};
+    uint64_t next_listener_id_{1};
     uint64_t stats_enqueued_{0};
     uint64_t stats_drained_{0};
     uint64_t stats_canceled_{0};
@@ -647,11 +1257,540 @@ private:
     uint64_t stats_rejected_stopping_{0};
     uint64_t stats_timeouts_{0};
     uint64_t stats_worker_crash_{0};
+    uint64_t stats_listeners_registered_{0};
+    uint64_t stats_events_out_enqueued_{0};
+    uint64_t stats_events_out_drained_{0};
+    uint64_t stats_events_out_dropped_full_{0};
+    uint64_t stats_events_out_dropped_shutdown_{0};
+    uint64_t stats_events_in_enqueued_{0};
+    uint64_t stats_events_in_drained_{0};
+    uint64_t stats_events_in_dropped_full_{0};
+    uint64_t stats_events_in_dropped_shutdown_{0};
+    uint64_t stats_listener_dispatch_errors_{0};
     size_t max_queue_depth_{qt_qthreadruntime_env_queue_depth()};
+    size_t max_event_out_queue_depth_{qt_qthreadruntime_env_event_out_queue_depth()};
+    size_t max_event_in_queue_depth_{qt_qthreadruntime_env_event_in_queue_depth()};
     std::string bootstrap_script_;
     bool running_{false};
     bool stopping_{false};
     bool worker_bootstrap_failed_{false};
+    std::atomic_bool owner_event_drain_scheduled_{false};
+};
+
+struct qt_qthread_task_host {
+    std::mutex mutex_;
+    std::condition_variable inbound_cv_;
+    std::deque<qt_qthreadruntime_event_message> outbound_events_;
+    std::deque<qt_qthreadruntime_event_message> inbound_events_;
+    std::unordered_map<uint64_t, std::shared_ptr<qt_qthreadruntime_listener_t>> listeners_by_id_;
+    std::unordered_map<std::string, std::vector<uint64_t>> listener_ids_by_event_;
+    uint64_t next_listener_id_{1};
+    size_t max_event_out_queue_depth_{qt_qthreadruntime_env_event_out_queue_depth()};
+    size_t max_event_in_queue_depth_{qt_qthreadruntime_env_event_in_queue_depth()};
+    std::string bootstrap_script_;
+    std::string pending_callable_name_;
+    std::string pending_args_payload_;
+    bool has_pending_task_{false};
+    bool task_running_{false};
+    bool stopping_{false};
+    bool interrupted_{false};
+    std::atomic_bool owner_event_drain_scheduled_{false};
+    QPointer<QThread> bound_thread_;
+    QMetaObject::Connection started_connection_;
+    QMetaObject::Connection finished_connection_;
+
+    bool setBootstrapScript(const std::string &path, std::string *error)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (task_running_ || has_pending_task_) {
+            if (error != nullptr) {
+                *error = "Cannot change bootstrap script while task is active.";
+            }
+            return false;
+        }
+
+        bootstrap_script_ = path;
+        return true;
+    }
+
+    bool on(const std::string &event_name, zval *listener, uint64_t *listener_id, std::string *error)
+    {
+        if (listener == nullptr || listener_id == nullptr || error == nullptr) {
+            return false;
+        }
+
+        if (!qt_runtime_can_call_zend()) {
+            *error = "Listeners can only be registered from owner request thread.";
+            return false;
+        }
+
+        std::shared_ptr<qt_qthreadruntime_listener_t> handle = std::make_shared<qt_qthreadruntime_listener_t>();
+        memset(&handle->fci, 0, sizeof(handle->fci));
+        memset(&handle->fci_cache, 0, sizeof(handle->fci_cache));
+        ZVAL_UNDEF(&handle->fci.function_name);
+
+        char *fci_error = NULL;
+        if (zend_fcall_info_init(listener, 0, &handle->fci, &handle->fci_cache, NULL, &fci_error) != SUCCESS) {
+            if (fci_error != NULL) {
+                *error = std::string("Invalid listener: ") + fci_error;
+                efree(fci_error);
+            } else {
+                *error = "Invalid listener.";
+            }
+            return false;
+        }
+        Z_TRY_ADDREF(handle->fci.function_name);
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        handle->id = next_listener_id_++;
+        handle->event_name = event_name;
+        listeners_by_id_[handle->id] = handle;
+        listener_ids_by_event_[event_name].push_back(handle->id);
+        *listener_id = handle->id;
+        return true;
+    }
+
+    bool off(uint64_t listener_id)
+    {
+        std::shared_ptr<qt_qthreadruntime_listener_t> handle;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto it = listeners_by_id_.find(listener_id);
+            if (it == listeners_by_id_.end()) {
+                return false;
+            }
+
+            handle = it->second;
+            listeners_by_id_.erase(it);
+            auto event_it = listener_ids_by_event_.find(handle->event_name);
+            if (event_it != listener_ids_by_event_.end()) {
+                std::vector<uint64_t> &ids = event_it->second;
+                ids.erase(std::remove(ids.begin(), ids.end(), listener_id), ids.end());
+                if (ids.empty()) {
+                    listener_ids_by_event_.erase(event_it);
+                }
+            }
+        }
+
+        qt_qthreadruntime_listener_clear(handle);
+        return true;
+    }
+
+    zend_long drainEvents(zend_long max_items)
+    {
+        if (!qt_runtime_can_call_zend() || max_items == 0) {
+            return 0;
+        }
+
+        zend_long processed = 0;
+        while (max_items < 0 || processed < max_items) {
+            qt_qthreadruntime_event_message message;
+            std::vector<std::shared_ptr<qt_qthreadruntime_listener_t>> listeners;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (outbound_events_.empty()) {
+                    break;
+                }
+
+                message = std::move(outbound_events_.front());
+                outbound_events_.pop_front();
+
+                auto event_it = listener_ids_by_event_.find(message.event_name);
+                if (event_it != listener_ids_by_event_.end()) {
+                    listeners.reserve(event_it->second.size());
+                    for (uint64_t id : event_it->second) {
+                        auto listener_it = listeners_by_id_.find(id);
+                        if (listener_it != listeners_by_id_.end() && listener_it->second) {
+                            listeners.push_back(listener_it->second);
+                        }
+                    }
+                }
+            }
+
+            processed++;
+            if (listeners.empty()) {
+                continue;
+            }
+
+            zval payload;
+            if (!qt_qthreadruntime_value_to_zval(message.payload, &payload)) {
+                continue;
+            }
+
+            zval envelope;
+            array_init(&envelope);
+            add_assoc_stringl(&envelope, "event", message.event_name.data(), message.event_name.size());
+            add_assoc_long(&envelope, "jobId", 0);
+            add_assoc_zval(&envelope, "payload", &payload);
+
+            for (const std::shared_ptr<qt_qthreadruntime_listener_t> &listener : listeners) {
+                if (!qt_qthreadruntime_listener_invoke(listener, &envelope) || EG(exception) != NULL) {
+                    if (EG(exception) != NULL) {
+                        zend_clear_exception();
+                    }
+                    qt_qthreadruntime_total_listener_dispatch_errors.fetch_add(1, std::memory_order_acq_rel);
+                }
+            }
+
+            zval_ptr_dtor(&envelope);
+        }
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!outbound_events_.empty()) {
+            scheduleOwnerEventDrain();
+        }
+
+        return processed;
+    }
+
+    bool send(const std::string &event_name, zval *payload, std::string *error)
+    {
+        qt_qthreadruntime_value payload_value;
+        if (payload == nullptr) {
+            if (error != nullptr) {
+                *error = "Payload must not be null.";
+            }
+            return false;
+        }
+
+        if (!qt_qthreadruntime_zval_to_value(payload, &payload_value, error)) {
+            return false;
+        }
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (stopping_ || (!task_running_ && !has_pending_task_)) {
+            return false;
+        }
+
+        if (inbound_events_.size() >= max_event_in_queue_depth_) {
+            return false;
+        }
+
+        qt_qthreadruntime_event_message message;
+        message.job_id = 0;
+        message.event_name = event_name;
+        message.payload = std::move(payload_value);
+        inbound_events_.push_back(std::move(message));
+        inbound_cv_.notify_all();
+        return true;
+    }
+
+    bool start(QThread *thread, const std::string &callable_name, const std::string &args_payload, bool has_priority, int priority, std::string *error)
+    {
+        if (thread == nullptr) {
+            if (error != nullptr) {
+                *error = "QThread native instance is not initialized.";
+            }
+            return false;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (stopping_) {
+                if (error != nullptr) {
+                    *error = "QThread task runtime is stopping.";
+                }
+                return false;
+            }
+            if (task_running_ || has_pending_task_) {
+                if (error != nullptr) {
+                    *error = "QThread task is already active.";
+                }
+                return false;
+            }
+            if (thread->isRunning()) {
+                if (error != nullptr) {
+                    *error = "QThread is already running.";
+                }
+                return false;
+            }
+
+            pending_callable_name_ = callable_name;
+            pending_args_payload_ = args_payload;
+            has_pending_task_ = true;
+            interrupted_ = false;
+            bound_thread_ = thread;
+            inbound_events_.clear();
+        }
+
+        QObject::disconnect(started_connection_);
+        QObject::disconnect(finished_connection_);
+
+        finished_connection_ = QObject::connect(
+            thread,
+            &QThread::finished,
+            thread,
+            [this]() {
+                std::lock_guard<std::mutex> lock(mutex_);
+                has_pending_task_ = false;
+                task_running_ = false;
+                inbound_events_.clear();
+                inbound_cv_.notify_all();
+            },
+            Qt::DirectConnection
+        );
+
+        if (has_priority) {
+            thread->start((QThread::Priority) priority);
+        } else {
+            thread->start();
+        }
+
+        return true;
+    }
+
+    bool onOwnerInterruptionRequest()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!task_running_ && !has_pending_task_) {
+            return false;
+        }
+
+        interrupted_ = true;
+        if (inbound_events_.size() < max_event_in_queue_depth_) {
+            qt_qthreadruntime_event_message message;
+            message.job_id = 0;
+            message.event_name = "__interrupt";
+            message.payload.type = qt_qthreadruntime_value_type::array_value;
+            inbound_events_.push_back(std::move(message));
+            inbound_cv_.notify_all();
+        }
+        return true;
+    }
+
+    bool isTaskRunning()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return task_running_ || has_pending_task_;
+    }
+
+    bool executePendingOnCurrentThread(QThread *thread)
+    {
+        if (thread == nullptr) {
+            return false;
+        }
+
+        bool should_run = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            should_run = has_pending_task_ && !stopping_;
+        }
+
+        if (!should_run) {
+            return false;
+        }
+
+        runPendingTaskOnCurrentThread(thread);
+        return true;
+    }
+
+    bool publishFromWorker(const std::string &event_name, const qt_qthreadruntime_value &payload)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (stopping_ || qt_runtime_is_shutdown_in_progress()) {
+            return false;
+        }
+        if (outbound_events_.size() >= max_event_out_queue_depth_) {
+            return false;
+        }
+
+        qt_qthreadruntime_event_message message;
+        message.job_id = 0;
+        message.event_name = event_name;
+        message.payload = payload;
+        outbound_events_.push_back(std::move(message));
+        scheduleOwnerEventDrain();
+        return true;
+    }
+
+    bool receiveForWorker(zend_long timeout_ms, qt_qthreadruntime_event_message *message)
+    {
+        if (message == nullptr) {
+            return false;
+        }
+
+        std::unique_lock<std::mutex> lock(mutex_);
+        auto ready = [this]() -> bool {
+            return stopping_ || !inbound_events_.empty();
+        };
+
+        if (timeout_ms <= 0) {
+            inbound_cv_.wait(lock, ready);
+        } else if (!inbound_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), ready)) {
+            return false;
+        }
+
+        if (stopping_ || inbound_events_.empty()) {
+            return false;
+        }
+
+        *message = std::move(inbound_events_.front());
+        inbound_events_.pop_front();
+        return true;
+    }
+
+    void shutdown(zend_long timeout_ms)
+    {
+        QPointer<QThread> thread;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stopping_ = true;
+            has_pending_task_ = false;
+            task_running_ = false;
+            inbound_events_.clear();
+            outbound_events_.clear();
+            inbound_cv_.notify_all();
+            thread = bound_thread_;
+        }
+
+        QObject::disconnect(started_connection_);
+        QObject::disconnect(finished_connection_);
+
+        if (!thread.isNull() && thread->isRunning()) {
+            thread->requestInterruption();
+            thread->quit();
+            unsigned long wait_ms = timeout_ms > 0 ? (unsigned long) timeout_ms : 2000UL;
+            (void) thread->wait(wait_ms);
+        }
+
+        std::vector<std::shared_ptr<qt_qthreadruntime_listener_t>> listeners;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            listeners.reserve(listeners_by_id_.size());
+            for (const auto &entry : listeners_by_id_) {
+                listeners.push_back(entry.second);
+            }
+            listeners_by_id_.clear();
+            listener_ids_by_event_.clear();
+            stopping_ = false;
+            interrupted_ = false;
+        }
+
+        for (const auto &listener : listeners) {
+            qt_qthreadruntime_listener_clear(listener);
+        }
+    }
+
+private:
+    void runPendingTaskOnCurrentThread(QThread *thread)
+    {
+#if !defined(ZTS)
+        (void) thread;
+        return;
+#else
+        std::string callable_name;
+        std::string args_payload;
+        std::string bootstrap_script;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!has_pending_task_ || stopping_) {
+                return;
+            }
+            callable_name = pending_callable_name_;
+            args_payload = pending_args_payload_;
+            bootstrap_script = bootstrap_script_;
+            has_pending_task_ = false;
+            task_running_ = true;
+            interrupted_ = false;
+        }
+
+        qt_qthreadruntime_tls_worker_request = true;
+        qt_qthreadruntime_tls_current_task_host = this;
+        qt_qthreadruntime_tls_interrupted = false;
+        ts_resource(0);
+        TSRMLS_CACHE_UPDATE();
+
+        bool startup_ok = php_request_startup() == SUCCESS;
+        bool bootstrap_ok = true;
+        if (startup_ok && !bootstrap_script.empty()) {
+            std::string bootstrap_error;
+            bootstrap_ok = qt_qthreadruntime_state::executeBootstrapScript(bootstrap_script, &bootstrap_error);
+            if (!bootstrap_ok) {
+                php_error_docref(NULL, E_WARNING, "QThread task bootstrap failed: %s", bootstrap_error.c_str());
+            }
+        }
+
+        if (startup_ok && bootstrap_ok) {
+            zval args_zv;
+            ZVAL_UNDEF(&args_zv);
+            if (qt_qthreadruntime_state::unserializeValue(args_payload, &args_zv) && Z_TYPE(args_zv) == IS_ARRAY) {
+                zval callable_zv;
+                ZVAL_STRINGL(&callable_zv, callable_name.data(), callable_name.size());
+
+                uint32_t argc = (uint32_t) zend_hash_num_elements(Z_ARRVAL(args_zv));
+                std::vector<zval> params;
+                params.reserve(argc);
+                zval *entry = NULL;
+                ZEND_HASH_FOREACH_VAL(Z_ARRVAL(args_zv), entry) {
+                    zval param;
+                    ZVAL_COPY(&param, entry);
+                    params.push_back(param);
+                } ZEND_HASH_FOREACH_END();
+
+                zval retval;
+                ZVAL_UNDEF(&retval);
+                zend_fcall_info fci;
+                zend_fcall_info_cache fcc;
+                if (zend_fcall_info_init(&callable_zv, 0, &fci, &fcc, NULL, NULL) == SUCCESS) {
+                    fci.retval = &retval;
+                    fci.param_count = argc;
+                    fci.params = argc > 0 ? params.data() : NULL;
+                    (void) zend_call_function(&fci, &fcc);
+                    if (!Z_ISUNDEF(retval)) {
+                        zval_ptr_dtor(&retval);
+                    }
+                    if (EG(exception) != NULL) {
+                        zend_clear_exception();
+                    }
+                }
+
+                for (zval &param : params) {
+                    zval_ptr_dtor(&param);
+                }
+                zval_ptr_dtor(&callable_zv);
+                zval_ptr_dtor(&args_zv);
+            } else {
+                if (Z_TYPE(args_zv) != IS_UNDEF) {
+                    zval_ptr_dtor(&args_zv);
+                }
+                php_error_docref(NULL, E_WARNING, "QThread task arguments could not be decoded.");
+            }
+        }
+
+        if (startup_ok) {
+            gc_collect_cycles();
+            php_request_shutdown(NULL);
+        }
+        ts_free_thread();
+
+        qt_qthreadruntime_tls_current_task_host = nullptr;
+        qt_qthreadruntime_tls_worker_request = false;
+        qt_qthreadruntime_tls_interrupted = false;
+
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            task_running_ = false;
+            inbound_events_.clear();
+            inbound_cv_.notify_all();
+        }
+        scheduleOwnerEventDrain();
+#endif
+    }
+
+    void scheduleOwnerEventDrain()
+    {
+        bool expected = false;
+        if (!owner_event_drain_scheduled_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+            return;
+        }
+
+        if (!qt_runtime_enqueue_owner_task([this]() {
+            owner_event_drain_scheduled_.store(false, std::memory_order_release);
+            this->drainEvents(-1);
+        })) {
+            owner_event_drain_scheduled_.store(false, std::memory_order_release);
+        }
+    }
 };
 
 void qt_qthreadruntime_worker_thread::run()
@@ -730,6 +1869,8 @@ PHP_QT_API bool qt_qthreadruntime_is_worker_request_context(void)
 PHP_QT_API void qt_qthreadruntime_phpinfo_rows(void)
 {
     php_info_print_table_row(2, "qthreadruntime queue max depth", "4096 (default)");
+    php_info_print_table_row(2, "qthreadruntime event out queue max depth", "4096 (default)");
+    php_info_print_table_row(2, "qthreadruntime event in queue max depth", "4096 (default)");
     php_info_print_table_row(2, "qthreadruntime total enqueued", std::to_string(qt_qthreadruntime_total_enqueued.load(std::memory_order_acquire)).c_str());
     php_info_print_table_row(2, "qthreadruntime total drained", std::to_string(qt_qthreadruntime_total_drained.load(std::memory_order_acquire)).c_str());
     php_info_print_table_row(2, "qthreadruntime total canceled", std::to_string(qt_qthreadruntime_total_canceled.load(std::memory_order_acquire)).c_str());
@@ -737,6 +1878,15 @@ PHP_QT_API void qt_qthreadruntime_phpinfo_rows(void)
     php_info_print_table_row(2, "qthreadruntime rejected (stopping)", std::to_string(qt_qthreadruntime_total_rejected_stopping.load(std::memory_order_acquire)).c_str());
     php_info_print_table_row(2, "qthreadruntime total await timeouts", std::to_string(qt_qthreadruntime_total_timeouts.load(std::memory_order_acquire)).c_str());
     php_info_print_table_row(2, "qthreadruntime worker crashes", std::to_string(qt_qthreadruntime_total_worker_crash.load(std::memory_order_acquire)).c_str());
+    php_info_print_table_row(2, "qthreadruntime events out enqueued", std::to_string(qt_qthreadruntime_total_events_out_enqueued.load(std::memory_order_acquire)).c_str());
+    php_info_print_table_row(2, "qthreadruntime events out drained", std::to_string(qt_qthreadruntime_total_events_out_drained.load(std::memory_order_acquire)).c_str());
+    php_info_print_table_row(2, "qthreadruntime events out dropped (full)", std::to_string(qt_qthreadruntime_total_events_out_dropped_full.load(std::memory_order_acquire)).c_str());
+    php_info_print_table_row(2, "qthreadruntime events out dropped (shutdown)", std::to_string(qt_qthreadruntime_total_events_out_dropped_shutdown.load(std::memory_order_acquire)).c_str());
+    php_info_print_table_row(2, "qthreadruntime events in enqueued", std::to_string(qt_qthreadruntime_total_events_in_enqueued.load(std::memory_order_acquire)).c_str());
+    php_info_print_table_row(2, "qthreadruntime events in drained", std::to_string(qt_qthreadruntime_total_events_in_drained.load(std::memory_order_acquire)).c_str());
+    php_info_print_table_row(2, "qthreadruntime events in dropped (full)", std::to_string(qt_qthreadruntime_total_events_in_dropped_full.load(std::memory_order_acquire)).c_str());
+    php_info_print_table_row(2, "qthreadruntime events in dropped (shutdown)", std::to_string(qt_qthreadruntime_total_events_in_dropped_shutdown.load(std::memory_order_acquire)).c_str());
+    php_info_print_table_row(2, "qthreadruntime listener dispatch errors", std::to_string(qt_qthreadruntime_total_listener_dispatch_errors.load(std::memory_order_acquire)).c_str());
 }
 
 static inline qt_qthreadruntime_state *qt_qthreadruntime_fetch_state(zval *zv)
@@ -768,6 +1918,11 @@ static bool qt_qthreadruntime_payload_supported(zval *value)
         default:
             return true;
     }
+}
+
+static bool qt_qthreadruntime_event_name_valid(zend_string *event_name)
+{
+    return event_name != NULL && ZSTR_LEN(event_name) > 0;
 }
 
 static bool qt_qthreadruntime_validate_callable(zval *callable, std::string *error)
@@ -825,6 +1980,217 @@ static bool qt_qthreadruntime_validate_callable(zval *callable, std::string *err
     }
 
     return true;
+}
+
+PHP_QT_API bool qt_qthreadruntime_payload_supported_for_worker(zval *value)
+{
+    if (value == NULL) {
+        return false;
+    }
+
+    std::string error;
+    qt_qthreadruntime_value converted;
+    return qt_qthreadruntime_zval_to_value(value, &converted, &error);
+}
+
+PHP_QT_API bool qt_qthreadruntime_validate_callable_string(zend_string *callable, std::string *error)
+{
+    if (callable == NULL || ZSTR_LEN(callable) == 0) {
+        if (error != NULL) {
+            *error = "must be a non-empty callable string";
+        }
+        return false;
+    }
+
+    return true;
+}
+
+PHP_QT_API bool qt_qthreadruntime_serialize_worker_args(zval *args, std::string *out_payload, std::string *error)
+{
+    if (args == NULL || out_payload == NULL) {
+        if (error != NULL) {
+            *error = "invalid worker arguments";
+        }
+        return false;
+    }
+
+    if (Z_TYPE_P(args) != IS_ARRAY) {
+        if (error != NULL) {
+            *error = "worker arguments must be an array";
+        }
+        return false;
+    }
+
+    if (!qt_qthreadruntime_payload_supported_for_worker(args)) {
+        if (error != NULL) {
+            *error = "worker arguments support only null/bool/int/float/string/array values";
+        }
+        return false;
+    }
+
+    zval copy;
+    ZVAL_COPY(&copy, args);
+    bool ok = qt_qthreadruntime_state::serializeValue(&copy, out_payload);
+    zval_ptr_dtor(&copy);
+    if (!ok && error != NULL) {
+        *error = "failed to serialize worker arguments";
+    }
+    return ok;
+}
+
+PHP_QT_API bool qt_qthreadruntime_set_thread_interrupted(bool interrupted)
+{
+    qt_qthreadruntime_tls_interrupted = interrupted;
+    return true;
+}
+
+PHP_QT_API bool qt_qthreadruntime_worker_publish_zval(zend_string *event_name, zval *payload, std::string *error)
+{
+    if (!qt_qthreadruntime_event_name_valid(event_name)) {
+        if (error != NULL) {
+            *error = "event name must be non-empty";
+        }
+        return false;
+    }
+
+    zval payload_input;
+    if (payload != NULL) {
+        ZVAL_COPY(&payload_input, payload);
+    } else {
+        array_init(&payload_input);
+    }
+
+    qt_qthreadruntime_value payload_value;
+    std::string payload_error;
+    bool ok_payload = qt_qthreadruntime_zval_to_value(&payload_input, &payload_value, &payload_error);
+    zval_ptr_dtor(&payload_input);
+    if (!ok_payload) {
+        if (error != NULL) {
+            *error = payload_error;
+        }
+        return false;
+    }
+
+    std::string event(ZSTR_VAL(event_name), ZSTR_LEN(event_name));
+    if (qt_qthreadruntime_tls_current_state != nullptr && qt_qthreadruntime_tls_current_job_id != 0) {
+        return qt_qthreadruntime_tls_current_state->publishFromWorker(qt_qthreadruntime_tls_current_job_id, event, payload_value);
+    }
+
+    if (qt_qthreadruntime_tls_current_task_host != nullptr) {
+        return qt_qthreadruntime_tls_current_task_host->publishFromWorker(event, payload_value);
+    }
+
+    if (error != NULL) {
+        *error = "publish() can only be called from an active worker job context.";
+    }
+    return false;
+}
+
+PHP_QT_API bool qt_qthreadruntime_worker_receive_zval(zend_long timeout_ms, zval *return_value, bool *has_message, std::string *error)
+{
+    if (return_value == NULL || has_message == NULL) {
+        if (error != NULL) {
+            *error = "invalid receive target";
+        }
+        return false;
+    }
+
+    *has_message = false;
+    qt_qthreadruntime_event_message message;
+    bool received = false;
+
+    if (qt_qthreadruntime_tls_current_state != nullptr && qt_qthreadruntime_tls_current_job_id != 0) {
+        received = qt_qthreadruntime_tls_current_state->receiveForWorker(qt_qthreadruntime_tls_current_job_id, timeout_ms, &message);
+    } else if (qt_qthreadruntime_tls_current_task_host != nullptr) {
+        received = qt_qthreadruntime_tls_current_task_host->receiveForWorker(timeout_ms, &message);
+    } else {
+        if (error != NULL) {
+            *error = "receive() can only be called from an active worker job context.";
+        }
+        return false;
+    }
+
+    if (!received) {
+        *has_message = false;
+        ZVAL_NULL(return_value);
+        return true;
+    }
+
+    zval payload_value;
+    if (!qt_qthreadruntime_value_to_zval(message.payload, &payload_value)) {
+        if (error != NULL) {
+            *error = "failed to materialize received payload";
+        }
+        return false;
+    }
+
+    array_init(return_value);
+    add_assoc_stringl(return_value, "event", message.event_name.data(), message.event_name.size());
+    add_assoc_zval(return_value, "payload", &payload_value);
+    *has_message = true;
+    return true;
+}
+
+PHP_QT_API qt_qthread_task_host *qt_qthread_task_host_create(void)
+{
+    return new qt_qthread_task_host();
+}
+
+PHP_QT_API void qt_qthread_task_host_destroy(qt_qthread_task_host *host)
+{
+    if (host == NULL) {
+        return;
+    }
+    host->shutdown(2000);
+    delete host;
+}
+
+PHP_QT_API bool qt_qthread_task_host_set_bootstrap_script(qt_qthread_task_host *host, const std::string &path, std::string *error)
+{
+    return host != NULL && host->setBootstrapScript(path, error);
+}
+
+PHP_QT_API bool qt_qthread_task_host_start(qt_qthread_task_host *host, QThread *thread, const std::string &callable_name, const std::string &args_payload, bool has_priority, int priority, std::string *error)
+{
+    return host != NULL && host->start(thread, callable_name, args_payload, has_priority, priority, error);
+}
+
+PHP_QT_API bool qt_qthread_task_host_on(qt_qthread_task_host *host, const std::string &event_name, zval *listener, uint64_t *listener_id, std::string *error)
+{
+    return host != NULL && host->on(event_name, listener, listener_id, error);
+}
+
+PHP_QT_API bool qt_qthread_task_host_off(qt_qthread_task_host *host, uint64_t listener_id)
+{
+    return host != NULL && host->off(listener_id);
+}
+
+PHP_QT_API zend_long qt_qthread_task_host_drain_events(qt_qthread_task_host *host, zend_long max_items)
+{
+    if (host == NULL) {
+        return 0;
+    }
+    return host->drainEvents(max_items);
+}
+
+PHP_QT_API bool qt_qthread_task_host_send(qt_qthread_task_host *host, const std::string &event_name, zval *payload, std::string *error)
+{
+    return host != NULL && host->send(event_name, payload, error);
+}
+
+PHP_QT_API bool qt_qthread_task_host_on_owner_interruption_request(qt_qthread_task_host *host)
+{
+    return host != NULL && host->onOwnerInterruptionRequest();
+}
+
+PHP_QT_API bool qt_qthread_task_host_is_task_running(qt_qthread_task_host *host)
+{
+    return host != NULL && host->isTaskRunning();
+}
+
+PHP_QT_API bool qt_qthread_task_host_execute_pending(qt_qthread_task_host *host, QThread *thread)
+{
+    return host != NULL && host->executePendingOnCurrentThread(thread);
 }
 
 static zend_object *qt_qthreadruntime_create_object(zend_class_entry *ce)
@@ -1000,6 +2366,183 @@ PHP_METHOD(QThreadRuntime, submit)
 #endif
 }
 
+PHP_METHOD(QThreadRuntime, on)
+{
+    zend_string *event_name = NULL;
+    zval *listener = NULL;
+
+    ZEND_PARSE_PARAMETERS_START(2, 2)
+        Z_PARAM_STR(event_name)
+        Z_PARAM_ZVAL(listener)
+    ZEND_PARSE_PARAMETERS_END();
+
+#if !defined(ZTS)
+    zend_throw_error(NULL, "Qt\\Core\\QThreadRuntime requires a ZTS PHP build.");
+    RETURN_THROWS();
+#else
+    if (!qt_qthreadruntime_event_name_valid(event_name)) {
+        zend_argument_value_error(1, "must be a non-empty event name");
+        RETURN_THROWS();
+    }
+
+    qt_qthreadruntime_state *state = qt_qthreadruntime_fetch_state(ZEND_THIS);
+    if (state == NULL) {
+        zend_throw_error(NULL, "Invalid QThreadRuntime state.");
+        RETURN_THROWS();
+    }
+
+    uint64_t listener_id = 0;
+    std::string add_error;
+    std::string event_name_value(ZSTR_VAL(event_name), ZSTR_LEN(event_name));
+    if (!state->addListener(event_name_value, listener, &listener_id, &add_error)) {
+        zend_throw_error(NULL, "%s", add_error.c_str());
+        RETURN_THROWS();
+    }
+
+    RETURN_LONG((zend_long) listener_id);
+#endif
+}
+
+PHP_METHOD(QThreadRuntime, off)
+{
+    zend_long listener_id = 0;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_LONG(listener_id)
+    ZEND_PARSE_PARAMETERS_END();
+
+#if !defined(ZTS)
+    RETURN_FALSE;
+#else
+    qt_qthreadruntime_state *state = qt_qthreadruntime_fetch_state(ZEND_THIS);
+    if (state == NULL) {
+        RETURN_FALSE;
+    }
+
+    RETURN_BOOL(state->removeListener((uint64_t) listener_id));
+#endif
+}
+
+PHP_METHOD(QThreadRuntime, drainEvents)
+{
+    zend_long max_items = -1;
+    ZEND_PARSE_PARAMETERS_START(0, 1)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_LONG(max_items)
+    ZEND_PARSE_PARAMETERS_END();
+
+#if !defined(ZTS)
+    RETURN_LONG(0);
+#else
+    qt_qthreadruntime_state *state = qt_qthreadruntime_fetch_state(ZEND_THIS);
+    if (state == NULL) {
+        RETURN_LONG(0);
+    }
+
+    RETURN_LONG(state->drainEvents(max_items));
+#endif
+}
+
+PHP_METHOD(QThreadRuntime, send)
+{
+    zend_long job_id = 0;
+    zend_string *event_name = NULL;
+    zval *payload = NULL;
+
+    ZEND_PARSE_PARAMETERS_START(2, 3)
+        Z_PARAM_LONG(job_id)
+        Z_PARAM_STR(event_name)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_ARRAY(payload)
+    ZEND_PARSE_PARAMETERS_END();
+
+#if !defined(ZTS)
+    RETURN_FALSE;
+#else
+    if (!qt_qthreadruntime_event_name_valid(event_name)) {
+        zend_argument_value_error(2, "must be a non-empty event name");
+        RETURN_THROWS();
+    }
+
+    qt_qthreadruntime_state *state = qt_qthreadruntime_fetch_state(ZEND_THIS);
+    if (state == NULL) {
+        RETURN_FALSE;
+    }
+
+    zval payload_input;
+    if (payload != NULL) {
+        ZVAL_COPY(&payload_input, payload);
+    } else {
+        array_init(&payload_input);
+    }
+
+    qt_qthreadruntime_value payload_value;
+    std::string payload_error;
+    bool ok = qt_qthreadruntime_zval_to_value(&payload_input, &payload_value, &payload_error);
+    zval_ptr_dtor(&payload_input);
+
+    if (!ok) {
+        zend_argument_value_error(3, "%s", payload_error.c_str());
+        RETURN_THROWS();
+    }
+
+    std::string event_name_value(ZSTR_VAL(event_name), ZSTR_LEN(event_name));
+    RETURN_BOOL(state->sendCommand((uint64_t) job_id, event_name_value, payload_value));
+#endif
+}
+
+PHP_METHOD(QThreadRuntime, publish)
+{
+    zend_string *event_name = NULL;
+    zval *payload = NULL;
+
+    ZEND_PARSE_PARAMETERS_START(1, 2)
+        Z_PARAM_STR(event_name)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_ARRAY(payload)
+    ZEND_PARSE_PARAMETERS_END();
+
+#if !defined(ZTS)
+    zend_throw_error(NULL, "Qt\\Core\\QThreadRuntime requires a ZTS PHP build.");
+    RETURN_THROWS();
+#else
+    std::string error;
+    if (!qt_qthreadruntime_worker_publish_zval(event_name, payload, &error)) {
+        if (!error.empty()) {
+            zend_throw_error(NULL, "%s", error.c_str());
+            RETURN_THROWS();
+        }
+        RETURN_FALSE;
+    }
+    RETURN_TRUE;
+#endif
+}
+
+PHP_METHOD(QThreadRuntime, receive)
+{
+    zend_long timeout_ms = 0;
+    ZEND_PARSE_PARAMETERS_START(0, 1)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_LONG(timeout_ms)
+    ZEND_PARSE_PARAMETERS_END();
+
+#if !defined(ZTS)
+    RETURN_NULL();
+#else
+    bool has_message = false;
+    std::string error;
+    if (!qt_qthreadruntime_worker_receive_zval(timeout_ms, return_value, &has_message, &error)) {
+        if (!error.empty()) {
+            zend_throw_error(NULL, "%s", error.c_str());
+            RETURN_THROWS();
+        }
+        RETURN_NULL();
+    }
+    if (!has_message) {
+        RETURN_NULL();
+    }
+#endif
+}
+
 PHP_METHOD(QThreadRuntime, await)
 {
     zend_long job_id = 0;
@@ -1142,6 +2685,12 @@ static const zend_function_entry qt_qthreadruntime_methods[] = {
     ZEND_ME(QThreadRuntime, setBootstrapScript, arginfo_class_Qt_Core_QThreadRuntime_setBootstrapScript, ZEND_ACC_PUBLIC)
     ZEND_ME(QThreadRuntime, start, arginfo_class_Qt_Core_QThreadRuntime_start, ZEND_ACC_PUBLIC)
     ZEND_ME(QThreadRuntime, submit, arginfo_class_Qt_Core_QThreadRuntime_submit, ZEND_ACC_PUBLIC)
+    ZEND_ME(QThreadRuntime, on, arginfo_class_Qt_Core_QThreadRuntime_on, ZEND_ACC_PUBLIC)
+    ZEND_ME(QThreadRuntime, off, arginfo_class_Qt_Core_QThreadRuntime_off, ZEND_ACC_PUBLIC)
+    ZEND_ME(QThreadRuntime, drainEvents, arginfo_class_Qt_Core_QThreadRuntime_drainEvents, ZEND_ACC_PUBLIC)
+    ZEND_ME(QThreadRuntime, send, arginfo_class_Qt_Core_QThreadRuntime_send, ZEND_ACC_PUBLIC)
+    ZEND_ME(QThreadRuntime, publish, arginfo_class_Qt_Core_QThreadRuntime_publish, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    ZEND_ME(QThreadRuntime, receive, arginfo_class_Qt_Core_QThreadRuntime_receive, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
     ZEND_ME(QThreadRuntime, await, arginfo_class_Qt_Core_QThreadRuntime_await, ZEND_ACC_PUBLIC)
     ZEND_ME(QThreadRuntime, cancel, arginfo_class_Qt_Core_QThreadRuntime_cancel, ZEND_ACC_PUBLIC)
     ZEND_ME(QThreadRuntime, stop, arginfo_class_Qt_Core_QThreadRuntime_stop, ZEND_ACC_PUBLIC)

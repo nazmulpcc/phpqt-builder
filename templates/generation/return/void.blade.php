@@ -57,3 +57,10 @@ if ($overload?->isPureVirtual) {
 @endforeach
 @endif
 @endif
+@if($ctx->nativeCppType === 'QThread' && $method->name === 'requestInterruption')
+    if (intern->extra_storage != NULL) {
+        (void) qt_qthread_task_host_on_owner_interruption_request(
+            static_cast<qt_qthread_task_host *>(intern->extra_storage)
+        );
+    }
+@endif

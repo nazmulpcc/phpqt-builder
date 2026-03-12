@@ -120,6 +120,20 @@ it('handles burst cross-thread signal dispatch without timing out', function ():
         ->and($payload['finished_hits'])->toBe($payload['thread_count']);
 });
 
+it('runs qthread task mode with sequential reuse and event streaming', function (): void {
+    $payload = qt_runtime_payload('QtCore/thread_qthread_task_mode_basic.php');
+
+    expect($payload['first_timed_out'])->toBeFalse()
+        ->and($payload['second_timed_out'])->toBeFalse()
+        ->and($payload['first_wait_ok'])->toBeTrue()
+        ->and($payload['second_wait_ok'])->toBeTrue()
+        ->and($payload['after_first'])->toBe(5)
+        ->and($payload['after_second'])->toBe(8)
+        ->and($payload['listener_removed'])->toBeTrue()
+        ->and($payload['is_finished'])->toBeTrue()
+        ->and($payload['is_running'])->toBeFalse();
+});
+
 it('runs blocking worker jobs in parallel isolated runtimes', function (): void {
     $payload = qt_runtime_payload('QtCore/thread_runtime_parallel.php');
 
@@ -205,5 +219,63 @@ it('rejects unsupported cross-runtime payload values deterministically', functio
     expect($payload['resource_rejected'])->toBeTrue()
         ->and($payload['closure_rejected'])->toBeTrue()
         ->and($payload['normal_value'])->toBe(9)
+        ->and($payload['stopped'])->toBeTrue();
+});
+
+it('streams worker events to owner listeners with dynamic event names', function (): void {
+    $payload = qt_runtime_payload('QtCore/thread_runtime_event_publish.php', [], 10);
+
+    expect($payload['result'])->toBe(123)
+        ->and($payload['progress_count'])->toBeGreaterThanOrEqual(5)
+        ->and($payload['decompressed_count'])->toBeGreaterThanOrEqual(2)
+        ->and($payload['progress_first'])->toBe(1)
+        ->and($payload['off_invalid'])->toBeFalse()
+        ->and($payload['off_progress'])->toBeTrue()
+        ->and($payload['off_decompressed'])->toBeTrue()
+        ->and($payload['drained'])->toBeGreaterThan(0)
+        ->and($payload['events_out_enqueued'])->toBeGreaterThanOrEqual(7)
+        ->and($payload['events_out_drained'])->toBeGreaterThanOrEqual(7)
+        ->and($payload['stopped'])->toBeTrue();
+});
+
+it('supports owner-to-worker commands through send/receive', function (): void {
+    $payload = qt_runtime_payload('QtCore/thread_runtime_event_send_receive.php', [], 10);
+
+    expect($payload['send_missing'])->toBeFalse()
+        ->and($payload['send_pause'])->toBeTrue()
+        ->and($payload['send_resume'])->toBeTrue()
+        ->and($payload['send_stop'])->toBeTrue()
+        ->and($payload['result'])->toBeArray()
+        ->and($payload['ack_count'])->toBeGreaterThanOrEqual(3)
+        ->and($payload['drained'])->toBeGreaterThan(0)
+        ->and($payload['events_in_enqueued'])->toBeGreaterThanOrEqual(3)
+        ->and($payload['events_in_drained'])->toBeGreaterThanOrEqual(3)
+        ->and($payload['stopped'])->toBeTrue();
+});
+
+it('drops newest worker events when outbound event queue is full', function (): void {
+    $payload = qt_runtime_payload(
+        'QtCore/thread_runtime_event_burst_drop.php',
+        ['QT_QTHREADRUNTIME_EVENT_OUT_QUEUE_DEPTH' => '8'],
+        10,
+    );
+
+    expect($payload['published'])->toBeGreaterThan(0)
+        ->and($payload['received'])->toBeGreaterThan(0)
+        ->and($payload['received'])->toBeLessThanOrEqual($payload['published'])
+        ->and($payload['drained'])->toBeGreaterThan(0)
+        ->and($payload['events_out_enqueued'])->toBe($payload['published'])
+        ->and($payload['events_out_dropped_full'])->toBeGreaterThan(0)
+        ->and($payload['stopped'])->toBeTrue();
+});
+
+it('isolates listener exceptions and continues dispatch', function (): void {
+    $payload = qt_runtime_payload('QtCore/thread_runtime_event_listener_exception.php', [], 10);
+
+    expect($payload['result'])->toBe(7)
+        ->and($payload['first_hits'])->toBeGreaterThan(0)
+        ->and($payload['second_hits'])->toBeGreaterThan(0)
+        ->and($payload['second_hits'])->toBe($payload['first_hits'])
+        ->and($payload['listener_dispatch_errors'])->toBeGreaterThan(0)
         ->and($payload['stopped'])->toBeTrue();
 });
