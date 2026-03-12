@@ -735,7 +735,7 @@ public:
     bool publishFromWorker(uint64_t job_id, const std::string &event_name, const qt_qthreadruntime_value &payload)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (stopping_ || qt_runtime_is_shutdown_in_progress()) {
+        if (stopping_) {
             stats_events_out_dropped_shutdown_++;
             qt_qthreadruntime_total_events_out_dropped_shutdown.fetch_add(1, std::memory_order_acq_rel);
             return false;
@@ -1587,7 +1587,7 @@ struct qt_qthread_task_host {
     bool publishFromWorker(const std::string &event_name, const qt_qthreadruntime_value &payload)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (stopping_ || qt_runtime_is_shutdown_in_progress()) {
+        if (stopping_) {
             return false;
         }
         if (outbound_events_.size() >= max_event_out_queue_depth_) {

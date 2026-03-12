@@ -344,29 +344,44 @@ PHP_RINIT_FUNCTION({!! $ctx->extensionName !!})
 #if defined(ZTS) && defined(COMPILE_DL_{!! strtoupper($ctx->extensionName) !!})
     ZEND_TSRMLS_CACHE_UPDATE();
 #endif
+
+@if($ctx->includeThreadRuntimeSupport)
+    bool _qt_is_worker_request = qt_qthreadruntime_is_worker_request_context();
+@else
+    bool _qt_is_worker_request = false;
+@endif
+
 #if defined(ZTS)
     QT_RUNTIME_G(owner_thread_id) = (zend_ulong) (uintptr_t) tsrm_thread_id();
 #else
     QT_RUNTIME_G(owner_thread_id) = 0;
 #endif
     QT_RUNTIME_G(request_active) = true;
-    qt_shutdown_in_progress.store(false, std::memory_order_release);
-    qt_about_to_quit_hooked.store(false, std::memory_order_release);
-    qt_runtime_drop_owner_tasks();
+
+    if (!_qt_is_worker_request) {
+        qt_shutdown_in_progress.store(false, std::memory_order_release);
+        qt_about_to_quit_hooked.store(false, std::memory_order_release);
+        qt_runtime_drop_owner_tasks();
+    }
 
     return SUCCESS;
 }
 
 PHP_RSHUTDOWN_FUNCTION({!! $ctx->extensionName !!})
 {
+@if($ctx->includeThreadRuntimeSupport)
+    if (qt_qthreadruntime_is_worker_request_context()) {
+        QT_RUNTIME_G(request_active) = false;
+        return SUCCESS;
+    }
+@endif
+
     qt_runtime_mark_shutdown_in_progress();
     qt_runtime_drain_owner_tasks(256);
     qt_runtime_drop_owner_tasks(true);
 @if($ctx->includeThreadRuntimeSupport)
-    if (!qt_qthreadruntime_is_worker_request_context()) {
-        qt_qthreadruntime_shutdown_all(2000);
-        qt_runtime_shutdown_qcoreapplication();
-    }
+    qt_qthreadruntime_shutdown_all(2000);
+    qt_runtime_shutdown_qcoreapplication();
 @else
     qt_runtime_shutdown_qcoreapplication();
 @endif
