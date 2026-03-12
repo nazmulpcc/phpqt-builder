@@ -173,6 +173,8 @@ it('accepts array callable descriptors and rejects closure callables determinist
 
     expect($payload['array_callable_object'])->toBeTrue()
         ->and($payload['array_callable_class'])->toBe('DateTimeImmutable')
+        ->and($payload['non_static_rejected'])->toBeTrue()
+        ->and($payload['unknown_class_rejected'])->toBeTrue()
         ->and($payload['closure_rejected'])->toBeTrue()
         ->and($payload['stopped'])->toBeTrue();
 });
@@ -184,4 +186,13 @@ it('loads worker bootstrap script into isolated runtime context', function (): v
         ->and($payload['worker_bootstrap_failed'])->toBeFalse()
         ->and($payload['stopped'])->toBeTrue()
         ->and($payload['main_has_function'])->toBeFalse();
+});
+
+it('rejects unsupported cross-runtime payload values deterministically', function (): void {
+    $payload = qt_runtime_payload('QtCore/thread_runtime_payload_validation.php', [], 10);
+
+    expect($payload['resource_rejected'])->toBeTrue()
+        ->and($payload['closure_rejected'])->toBeTrue()
+        ->and($payload['normal_value'])->toBe(9)
+        ->and($payload['stopped'])->toBeTrue();
 });

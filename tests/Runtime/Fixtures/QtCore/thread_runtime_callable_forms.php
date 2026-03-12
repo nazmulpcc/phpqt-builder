@@ -12,6 +12,20 @@ $runtime->start();
 $jobId = $runtime->submit(['DateTimeImmutable', 'createFromFormat'], ['U', '1700000000']);
 $result = $runtime->await($jobId, 5000);
 
+$nonStaticRejected = false;
+try {
+    $runtime->submit(['DateTimeImmutable', 'format'], ['Y']);
+} catch (\Throwable) {
+    $nonStaticRejected = true;
+}
+
+$unknownClassRejected = false;
+try {
+    $runtime->submit(['Qt\\Core\\DefinitelyMissingRuntimeClass', 'run'], []);
+} catch (\Throwable) {
+    $unknownClassRejected = true;
+}
+
 $closureRejected = false;
 try {
     $runtime->submit(static fn (): int => 1, []);
@@ -24,6 +38,8 @@ $stopped = $runtime->stop(2000);
 qt_runtime_result([
     'array_callable_object' => is_object($result),
     'array_callable_class' => is_object($result) ? get_class($result) : '',
+    'non_static_rejected' => $nonStaticRejected,
+    'unknown_class_rejected' => $unknownClassRejected,
     'closure_rejected' => $closureRejected,
     'stopped' => $stopped,
 ]);

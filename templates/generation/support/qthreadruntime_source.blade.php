@@ -9,6 +9,7 @@
 
 #include <QtCore/QThread>
 #include <TSRM.h>
+#include <Zend/zend_closures.h>
 #include <Zend/zend_compile.h>
 #include <Zend/zend_exceptions.h>
 #include <Zend/zend_stream.h>
@@ -748,6 +749,97 @@ static inline qt_qthreadruntime_state *qt_qthreadruntime_fetch_state(zval *zv)
     return intern->state->get();
 }
 
+static bool qt_qthreadruntime_payload_supported(zval *value)
+{
+    switch (Z_TYPE_P(value)) {
+        case IS_RESOURCE:
+            return false;
+        case IS_OBJECT:
+            return !instanceof_function(Z_OBJCE_P(value), zend_ce_closure);
+        case IS_ARRAY: {
+            zval *entry = NULL;
+            ZEND_HASH_FOREACH_VAL(Z_ARRVAL_P(value), entry) {
+                if (entry == NULL || !qt_qthreadruntime_payload_supported(entry)) {
+                    return false;
+                }
+            } ZEND_HASH_FOREACH_END();
+            return true;
+        }
+        default:
+            return true;
+    }
+}
+
+static bool qt_qthreadruntime_validate_callable(zval *callable, std::string *error)
+{
+    if (callable == NULL) {
+        if (error != NULL) {
+            *error = "must be a callable";
+        }
+        return false;
+    }
+
+    if (Z_TYPE_P(callable) == IS_STRING) {
+        if (Z_STRLEN_P(callable) > 0) {
+            return true;
+        }
+        if (error != NULL) {
+            *error = "must be a non-empty callable string";
+        }
+        return false;
+    }
+
+    if (Z_TYPE_P(callable) != IS_ARRAY || zend_hash_num_elements(Z_ARRVAL_P(callable)) != 2) {
+        if (error != NULL) {
+            *error = "must be a non-empty callable string or [class-string, method-string] pair; closures/object callables are not supported yet";
+        }
+        return false;
+    }
+
+    zval *first = zend_hash_index_find(Z_ARRVAL_P(callable), 0);
+    zval *second = zend_hash_index_find(Z_ARRVAL_P(callable), 1);
+    if (first == NULL
+        || second == NULL
+        || Z_TYPE_P(first) != IS_STRING
+        || Z_TYPE_P(second) != IS_STRING
+        || Z_STRLEN_P(first) == 0
+        || Z_STRLEN_P(second) == 0
+    ) {
+        if (error != NULL) {
+            *error = "must be [class-string, non-empty method-string] when callable is an array";
+        }
+        return false;
+    }
+
+    zend_string *class_name = Z_STR_P(first);
+    zend_class_entry *ce = zend_lookup_class_ex(class_name, NULL, ZEND_FETCH_CLASS_NO_AUTOLOAD);
+    if (ce == NULL) {
+        if (error != NULL) {
+            *error = "class-string callable requires a loaded class in owner runtime";
+        }
+        return false;
+    }
+
+    zend_string *lc_method = zend_string_tolower(Z_STR_P(second));
+    zend_function *fn = (zend_function *) zend_hash_find_ptr(&ce->function_table, lc_method);
+    zend_string_release(lc_method);
+    if (fn == NULL) {
+        if (error != NULL) {
+            *error = "array callable method was not found on target class";
+        }
+        return false;
+    }
+
+    if ((fn->common.fn_flags & ZEND_ACC_STATIC) == 0) {
+        if (error != NULL) {
+            *error = "array callable must reference a static method";
+        }
+        return false;
+    }
+
+    return true;
+}
+
 static zend_object *qt_qthreadruntime_create_object(zend_class_entry *ce)
 {
     qt_qthreadruntime_object *intern = (qt_qthreadruntime_object *) zend_object_alloc(
@@ -861,29 +953,16 @@ PHP_METHOD(QThreadRuntime, submit)
         RETURN_THROWS();
     }
 
-    if (callable == NULL) {
-        zend_argument_value_error(1, "must be a callable");
+    std::string callable_error;
+    if (!qt_qthreadruntime_validate_callable(callable, &callable_error)) {
+        zend_argument_value_error(1, "%s", callable_error.c_str());
         RETURN_THROWS();
     }
 
-    bool callable_supported = false;
-    if (Z_TYPE_P(callable) == IS_STRING) {
-        callable_supported = Z_STRLEN_P(callable) > 0;
-    } else if (Z_TYPE_P(callable) == IS_ARRAY && zend_hash_num_elements(Z_ARRVAL_P(callable)) == 2) {
-        zval *first = zend_hash_index_find(Z_ARRVAL_P(callable), 0);
-        zval *second = zend_hash_index_find(Z_ARRVAL_P(callable), 1);
-        callable_supported = first != NULL
-            && second != NULL
-            && Z_TYPE_P(first) == IS_STRING
-            && Z_TYPE_P(second) == IS_STRING
-            && Z_STRLEN_P(first) > 0
-            && Z_STRLEN_P(second) > 0;
-    }
-
-    if (!callable_supported) {
+    if (args != NULL && !qt_qthreadruntime_payload_supported(args)) {
         zend_argument_value_error(
-            1,
-            "must be a non-empty callable string or [class-string, method-string] pair; closures/object callables are not supported yet"
+            2,
+            "contains unsupported values for cross-runtime transport (resources/closures are not supported)"
         );
         RETURN_THROWS();
     }
@@ -961,7 +1040,7 @@ PHP_METHOD(QThreadRuntime, await)
         RETURN_NULL();
     }
     if (status == qt_qthreadruntime_await_status::unknown) {
-        zend_throw_error(NULL, "Unknown job id %ld.", job_id);
+        zend_throw_error(NULL, "Unknown job id %" ZEND_LONG_FMT ".", job_id);
         RETURN_THROWS();
     }
 
