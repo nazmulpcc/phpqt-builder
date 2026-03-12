@@ -134,6 +134,88 @@ it('runs qthread task mode with sequential reuse and event streaming', function 
         ->and($payload['is_running'])->toBeFalse();
 });
 
+it('keeps qthread task events flowing when one worker finishes earlier', function (): void {
+    $payload = qt_runtime_payload('QtCore/thread_qthread_task_mode_shutdown_isolation.php');
+
+    expect($payload['timed_out'])->toBeFalse()
+        ->and($payload['a_done'])->toBeTrue()
+        ->and($payload['b_done'])->toBeTrue()
+        ->and($payload['b_result_after_a_done'])->toBeTrue()
+        ->and($payload['b_progress_total'])->toBeGreaterThan(0)
+        ->and($payload['b_progress_after_a_done'])->toBeGreaterThan(0)
+        ->and($payload['wait_a'])->toBeTrue()
+        ->and($payload['wait_b'])->toBeTrue()
+        ->and($payload['off_a_progress'])->toBeTrue()
+        ->and($payload['off_b_progress'])->toBeTrue()
+        ->and($payload['off_a_result'])->toBeTrue()
+        ->and($payload['off_b_result'])->toBeTrue();
+});
+
+it('covers qthread task-mode sequential reuse and owner context parity', function (): void {
+    $payload = qt_runtime_payload('QtCore/thread_qthread_task_parity_reuse.php');
+
+    expect($payload['owner_current_thread_object'])->toBeTrue()
+        ->and($payload['owner_thread_id_type'])->not->toBe('')
+        ->and($payload['stack_applied'])->toBeTrue()
+        ->and($payload['started_hits'])->toBeGreaterThanOrEqual(2)
+        ->and($payload['finished_hits'])->toBeGreaterThanOrEqual(2)
+        ->and($payload['run1_running_observed'])->toBeTrue()
+        ->and($payload['run1_timed_out'])->toBeFalse()
+        ->and($payload['run1_wait_ok'])->toBeTrue()
+        ->and($payload['run1_finished_after_wait'])->toBeTrue()
+        ->and($payload['run1_running_after_wait'])->toBeFalse()
+        ->and($payload['run1_status'])->toBe('done')
+        ->and($payload['run2_running_observed'])->toBeTrue()
+        ->and($payload['run2_timed_out'])->toBeFalse()
+        ->and($payload['run2_wait_ok'])->toBeTrue()
+        ->and($payload['run2_finished_after_wait'])->toBeTrue()
+        ->and($payload['run2_running_after_wait'])->toBeFalse()
+        ->and($payload['run2_status'])->toBe('done')
+        ->and($payload['disconnect_started'])->toBeTrue()
+        ->and($payload['disconnect_finished'])->toBeTrue()
+        ->and($payload['off_result'])->toBeTrue();
+});
+
+it('covers qthread task-mode interruption request/read semantics', function (): void {
+    $payload = qt_runtime_payload('QtCore/thread_qthread_task_parity_interrupt.php');
+
+    expect($payload['timed_out'])->toBeFalse()
+        ->and($payload['wait_ok'])->toBeTrue()
+        ->and($payload['finished_after_wait'])->toBeTrue()
+        ->and($payload['running_after_wait'])->toBeFalse()
+        ->and($payload['interrupt_requested'])->toBeTrue()
+        ->and($payload['interruption_state_after_request'])->toBeTrue()
+        ->and($payload['status'])->toBe('interrupted')
+        ->and($payload['off_progress'])->toBeTrue()
+        ->and($payload['off_result'])->toBeTrue();
+});
+
+it('covers qthread task-mode quit/exit compatibility', function (): void {
+    $payload = qt_runtime_payload('QtCore/thread_qthread_task_parity_quit_exit.php');
+
+    expect($payload['timed_out'])->toBeFalse()
+        ->and($payload['wait_ok'])->toBeTrue()
+        ->and($payload['finished_after_wait'])->toBeTrue()
+        ->and($payload['running_after_wait'])->toBeFalse()
+        ->and($payload['quit_exit_called'])->toBeTrue()
+        ->and($payload['status'])->toBe('done')
+        ->and($payload['off_progress'])->toBeTrue()
+        ->and($payload['off_result'])->toBeTrue();
+});
+
+it('covers qthread task-mode setPriority while running', function (): void {
+    $payload = qt_runtime_payload('QtCore/thread_qthread_task_parity_priority_running.php');
+
+    expect($payload['timed_out'])->toBeFalse()
+        ->and($payload['wait_ok'])->toBeTrue()
+        ->and($payload['finished_after_wait'])->toBeTrue()
+        ->and($payload['running_after_wait'])->toBeFalse()
+        ->and($payload['priority_set_called'])->toBeTrue()
+        ->and($payload['status'])->toBe('done')
+        ->and($payload['off_progress'])->toBeTrue()
+        ->and($payload['off_result'])->toBeTrue();
+});
+
 it('runs blocking worker jobs in parallel isolated runtimes', function (): void {
     $payload = qt_runtime_payload('QtCore/thread_runtime_parallel.php');
 
