@@ -433,7 +433,16 @@ class MethodContext
                     $lines[] = sprintf('    ZSTR_VAL(_qt_ref_str_%1$d)[(size_t)%2$s] = \'\\0\';', $i, $sizeExpr);
                     $lines[] = sprintf('    ZEND_TRY_ASSIGN_REF_NEW_STR(%s, _qt_ref_str_%d);', $targetVar, $i);
                 } else {
-                    $lines[] = sprintf('    QByteArray _qt_ref_utf8_%d = %s.toUtf8();', $i, $sourceExpr);
+                    if (str_contains($param->cppType, 'QLatin1String')) {
+                        $lines[] = sprintf(
+                            '    QByteArray _qt_ref_utf8_%d = QString::fromLatin1(%s.data(), %s.size()).toUtf8();',
+                            $i,
+                            $sourceExpr,
+                            $sourceExpr,
+                        );
+                    } else {
+                        $lines[] = sprintf('    QByteArray _qt_ref_utf8_%d = %s.toUtf8();', $i, $sourceExpr);
+                    }
                     $sizeExpr = sprintf('_qt_ref_utf8_%d.size()', $i);
                     $lines[] = sprintf('    zend_string *_qt_ref_str_%1$d = zend_string_alloc((size_t)%2$s, 0);', $i, $sizeExpr);
                     $lines[] = sprintf('    memcpy(ZSTR_VAL(_qt_ref_str_%d), _qt_ref_utf8_%d.constData(), (size_t)%s);', $i, $i, $sizeExpr);

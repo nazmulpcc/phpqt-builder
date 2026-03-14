@@ -1553,6 +1553,23 @@ class TypeBridge
             return sprintf('RETURN_STRINGL((const char *)&%s, 1)', $varName);
         }
 
+        if ($base === 'QLatin1String' || $base === 'QLatin1StringView') {
+            if ($isPointer) {
+                return sprintf(
+                    "if (%s == nullptr) {\n    RETURN_EMPTY_STRING();\n}\n    QByteArray _utf8 = QString::fromLatin1(%s->data(), %s->size()).toUtf8();\n    RETURN_STRINGL(_utf8.constData(), _utf8.size())",
+                    $varName,
+                    $varName,
+                    $varName,
+                );
+            }
+
+            return sprintf(
+                "QByteArray _utf8 = QString::fromLatin1(%s.data(), %s.size()).toUtf8();\n    RETURN_STRINGL(_utf8.constData(), _utf8.size())",
+                $varName,
+                $varName,
+            );
+        }
+
         if ($isPointer) {
             return sprintf(
                 "if (%s == nullptr) {\n    RETURN_EMPTY_STRING();\n}\n    QByteArray _utf8 = %s->toUtf8();\n    RETURN_STRINGL(_utf8.constData(), _utf8.size())",
@@ -1667,13 +1684,12 @@ class TypeBridge
 
         if ($strategy === 'string') {
             $base = $this->normalizeCppType($cppType);
+            $utf8Var = $paramIndex === null
+                ? '_qt_utf8'
+                : sprintf('_qt_utf8_%d', $paramIndex);
 
             if ($this->isPointerType($cppType)) {
                 if ($base === 'QString') {
-                    $utf8Var = $paramIndex === null
-                        ? '_qt_utf8'
-                        : sprintf('_qt_utf8_%d', $paramIndex);
-
                     return sprintf(
                         "if (%s != NULL) {\n    QByteArray %s = %s->toUtf8();\n    ZVAL_STRINGL(%s, %s.constData(), %s.size());\n} else {\n    ZVAL_NULL(%s);\n}",
                         $sourceExpr,
@@ -1693,6 +1709,20 @@ class TypeBridge
                         $zvalVar,
                         $sourceExpr,
                         $sourceExpr,
+                        $zvalVar,
+                    );
+                }
+
+                if ($base === 'QLatin1String' || $base === 'QLatin1StringView') {
+                    return sprintf(
+                        "if (%s != NULL) {\n    QByteArray %s = QString::fromLatin1(%s->data(), %s->size()).toUtf8();\n    ZVAL_STRINGL(%s, %s.constData(), %s.size());\n} else {\n    ZVAL_NULL(%s);\n}",
+                        $sourceExpr,
+                        $utf8Var,
+                        $sourceExpr,
+                        $sourceExpr,
+                        $zvalVar,
+                        $utf8Var,
+                        $utf8Var,
                         $zvalVar,
                     );
                 }
@@ -1748,9 +1778,17 @@ class TypeBridge
                 return sprintf('ZVAL_STRINGL(%s, &%s, 1);', $zvalVar, $sourceExpr);
             }
 
-            $utf8Var = $paramIndex === null
-                ? '_qt_utf8'
-                : sprintf('_qt_utf8_%d', $paramIndex);
+            if ($base === 'QLatin1String' || $base === 'QLatin1StringView') {
+                return sprintf(
+                    "QByteArray %s = QString::fromLatin1(%s.data(), %s.size()).toUtf8();\n    ZVAL_STRINGL(%s, %s.constData(), %s.size());",
+                    $utf8Var,
+                    $sourceExpr,
+                    $sourceExpr,
+                    $zvalVar,
+                    $utf8Var,
+                    $utf8Var,
+                );
+            }
 
             return sprintf(
                 "QByteArray %s = %s.toUtf8();\n    ZVAL_STRINGL(%s, %s.constData(), %s.size());",
