@@ -252,8 +252,24 @@ final class StaticModuleDependencyResolver implements ModuleDependencyResolver
      */
     private function normalizeModules(array $modules): array
     {
+        $definitions = $this->definitions();
+        $canonicalByLower = [];
+        foreach (array_keys($definitions) as $module) {
+            $canonicalByLower[strtolower($module)] = $module;
+        }
+
         return array_values(array_unique(array_filter(
-            array_map(static fn(string $module): string => trim($module), $modules),
+            array_map(
+                static function (string $module) use ($canonicalByLower): string {
+                    $trimmed = trim($module);
+                    if ($trimmed === '') {
+                        return '';
+                    }
+
+                    return $canonicalByLower[strtolower($trimmed)] ?? $trimmed;
+                },
+                $modules,
+            ),
             static fn(string $module): bool => $module !== '',
         )));
     }

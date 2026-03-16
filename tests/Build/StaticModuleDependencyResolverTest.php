@@ -85,6 +85,16 @@ it('normalizes duplicate and blank requested modules before resolving', function
         ->and($graph->expandedModules())->toBe(['QtCore', 'QtGui']);
 });
 
+it('canonicalizes requested module casing to manifest names', function (): void {
+    $resolver = new StaticModuleDependencyResolver();
+
+    $graph = $resolver->resolve(['QtQuick3d']);
+
+    expect($graph->requestedModules)->toBe(['QtQuick3D'])
+        ->and($graph->expandedModules())->toBe(['QtCore', 'QtGui', 'QtNetwork', 'QtQml', 'QtQuick', 'QtQuick3D'])
+        ->and($graph->unmappedModules)->toBe([]);
+});
+
 it('defaults to QtCore when no modules are requested', function (): void {
     $resolver = new StaticModuleDependencyResolver();
 

@@ -299,6 +299,7 @@ class MethodExposurePolicy
     {
         $access = (string) ($variant['access'] ?? 'unknown');
         $isConstructor = $this->isConstructor($className, $variant);
+
         if ($isConstructor) {
             if ($isAbstractClass) {
                 if ($access !== 'public' && $access !== 'protected') {

@@ -41,7 +41,7 @@ it('writes reusable build metadata during discovery', function (): void {
     $buildRoot = sys_get_temp_dir() . '/qtbuilder-discover-' . bin2hex(random_bytes(4));
     $extDir = $buildRoot . '/ext';
     $metadataDir = $buildRoot . '/generated';
-    $classCacheDir = $buildRoot . '/classes';
+    $classCacheDir = $buildRoot . '/classes/desktop';
 
     $result = qt_command_result(
         new BuildDiscoverCommand(FakeSystemInformation::passing()),
@@ -89,7 +89,7 @@ it('reuses class structure cache after generated metadata is cleared', function 
     $fixtureRoot = qt_fixture_path('qt');
     $buildRoot = sys_get_temp_dir() . '/qtbuilder-discover-reuse-' . bin2hex(random_bytes(4));
     $metadataDir = $buildRoot . '/generated';
-    $classCacheDir = $buildRoot . '/classes';
+    $classCacheDir = $buildRoot . '/classes/desktop';
 
     $firstRun = qt_command_result(
         new BuildDiscoverCommand(FakeSystemInformation::passing()),

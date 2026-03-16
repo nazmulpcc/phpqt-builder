@@ -2349,7 +2349,7 @@ class TypeBridge
         }
 
         return match ($normalized) {
-            'GLenum', 'GLuint', 'GLuint64', 'GLint', 'GLintptr', 'GLsizei', 'GLsizeiptr', 'GLbitfield', 'GLshort', 'GLushort', 'GLbyte', 'GLubyte', 'uint' => $normalized,
+            'GLenum', 'GLuint', 'GLuint64', 'GLint', 'GLintptr', 'GLsizei', 'GLsizeiptr', 'GLbitfield', 'GLshort', 'GLushort', 'GLbyte', 'GLubyte', 'uint', 'unsigned int' => $normalized,
             'GLfloat' => 'GLfloat',
             'GLdouble' => 'GLdouble',
             'short', 'unsigned short', 'qint8', 'qint16', 'quint8', 'quint16' => $normalized,

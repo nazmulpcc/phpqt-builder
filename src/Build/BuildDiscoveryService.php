@@ -41,10 +41,11 @@ class BuildDiscoveryService
         string $extensionName = 'qt',
         ?ImportedModuleAbi $importedAbi = null,
         bool $resolveViability = true,
+        string $cacheNamespace = BuildTarget::DESKTOP,
     ): BuildDiscoveryResult {
         $this->ensureDirectory(dirname($metadataDir));
         $this->ensureDirectory($metadataDir);
-        $this->ensureDirectory($this->classCacheDir($metadataDir));
+        $this->ensureDirectory($this->classCacheDir($metadataDir, $cacheNamespace));
 
         [$acceptedCandidates, $initialSkippedClasses, $candidateCount] = $this->scanCandidates($installation, $modules);
         $classStructures = $this->prepareClassStructures(
@@ -55,6 +56,7 @@ class BuildDiscoveryService
             $jobs,
             $output,
             $extensionName,
+            $cacheNamespace,
         );
 
         if ($classStructures['errors'] !== []) {
@@ -81,6 +83,7 @@ class BuildDiscoveryService
             $output,
             $extensionName,
             $importedAbi?->availableClasses ?? [],
+            $cacheNamespace,
         );
 
         if ($supplemental['errors'] !== []) {
@@ -162,11 +165,12 @@ class BuildDiscoveryService
     /**
      * @param list<string> $modules
      */
-    public function writeCache(string $metadataDir, array $modules, string $qtRootPath, BuildDiscoveryResult $result): void
+    public function writeCache(string $metadataDir, array $modules, string $qtRootPath, BuildDiscoveryResult $result, string $cacheNamespace = BuildTarget::DESKTOP): void
     {
         $payload = [
             'schema_version' => self::DISCOVERY_CACHE_SCHEMA_VERSION,
             'class_cache_schema_version' => self::CLASS_CACHE_SCHEMA_VERSION,
+            'cache_namespace' => $cacheNamespace,
             'modules' => array_values($modules),
             'qt_path' => $qtRootPath,
             'candidate_count' => $result->candidateCount,
@@ -243,7 +247,7 @@ class BuildDiscoveryService
     /**
      * @param list<string> $modules
      */
-    public function loadCache(string $metadataDir, array $modules, string $qtRootPath): ?BuildDiscoveryResult
+    public function loadCache(string $metadataDir, array $modules, string $qtRootPath, string $cacheNamespace = BuildTarget::DESKTOP): ?BuildDiscoveryResult
     {
         $cacheFile = $metadataDir . '/discovery_cache.json';
         if (!is_file($cacheFile)) {
@@ -260,6 +264,11 @@ class BuildDiscoveryService
         }
 
         if ((int) ($decoded['class_cache_schema_version'] ?? 0) !== self::CLASS_CACHE_SCHEMA_VERSION) {
+            return null;
+        }
+
+        $cachedNamespace = is_string($decoded['cache_namespace'] ?? null) ? $decoded['cache_namespace'] : BuildTarget::DESKTOP;
+        if ($cachedNamespace !== $cacheNamespace) {
             return null;
         }
 
@@ -621,6 +630,7 @@ class BuildDiscoveryService
         int $jobs,
         OutputInterface $output,
         string $extensionName,
+        string $cacheNamespace = BuildTarget::DESKTOP,
     ): array {
         $preparedCandidates = [];
         $preparedClassDataByClass = [];
@@ -633,7 +643,7 @@ class BuildDiscoveryService
         $cacheMissesByClass = [];
 
         foreach ($acceptedCandidates as $candidate) {
-            $cachedPayload = $this->readClassStructureCache($metadataDir, $candidate, $includePaths);
+            $cachedPayload = $this->readClassStructureCache($metadataDir, $candidate, $includePaths, $cacheNamespace);
             if ($cachedPayload === null) {
                 $cacheMisses[] = $candidate;
                 $cacheMissesByClass[$candidate->identityKey()] = $candidate;
@@ -726,8 +736,8 @@ class BuildDiscoveryService
                 ];
 
                 $cacheCandidate = $this->cacheCandidateForPayload($candidate, $payload);
-                $this->writeClassStructureCache($metadataDir, $cacheCandidate, $includePaths, $payload);
-                $this->writeReferencedNestedClassStructureCaches($metadataDir, $candidate, $includePaths, $payload);
+                $this->writeClassStructureCache($metadataDir, $cacheCandidate, $includePaths, $payload, $cacheNamespace);
+                $this->writeReferencedNestedClassStructureCaches($metadataDir, $candidate, $includePaths, $payload, $cacheNamespace);
                 $this->recordClassStructurePayload(
                     $candidate,
                     $payload,
@@ -1202,15 +1212,16 @@ class BuildDiscoveryService
         return ModuleNamespace::forQtModule($module);
     }
 
-    private function classCacheDir(string $metadataDir): string
+    private function classCacheDir(string $metadataDir, string $cacheNamespace = BuildTarget::DESKTOP): string
     {
         $realMetadataDir = realpath($metadataDir);
         $baseDir = $realMetadataDir !== false ? dirname($realMetadataDir) : dirname($metadataDir);
+        $namespace = preg_replace('/[^A-Za-z0-9_.-]/', '_', $cacheNamespace) ?: BuildTarget::DESKTOP;
 
-        return $baseDir . '/classes';
+        return $baseDir . '/classes/' . $namespace;
     }
 
-    private function classCachePath(string $metadataDir, HeaderCandidate $candidate): string
+    private function classCachePath(string $metadataDir, HeaderCandidate $candidate, string $cacheNamespace = BuildTarget::DESKTOP): string
     {
         $safeClassName = preg_replace('/[^A-Za-z0-9_.-]/', '_', $candidate->resolvedGenerationId()) ?? $candidate->resolvedGenerationId();
         $stableSuffix = substr(sha1(implode('|', [
@@ -1219,26 +1230,26 @@ class BuildDiscoveryService
             $candidate->parseHeader,
         ])), 0, 12);
 
-        return $this->classCacheDir($metadataDir) . '/' . $safeClassName . '__' . $stableSuffix . '.json';
+        return $this->classCacheDir($metadataDir, $cacheNamespace) . '/' . $safeClassName . '__' . $stableSuffix . '.json';
     }
 
-    private function legacyClassCachePath(string $metadataDir, HeaderCandidate $candidate): string
+    private function legacyClassCachePath(string $metadataDir, HeaderCandidate $candidate, string $cacheNamespace = BuildTarget::DESKTOP): string
     {
         $safeClassName = preg_replace('/[^A-Za-z0-9_.-]/', '_', $candidate->resolvedGenerationId()) ?? $candidate->resolvedGenerationId();
 
-        return $this->classCacheDir($metadataDir) . '/' . $safeClassName . '.json';
+        return $this->classCacheDir($metadataDir, $cacheNamespace) . '/' . $safeClassName . '.json';
     }
 
     /**
      * @param list<string> $includePaths
      * @return array<string, mixed>|null
      */
-    private function readClassStructureCache(string $metadataDir, HeaderCandidate $candidate, array $includePaths): ?array
+    private function readClassStructureCache(string $metadataDir, HeaderCandidate $candidate, array $includePaths, string $cacheNamespace = BuildTarget::DESKTOP): ?array
     {
         foreach ($this->classStructureCacheLookupCandidates($candidate) as $lookupCandidate) {
             $paths = array_values(array_unique([
-                $this->classCachePath($metadataDir, $lookupCandidate),
-                $this->legacyClassCachePath($metadataDir, $lookupCandidate),
+                $this->classCachePath($metadataDir, $lookupCandidate, $cacheNamespace),
+                $this->legacyClassCachePath($metadataDir, $lookupCandidate, $cacheNamespace),
             ]));
 
             foreach ($paths as $path) {
@@ -1256,7 +1267,7 @@ class BuildDiscoveryService
                 }
 
                 $cacheKey = (string) ($decoded['cache_key'] ?? '');
-                if ($cacheKey === '' || !hash_equals($this->classStructureCacheKey($lookupCandidate, $includePaths), $cacheKey)) {
+                if ($cacheKey === '' || !hash_equals($this->classStructureCacheKey($lookupCandidate, $includePaths, $cacheNamespace), $cacheKey)) {
                     continue;
                 }
 
@@ -1284,13 +1295,14 @@ class BuildDiscoveryService
      * @param list<string> $includePaths
      * @param array<string, mixed> $payload
      */
-    private function writeClassStructureCache(string $metadataDir, HeaderCandidate $candidate, array $includePaths, array $payload): void
+    private function writeClassStructureCache(string $metadataDir, HeaderCandidate $candidate, array $includePaths, array $payload, string $cacheNamespace = BuildTarget::DESKTOP): void
     {
         $currentMtime = @filemtime($candidate->parseHeader);
         $currentSize = @filesize($candidate->parseHeader);
         $record = [
             'schema_version' => self::CLASS_CACHE_SCHEMA_VERSION,
-            'cache_key' => $this->classStructureCacheKey($candidate, $includePaths),
+            'cache_key' => $this->classStructureCacheKey($candidate, $includePaths, $cacheNamespace),
+            'cache_namespace' => $cacheNamespace,
             'class' => $candidate->className,
             'qualified_name' => $candidate->qualifiedClassName,
             'generation_id' => $candidate->resolvedGenerationId(),
@@ -1302,16 +1314,17 @@ class BuildDiscoveryService
             'payload' => $payload,
         ];
 
-        $this->writeJsonFile($this->classCachePath($metadataDir, $candidate), $record, '{}');
+        $this->writeJsonFile($this->classCachePath($metadataDir, $candidate, $cacheNamespace), $record, '{}');
     }
 
     /**
      * @param list<string> $includePaths
      */
-    private function classStructureCacheKey(HeaderCandidate $candidate, array $includePaths): string
+    private function classStructureCacheKey(HeaderCandidate $candidate, array $includePaths, string $cacheNamespace = BuildTarget::DESKTOP): string
     {
         $encoded = json_encode([
             'schema_version' => self::CLASS_CACHE_SCHEMA_VERSION,
+            'cache_namespace' => $cacheNamespace,
             'class' => $candidate->className,
             'qualified_name' => $candidate->qualifiedClassName,
             'generation_id' => $candidate->resolvedGenerationId(),
@@ -1379,6 +1392,7 @@ class BuildDiscoveryService
         HeaderCandidate $ownerCandidate,
         array $includePaths,
         array $payload,
+        string $cacheNamespace = BuildTarget::DESKTOP,
     ): void {
         foreach ((array) ($payload['referenced_nested_class_data'] ?? []) as $nestedClassData) {
             if (!is_array($nestedClassData)) {
@@ -1415,7 +1429,7 @@ class BuildDiscoveryService
                 'reason_code' => null,
                 'reason_message' => null,
             ];
-            $this->writeClassStructureCache($metadataDir, $nestedCandidate, $includePaths, $nestedPayload);
+            $this->writeClassStructureCache($metadataDir, $nestedCandidate, $includePaths, $nestedPayload, $cacheNamespace);
         }
     }
 
@@ -1596,7 +1610,7 @@ class BuildDiscoveryService
             return;
         }
 
-        if (!mkdir($directory, 0755, true) && !is_dir($directory)) {
+        if (!@mkdir($directory, 0755, true) && !is_dir($directory)) {
             throw new \RuntimeException(sprintf('Could not create directory: %s', $directory));
         }
     }

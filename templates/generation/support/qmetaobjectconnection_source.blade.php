@@ -27,6 +27,10 @@ static void qt_qmetaobjectconnection_free_object(zend_object *object)
 {
     qt_qmetaobjectconnection_object *intern = qt_qmetaobjectconnection_from_obj(object);
     if (intern->native_ptr != NULL) {
+        if (intern->native_ptr->property_notifier != NULL) {
+            delete intern->native_ptr->property_notifier;
+            intern->native_ptr->property_notifier = NULL;
+        }
         delete intern->native_ptr;
         intern->native_ptr = NULL;
     }
@@ -46,7 +50,20 @@ PHP_QT_API void qt_qmetaobjectconnection_wrap(zval *return_value, const QMetaObj
 {
     object_init_ex(return_value, qt_ce_QMetaObjectConnection);
     qt_qmetaobjectconnection_object *intern = Z_QMETAOBJECTCONNECTION_P(return_value);
-    intern->native_ptr = new QMetaObject::Connection(connection);
+    intern->native_ptr = new qt_qmetaobjectconnection_handle{
+        connection,
+        NULL,
+    };
+}
+
+PHP_QT_API void qt_qmetaobjectconnection_wrap_property_notifier(zval *return_value, QPropertyNotifier &&notifier)
+{
+    object_init_ex(return_value, qt_ce_QMetaObjectConnection);
+    qt_qmetaobjectconnection_object *intern = Z_QMETAOBJECTCONNECTION_P(return_value);
+    intern->native_ptr = new qt_qmetaobjectconnection_handle{
+        QMetaObject::Connection(),
+        new QPropertyNotifier(std::move(notifier)),
+    };
 }
 
 static const zend_function_entry qt_qmetaobjectconnection_methods[] = {

@@ -390,6 +390,24 @@ CPP);
         Assert::assertStringContainsString('_qt_arg_0_storage.push_back((GLuint)Z_LVAL_P(_qt_arg_0_entry));', $cpp);
 });
 
+it('preserves unsigned int pointer locals for writable opengl out parameters', function (): void {
+        $bridge = new TypeBridge();
+
+        $plan = $bridge->nativeArgumentSetup(
+            phpType: 'int',
+            cppType: 'unsigned int *',
+            sourceVarName: 'textures',
+            nativeVarName: '_qt_arg_1',
+            sourceIsZval: true,
+            nullable: false,
+            isWritableByRef: true,
+            isWritableByRefPointer: true,
+        );
+
+        Assert::assertContains('unsigned int _qt_arg_1_value;', $plan['lines']);
+        Assert::assertContains('unsigned int *_qt_arg_1 = NULL;', $plan['lines']);
+});
+
 it('supports opengl raw input buffers as php strings', function (): void {
         $fixtureRoot = qt_fixture_path('policy-qt');
         $outputDir = sys_get_temp_dir() . '/qtbuilder-generate-' . bin2hex(random_bytes(4));

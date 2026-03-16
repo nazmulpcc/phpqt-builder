@@ -68,6 +68,7 @@ bool qt_runtime_can_call_zend(void);
 @if($ctx->hasSignals())
 bool qt_runtime_is_owner_thread(void);
 @endif
+zend_class_entry *qt_runtime_exception_ce(void);
 @if($ctx->hasSignals() || $ctx->requiresVirtualTrampoline)
 bool qt_runtime_enqueue_owner_task(std::function<void()> task);
 @endif
@@ -1781,26 +1782,22 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connectPropertyNotify)
         RETURN_THROWS();
     }
 
-    struct _qt_property_notify_handler_t {
-        std::shared_ptr<qt_signal_callback_t> callback;
-
-        void operator()() const
-        {
-            auto _qt_callback_copy = callback;
+    if (_qt_property.isBindable()) {
+        auto _qt_bindable = _qt_property.bindable(_qt_obj);
+        auto _qt_notifier = _qt_bindable.addNotifier([_qt_callback]() mutable {
+            auto _qt_callback_copy = _qt_callback;
             qt_signal_dispatch([_qt_callback_copy]() mutable {
                 qt_signal_callback_invoke(_qt_callback_copy, 0, nullptr);
             });
-        }
-    };
+        });
 
-    QMetaObject::Connection _qt_connection = QMetaObject::connect(
-        _qt_obj,
-        _qt_notify,
-        _qt_obj,
-        _qt_property_notify_handler_t{_qt_callback}
-    );
+        qt_qmetaobjectconnection_wrap_property_notifier(return_value, std::move(_qt_notifier));
+        return;
+    }
 
-    qt_qmetaobjectconnection_wrap(return_value, _qt_connection);
+    zend_throw_error(NULL, "QObject::connectPropertyNotify() requires a bindable Qt property on this Qt build.");
+    RETURN_THROWS();
+
 }
 @endif
 @if($ctx->hasSignals())
@@ -1852,9 +1849,16 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, disconnect)
         RETURN_FALSE;
     }
 
-    bool disconnected = QObject::disconnect(*connection_intern->native_ptr);
-    if (disconnected) {
-        *connection_intern->native_ptr = QMetaObject::Connection();
+    bool disconnected = false;
+    if (connection_intern->native_ptr->property_notifier != NULL) {
+        delete connection_intern->native_ptr->property_notifier;
+        connection_intern->native_ptr->property_notifier = NULL;
+        disconnected = true;
+    } else {
+        disconnected = QObject::disconnect(connection_intern->native_ptr->connection);
+        if (disconnected) {
+            connection_intern->native_ptr->connection = QMetaObject::Connection();
+        }
     }
 
     RETURN_BOOL(disconnected);

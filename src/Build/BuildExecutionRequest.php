@@ -34,6 +34,8 @@ readonly class BuildExecutionRequest
         public bool $reuseDiscoveryCache = true,
         public bool $bootstrapEnabled = true,
         public bool $useCcache = false,
+        public string $buildTarget = BuildTarget::DESKTOP,
+        public ?IosBuildOptions $iosBuildOptions = null,
     ) {}
 
     /**
@@ -50,5 +52,24 @@ readonly class BuildExecutionRequest
     public function effectiveRequestedModules(): array
     {
         return $this->requestedModules !== [] ? $this->requestedModules : $this->modules;
+    }
+
+    public function isIosTarget(): bool
+    {
+        return $this->buildTarget === BuildTarget::IOS;
+    }
+
+    public function isMobileTarget(): bool
+    {
+        return in_array($this->buildTarget, [BuildTarget::IOS, BuildTarget::ANDROID], true);
+    }
+
+    public function cacheNamespace(): string
+    {
+        if ($this->isIosTarget()) {
+            return $this->iosBuildOptions?->cacheNamespace() ?? BuildTarget::IOS;
+        }
+
+        return BuildTarget::DESKTOP;
     }
 }

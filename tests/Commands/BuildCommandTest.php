@@ -14,7 +14,7 @@ it('generates the extension tree from a fixture qt root', function (): void {
     $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-' . bin2hex(random_bytes(4));
     $outputDir = $buildRoot . '/ext';
     $metadataDir = $buildRoot . '/generated';
-    $classCacheDir = $buildRoot . '/classes';
+    $classCacheDir = $buildRoot . '/classes/desktop';
     $bootstrapper = new FakeExtensionBootstrapper();
 
     $result = qt_command_result(
@@ -48,10 +48,7 @@ it('generates the extension tree from a fixture qt root', function (): void {
         ->and(is_file($metadataDir . '/enum_holders_cache.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/enum_candidate_headers.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/accepted_candidates.json'))->toBeTrue()
-        ->and(
-            is_file($classCacheDir . '/QPoint.json')
-            || is_file($classCacheDir . '/qpoint__qtcore__qpoint_h.json'),
-        )->toBeTrue()
+        ->and((glob($classCacheDir . '/*qpoint*.json') ?: []) !== [])->toBeTrue()
         ->and(is_file($metadataDir . '/phpize.stdout.log'))->toBeTrue()
         ->and(is_file($metadataDir . '/gen_stub.stdout.log'))->toBeTrue()
         ->and(is_file($metadataDir . '/configure.stdout.log'))->toBeTrue()
@@ -1077,4 +1074,90 @@ it('records ccache as enabled by default when ccache exists', function (): void 
 
     $summary = qt_decode_json((string) file_get_contents($buildRoot . '/generated/build_summary.json'));
     expect($summary['ccache_enabled'] ?? null)->toBeTrue();
+});
+
+it('treats ios target as generation-only and skips bootstrap automatically', function (): void {
+    $fixtureRoot = qt_fixture_path('qt');
+    $iosRoot = qt_temp_dir('qtbuilder-ios-qt-') . '/ios';
+    if (!is_dir(dirname($iosRoot))) {
+        mkdir(dirname($iosRoot), 0777, true);
+    }
+    symlink($fixtureRoot, $iosRoot);
+
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-ios-' . bin2hex(random_bytes(4));
+    $bootstrapper = new FakeExtensionBootstrapper();
+
+    $result = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $iosRoot,
+            'modules' => 'QtCore',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+            '--target' => 'ios',
+            '--sdk' => 'all',
+        ],
+    );
+
+    expect($result)->toBeSuccessfulCommandResult()
+        ->and(is_file($buildRoot . '/ext/config.m4'))->toBeTrue()
+        ->and(is_file($buildRoot . '/ext/config.h'))->toBeTrue()
+        ->and(is_file($buildRoot . '/ios/iphoneos/libqt.a'))->toBeFalse()
+        ->and(is_file($buildRoot . '/ios/iphonesimulator/libqt.a'))->toBeFalse()
+        ->and(is_file($buildRoot . '/generated/ios_build.json'))->toBeFalse()
+        ->and($result['display'])->toContain('Skipping bootstrap (target=ios implies --no-build).');
+
+    $summary = qt_decode_json((string) file_get_contents($buildRoot . '/generated/build_summary.json'));
+    expect($summary['build_target'] ?? null)->toBe('ios')
+        ->and($summary['bootstrap_disabled'] ?? null)->toBeTrue()
+        ->and(isset($summary['ios_build_manifest']))->toBeFalse();
+
+    $runtimeManifest = qt_decode_json((string) file_get_contents($buildRoot . '/generated/runtime_manifest.json'));
+    expect($runtimeManifest['build_target'] ?? null)->toBe('ios')
+        ->and($runtimeManifest['ios_sdks'] ?? null)->toBe(['iphoneos', 'iphonesimulator'])
+        ->and($runtimeManifest['ios_minimum_version'] ?? null)->toBe('15.0');
+});
+
+it('treats android target as generation-only and skips bootstrap automatically', function (): void {
+    $fixtureRoot = qt_fixture_path('qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-android-' . bin2hex(random_bytes(4));
+    $bootstrapper = new FakeExtensionBootstrapper();
+
+    $result = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            'modules' => 'QtCore',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+            '--target' => 'android',
+        ],
+    );
+
+    expect($result)->toBeSuccessfulCommandResult()
+        ->and(is_file($buildRoot . '/ext/config.m4'))->toBeTrue()
+        ->and($result['display'])->toContain('Skipping bootstrap (target=android implies --no-build).');
+
+    $summary = qt_decode_json((string) file_get_contents($buildRoot . '/generated/build_summary.json'));
+    expect($summary['build_target'] ?? null)->toBe('android')
+        ->and($summary['bootstrap_disabled'] ?? null)->toBeTrue();
+});
+
+it('fails deterministically when an ios build uses a desktop qt path', function (): void {
+    $fixtureRoot = qt_fixture_path('qt');
+    $bootstrapper = new FakeExtensionBootstrapper();
+
+    $result = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            'modules' => 'QtCore',
+            '--output' => sys_get_temp_dir() . '/qtbuilder-build-ios-invalid-' . bin2hex(random_bytes(4)),
+            '--jobs' => '2',
+            '--target' => 'ios',
+        ],
+    );
+
+    expect($result)->toBeFailureCommandResult()
+        ->and($result['display'])->toContain('is not a Qt for iOS installation');
 });

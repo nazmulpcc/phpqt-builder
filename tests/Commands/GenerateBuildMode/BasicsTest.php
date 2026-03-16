@@ -122,3 +122,31 @@ CPP);
         ->and(array_column($result->payload['results'], 'task_key'))->toBe(['task-first', 'task-second'])
         ->and(array_column($result->payload['results'], 'status'))->toBe(['ok', 'ok']);
 });
+
+it('guards qmenu dock menu helper on ios builds', function (): void {
+    $fixtureDir = qt_temp_dir('qtbuilder-qmenu-ios-');
+    $headerPath = $fixtureDir . '/qmenu.h';
+
+    file_put_contents($headerPath, <<<'CPP'
+class QMenu
+{
+public:
+    void setAsDockMenu();
+};
+CPP);
+
+    $result = GenerateBuildModeRunner::run('qt', [
+        'header' => $headerPath,
+        'class' => 'QMenu',
+        '--module' => 'QtWidgets',
+        '--include' => [$fixtureDir],
+        '--allowed-classes' => 'QMenu',
+    ], 'qtbuilder-qmenu-ios-');
+
+    $cpp = (string) file_get_contents($result->path('QMenu', 'cpp'));
+
+    expect($result->exitCode)->toBe(Command::SUCCESS)
+        ->and($cpp)->toContain('#if defined(Q_OS_IOS)')
+        ->and($cpp)->toContain('Qt\\\\Widgets\\\\QMenu::setAsDockMenu() is not available on iOS.')
+        ->and($cpp)->toContain('intern->native_ptr->setAsDockMenu();');
+});

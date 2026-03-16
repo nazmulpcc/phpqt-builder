@@ -282,6 +282,11 @@ it('adds qobject property apis and handlers', function (): void {
         Assert::assertStringContainsString('object_init_ex(target, qt_ce_qvariant);', $cpp);
         Assert::assertStringContainsString('value.metaType().flags().testFlag(QMetaType::IsEnumeration)', $cpp);
         Assert::assertStringContainsString('ZVAL_LONG(target, (zend_long) value.toLongLong());', $cpp);
+        Assert::assertStringContainsString('if (_qt_property.isBindable()) {', $cpp);
+        Assert::assertStringContainsString('auto _qt_bindable = _qt_property.bindable(_qt_obj);', $cpp);
+        Assert::assertStringContainsString('auto _qt_notifier = _qt_bindable.addNotifier([_qt_callback]() mutable {', $cpp);
+        Assert::assertStringContainsString('qt_qmetaobjectconnection_wrap_property_notifier(return_value, std::move(_qt_notifier));', $cpp);
+        Assert::assertStringContainsString('QObject::connectPropertyNotify() requires a bindable Qt property on this Qt build.', $cpp);
 });
 
 it('adds qobject property handlers to derived classes', function (): void {

@@ -93,7 +93,7 @@ final class SmartFileWriter
             return;
         }
 
-        if (!mkdir($directory, 0755, true) && !is_dir($directory)) {
+        if (!@mkdir($directory, 0755, true) && !is_dir($directory)) {
             throw new \RuntimeException(sprintf('Could not create directory: %s', $directory));
         }
     }

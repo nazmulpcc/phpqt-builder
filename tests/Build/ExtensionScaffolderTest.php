@@ -675,3 +675,43 @@ it('skips unchanged core scaffold files on repeated finalize', function (): void
         ->and($secondStats['written'])->toBe(0)
         ->and($after)->toBe($before);
 });
+
+it('writes static-link scaffolding for ios targets', function (): void {
+    $outputDir = qt_temp_dir('qtbuilder-scaffolder-ios-') . '/ext';
+    $installation = new QtInstallation(
+        rootPath: '/opt/qt/ios',
+        osFamily: 'Darwin',
+        includeRoots: ['/opt/qt/ios/include'],
+        libraryRoots: ['/opt/qt/ios/lib'],
+        moduleHeaderRoots: ['QtCore' => '/opt/qt/ios/include/QtCore'],
+        tools: [],
+        buildTarget: \QtBuilder\Build\BuildTarget::IOS,
+        iosSdks: ['iphoneos', 'iphonesimulator'],
+        iosMinimumVersion: '15.0',
+        iosArchitectures: ['arm64'],
+    );
+    $context = new ExtensionBuildContext(
+        'qt',
+        '0.1.0',
+        dirname($outputDir),
+        $outputDir,
+        $installation,
+        ['QtCore'],
+        ['QPoint'],
+        buildTarget: \QtBuilder\Build\BuildTarget::IOS,
+        iosBuildOptions: new \QtBuilder\Build\IosBuildOptions(
+            sdks: ['iphoneos', 'iphonesimulator'],
+            minimumVersion: '15.0',
+            architectures: ['arm64'],
+        ),
+    );
+
+    $scaffolder = new ExtensionScaffolder();
+    $scaffolder->prepare($context);
+    $scaffolder->finalize($context);
+
+    expect(is_file($outputDir . '/config.m4'))->toBeTrue()
+        ->and(is_file($outputDir . '/config.h'))->toBeTrue()
+        ->and((string) file_get_contents($outputDir . '/config.h'))->toContain('#define HAVE_QT 1')
+        ->and((string) file_get_contents($outputDir . '/config.m4'))->toContain('PHP_NEW_EXTENSION([qt]');
+});

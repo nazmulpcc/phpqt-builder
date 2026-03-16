@@ -9,11 +9,15 @@ use QtBuilder\Build\BuildExecutionRequest;
 use QtBuilder\Build\BuildDiscoveryService;
 use QtBuilder\Build\BuildLayout;
 use QtBuilder\Build\BuildPipeline;
+use QtBuilder\Build\BuildTarget;
 use QtBuilder\Build\Dependencies\ModuleDependencyResolver;
 use QtBuilder\Build\Dependencies\ResolvedModuleGraph;
 use QtBuilder\Build\Dependencies\StaticModuleDependencyResolver;
 use QtBuilder\Build\ExtensionBootstrapper;
+use QtBuilder\Build\IosBuildOptions;
+use QtBuilder\Build\IosExtensionBootstrapper;
 use QtBuilder\Build\ProcessExtensionBootstrapper;
+use QtBuilder\Build\TargetAwareExtensionBootstrapper;
 use QtBuilder\Contracts\SystemInformation;
 use QtBuilder\Prompts\ModuleMultiSearchPrompt;
 use QtBuilder\Qt\QtInstallationResolver;
@@ -44,7 +48,10 @@ class BuildCommand extends Command
         ?ModuleDependencyResolver $dependencyResolver = null,
         ?callable $moduleSelector = null,
     ) {
-        $this->bootstrapper = $bootstrapper ?? new ProcessExtensionBootstrapper($systemInformation);
+        $this->bootstrapper = $bootstrapper ?? new TargetAwareExtensionBootstrapper(
+            new ProcessExtensionBootstrapper($systemInformation),
+            new IosExtensionBootstrapper($systemInformation),
+        );
         $this->dependencyResolver = $dependencyResolver ?? new StaticModuleDependencyResolver();
         $this->moduleSelector = $moduleSelector ?? function (string $label, array $options, array $default): array {
             $prompt = new ModuleMultiSearchPrompt(
@@ -76,6 +83,12 @@ class BuildCommand extends Command
         $this
             ->addArgument('modules', InputArgument::OPTIONAL, 'Comma-separated Qt modules to scan')
             ->addOption('qt-path', null, InputOption::VALUE_REQUIRED, 'Path to the Qt installation root')
+            ->addOption('target', null, InputOption::VALUE_REQUIRED, 'Build target (desktop or ios)', BuildTarget::DESKTOP)
+            ->addOption('sdk', null, InputOption::VALUE_REQUIRED, 'iOS SDK selection (iphoneos, iphonesimulator, all)', 'all')
+            ->addOption('ios-min-version', null, InputOption::VALUE_REQUIRED, 'Minimum iOS deployment target', '15.0')
+            ->addOption('arch', null, InputOption::VALUE_REQUIRED, 'Comma-separated architecture list for iOS builds')
+            ->addOption('xcode-path', null, InputOption::VALUE_REQUIRED, 'Path to the Xcode developer directory')
+            ->addOption('developer-dir', null, InputOption::VALUE_REQUIRED, 'Path to the active Apple developer directory')
             ->addOption('name', null, InputOption::VALUE_REQUIRED, 'Extension name', 'qt')
             ->addOption('ext-version', null, InputOption::VALUE_REQUIRED, 'Extension version', '0.1.0')
             ->addOption('output', 'o', InputOption::VALUE_REQUIRED, 'Build root directory; extension sources go under <output>/ext', 'build')
@@ -96,12 +109,21 @@ class BuildCommand extends Command
         }
 
         $this->renderDependencyResolution($output, $resolvedGraph);
+        $buildTarget = BuildTarget::normalize((string) $input->getOption('target'));
+        $iosBuildOptions = $this->resolveIosBuildOptions($input, $buildTarget);
 
         $qtResolver = new QtInstallationResolver($this->systemInformation);
-        $installation = $qtResolver->resolve(
-            $input->getOption('qt-path') !== null ? (string) $input->getOption('qt-path') : null,
-            $resolvedGraph->buildOrder,
-        );
+        try {
+            $installation = $qtResolver->resolveForTarget(
+                $input->getOption('qt-path') !== null ? (string) $input->getOption('qt-path') : null,
+                $resolvedGraph->buildOrder,
+                $buildTarget,
+                $iosBuildOptions,
+            );
+        } catch (\RuntimeException $e) {
+            $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
+            return self::FAILURE;
+        }
 
         try {
             $layout = BuildLayout::fromCliOutput((string) $input->getOption('output'));
@@ -127,6 +149,7 @@ class BuildCommand extends Command
             $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
             return self::FAILURE;
         }
+        $bootstrapEnabled = !(bool) $input->getOption('no-build') && !$this->targetImpliesNoBuild($buildTarget);
         $result = $pipeline->build(
             new BuildExecutionRequest(
                 installation: $installation,
@@ -139,8 +162,10 @@ class BuildCommand extends Command
                 jobs: $this->resolveJobs($input->getOption('jobs')),
                 resolvedModuleGraph: $resolvedGraph,
                 dependencySource: $resolvedGraph->dependencySource,
-                bootstrapEnabled: !(bool) $input->getOption('no-build'),
+                bootstrapEnabled: $bootstrapEnabled,
                 useCcache: $useCcache,
+                buildTarget: $buildTarget,
+                iosBuildOptions: $iosBuildOptions,
             ),
             $output,
         );
@@ -308,6 +333,40 @@ class BuildCommand extends Command
         }
 
         return $hasCcache;
+    }
+
+    private function resolveIosBuildOptions(InputInterface $input, string $buildTarget): ?IosBuildOptions
+    {
+        if ($buildTarget !== BuildTarget::IOS) {
+            return null;
+        }
+
+        $architectures = [];
+        $archOption = $input->getOption('arch');
+        if (is_string($archOption) && trim($archOption) !== '') {
+            $architectures = array_values(array_filter(array_map('trim', explode(',', $archOption)), static fn(string $value): bool => $value !== ''));
+        }
+
+        $developerDir = null;
+        foreach (['developer-dir', 'xcode-path'] as $optionName) {
+            $value = $input->getOption($optionName);
+            if (is_string($value) && trim($value) !== '') {
+                $developerDir = trim($value);
+                break;
+            }
+        }
+
+        return new IosBuildOptions(
+            sdks: IosBuildOptions::normalizeSdks((string) $input->getOption('sdk')),
+            minimumVersion: trim((string) $input->getOption('ios-min-version')) ?: '15.0',
+            architectures: $architectures,
+            developerDir: $developerDir,
+        );
+    }
+
+    private function targetImpliesNoBuild(string $buildTarget): bool
+    {
+        return in_array($buildTarget, [BuildTarget::IOS, BuildTarget::ANDROID], true);
     }
 
     private function renderDependencyResolution(OutputInterface $output, ResolvedModuleGraph $graph): void

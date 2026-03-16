@@ -28,12 +28,16 @@ final readonly class ModuleAbiManifest
         public array $classNamespaces,
         public bool $includesSignalConnectionSupport,
         public string $buildMode = RuntimeManifest::MODE_MONOLITHIC,
+        public string $buildTarget = BuildTarget::DESKTOP,
         public string $qtVersion = '',
         public int $qtVersionMajor = 0,
         public int $qtVersionMinor = 0,
         public int $qtVersionPatch = 0,
         public string $extensionVersion = '',
         public string $builderAbiVersion = RuntimeManifest::BUILDER_ABI_VERSION,
+        public array $iosSdks = [],
+        public string $iosMinimumVersion = '',
+        public array $iosArchitectures = [],
     ) {}
 
     /**
@@ -58,12 +62,16 @@ final readonly class ModuleAbiManifest
             'class_namespaces' => $this->classNamespaces,
             'includes_signal_connection_support' => $this->includesSignalConnectionSupport,
             'build_mode' => $this->buildMode,
+            'build_target' => $this->buildTarget,
             'qt_version' => $this->qtVersion,
             'qt_version_major' => $this->qtVersionMajor,
             'qt_version_minor' => $this->qtVersionMinor,
             'qt_version_patch' => $this->qtVersionPatch,
             'extension_version' => $this->extensionVersion,
             'builder_abi_version' => $this->builderAbiVersion,
+            'ios_sdks' => array_values($this->iosSdks),
+            'ios_minimum_version' => $this->iosMinimumVersion,
+            'ios_architectures' => array_values($this->iosArchitectures),
         ];
     }
 
@@ -104,12 +112,16 @@ final readonly class ModuleAbiManifest
             classNamespaces: self::filterStringMap($decoded['class_namespaces'] ?? []),
             includesSignalConnectionSupport: (bool) ($decoded['includes_signal_connection_support'] ?? false),
             buildMode: is_string($decoded['build_mode'] ?? null) ? $decoded['build_mode'] : RuntimeManifest::MODE_MONOLITHIC,
+            buildTarget: is_string($decoded['build_target'] ?? null) ? $decoded['build_target'] : BuildTarget::DESKTOP,
             qtVersion: is_string($decoded['qt_version'] ?? null) ? $decoded['qt_version'] : '',
             qtVersionMajor: max(0, (int) ($decoded['qt_version_major'] ?? 0)),
             qtVersionMinor: max(0, (int) ($decoded['qt_version_minor'] ?? 0)),
             qtVersionPatch: max(0, (int) ($decoded['qt_version_patch'] ?? 0)),
             extensionVersion: is_string($decoded['extension_version'] ?? null) ? $decoded['extension_version'] : '',
             builderAbiVersion: is_string($decoded['builder_abi_version'] ?? null) ? $decoded['builder_abi_version'] : RuntimeManifest::BUILDER_ABI_VERSION,
+            iosSdks: self::filterStringList($decoded['ios_sdks'] ?? []),
+            iosMinimumVersion: is_string($decoded['ios_minimum_version'] ?? null) ? $decoded['ios_minimum_version'] : '',
+            iosArchitectures: self::filterStringList($decoded['ios_architectures'] ?? []),
         );
     }
 

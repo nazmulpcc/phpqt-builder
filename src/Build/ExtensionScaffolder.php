@@ -48,18 +48,34 @@ class ExtensionScaffolder
         $this->lastWriteStats = new FileWriteStats();
         $this->writeCoreFiles($context);
 
-        return [
-            $context->outputDir . '/config.m4',
+        $files = [
             $context->outputDir . '/' . $context->phpHeaderFilename(),
             $context->outputDir . '/' . $context->moduleSourceFilename(),
+            $context->outputDir . '/' . $context->configHeaderFilename(),
         ];
+        if ($context->shouldWriteConfigM4()) {
+            array_unshift($files, $context->outputDir . '/config.m4');
+        }
+
+        return $files;
     }
 
     private function writeCoreFiles(ExtensionBuildContext $context): void
     {
+        if ($context->shouldWriteConfigM4()) {
+            $this->lastWriteStats->record($this->fileWriter->write(
+                $context->outputDir . '/config.m4',
+                $this->cleanOutput($this->blade->run('generation.config_m4', ['ctx' => $context])),
+            ));
+        } else {
+            $configM4Path = $context->outputDir . '/config.m4';
+            if (is_file($configM4Path)) {
+                @unlink($configM4Path);
+            }
+        }
         $this->lastWriteStats->record($this->fileWriter->write(
-            $context->outputDir . '/config.m4',
-            $this->cleanOutput($this->blade->run('generation.config_m4', ['ctx' => $context])),
+            $context->outputDir . '/' . $context->configHeaderFilename(),
+            $this->cleanOutput($this->blade->run('generation.config_header', ['ctx' => $context])),
         ));
         $this->lastWriteStats->record($this->fileWriter->write(
             $context->outputDir . '/' . $context->phpHeaderFilename(),
@@ -95,7 +111,7 @@ class ExtensionScaffolder
             return;
         }
 
-        if (!mkdir($directory, 0755, true) && !is_dir($directory)) {
+        if (!@mkdir($directory, 0755, true) && !is_dir($directory)) {
             throw new \RuntimeException(sprintf('Could not create directory: %s', $directory));
         }
     }

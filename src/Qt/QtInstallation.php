@@ -24,6 +24,10 @@ readonly class QtInstallation
         public int $qtVersionMajor = 0,
         public int $qtVersionMinor = 0,
         public int $qtVersionPatch = 0,
+        public string $buildTarget = \QtBuilder\Build\BuildTarget::DESKTOP,
+        public array $iosSdks = [],
+        public string $iosMinimumVersion = '',
+        public array $iosArchitectures = [],
     ) {}
 
     public function headerRootFor(string $module): ?string

@@ -13,6 +13,7 @@
 
 #include "php.h"
 #include <QObject>
+#include <qproperty.h>
 
 #ifndef PHP_QT_API
 # if defined(PHP_WIN32)
@@ -24,8 +25,13 @@
 # endif
 #endif
 
+typedef struct _qt_qmetaobjectconnection_handle {
+    QMetaObject::Connection connection;
+    QPropertyNotifier *property_notifier;
+} qt_qmetaobjectconnection_handle;
+
 typedef struct _qt_qmetaobjectconnection_object {
-    QMetaObject::Connection *native_ptr;
+    qt_qmetaobjectconnection_handle *native_ptr;
     zend_object std; /* MUST be last */
 } qt_qmetaobjectconnection_object;
 
@@ -40,6 +46,7 @@ static inline qt_qmetaobjectconnection_object *qt_qmetaobjectconnection_from_obj
 #define Z_QMETAOBJECTCONNECTION_P(zv) qt_qmetaobjectconnection_from_obj(Z_OBJ_P(zv))
 
 PHP_QT_API void qt_qmetaobjectconnection_wrap(zval *return_value, const QMetaObject::Connection &connection);
+PHP_QT_API void qt_qmetaobjectconnection_wrap_property_notifier(zval *return_value, QPropertyNotifier &&notifier);
 PHP_MINIT_FUNCTION(qt_qmetaobjectconnection);
 
 #endif /* QT_QMETAOBJECTCONNECTION_H */

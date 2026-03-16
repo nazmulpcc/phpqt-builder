@@ -437,3 +437,41 @@ it('fails when --ccache is requested but unavailable for split builds', function
     expect($result)->toBeFailureCommandResult()
         ->and($result['display'])->toContain('The --ccache option was set but ccache is not available on PATH.');
 });
+
+it('treats ios split module builds as generation-only and skips bootstrap automatically', function (): void {
+    $fixtureRoot = qt_fixture_path('module-split-qt');
+    $iosRoot = qt_temp_dir('qtbuilder-ios-modular-') . '/ios';
+    if (!is_dir(dirname($iosRoot))) {
+        mkdir(dirname($iosRoot), 0777, true);
+    }
+    symlink($fixtureRoot, $iosRoot);
+
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-modules-ios-' . bin2hex(random_bytes(4));
+    $bootstrapper = new FakeExtensionBootstrapper();
+
+    $result = qt_command_result(
+        new BuildModulesCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $iosRoot,
+            'modules' => 'QtWidgets',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+            '--target' => 'ios',
+            '--sdk' => 'all',
+        ],
+    );
+
+    expect($result)->toBeSuccessfulCommandResult()
+        ->and(is_file($buildRoot . '/QtCore/ext/config.m4'))->toBeTrue()
+        ->and(is_file($buildRoot . '/QtCore/ext/config.h'))->toBeTrue()
+        ->and(is_file($buildRoot . '/QtCore/ios/iphoneos/libqtcore.a'))->toBeFalse()
+        ->and(is_file($buildRoot . '/QtGui/ios/iphoneos/libqtgui.a'))->toBeFalse()
+        ->and(is_file($buildRoot . '/QtWidgets/ios/iphonesimulator/libqtwidgets.a'))->toBeFalse()
+        ->and(is_file($buildRoot . '/QtWidgets/generated/ios_build.json'))->toBeFalse()
+        ->and($result['display'])->toContain('Skipping bootstrap (target=ios implies --no-build).');
+
+    $manifest = qt_decode_json((string) file_get_contents($buildRoot . '/QtWidgets/generated/module_abi.json'));
+    expect($manifest['build_target'] ?? null)->toBe('ios')
+        ->and($manifest['ios_sdks'] ?? null)->toBe(['iphoneos', 'iphonesimulator'])
+        ->and($manifest['ios_minimum_version'] ?? null)->toBe('15.0');
+});

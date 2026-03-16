@@ -42,6 +42,7 @@ class BuildPipeline
                 $metadataDir,
                 $request->modules,
                 $request->installation->rootPath,
+                $request->cacheNamespace(),
             );
         }
         $preparedClassDataByClass = [];
@@ -74,6 +75,7 @@ class BuildPipeline
                 $request->extensionName,
                 $request->importedAbi,
                 resolveViability: false,
+                cacheNamespace: $request->cacheNamespace(),
             );
 
             if ($discovery->errors !== []) {
@@ -123,6 +125,7 @@ class BuildPipeline
                 $request->modules,
                 $request->installation->rootPath,
                 $discovery,
+                $request->cacheNamespace(),
             );
         }
         $timings['discovery'] = microtime(true) - $discoveryStartedAt;
@@ -149,6 +152,7 @@ class BuildPipeline
                 $request->jobs,
                 $output,
                 $request->extensionName,
+                $request->cacheNamespace(),
             );
 
             if ($classStructures['errors'] !== []) {
@@ -266,6 +270,7 @@ class BuildPipeline
             $skippedClasses,
             $classNamespaces,
             $enumCandidateHeaders,
+            $request->cacheNamespace(),
         );
 
         if ($enumRegistry instanceof EnumHolderRegistry) {
@@ -327,6 +332,7 @@ class BuildPipeline
                 $classNamespaces,
                 $enumRegistry,
                 $enumCandidateHeaders,
+                $request->cacheNamespace(),
             );
         }
         $timings['enum_discovery'] = microtime(true) - $enumStartedAt;
@@ -361,6 +367,7 @@ class BuildPipeline
             $request->jobs,
             new NullOutput(),
             $request->extensionName,
+            $request->cacheNamespace(),
         );
         if ($enumCacheWarmShape['errors'] === []) {
             $enumCacheCandidates = $enumCacheWarmShape['accepted_candidates'];
@@ -389,6 +396,7 @@ class BuildPipeline
             $enumCacheClassNamespaces,
             $enumRegistry,
             $enumCandidateHeaders,
+            $request->cacheNamespace(),
         );
 
         $this->renderModuleAcceptance(
@@ -415,6 +423,7 @@ class BuildPipeline
                 moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
                 supplementalCandidates: $supplementalCandidates,
             ),
+            $request->cacheNamespace(),
         );
 
         $timings['analysis_total'] = microtime(true) - $analysisStartedAt;
@@ -473,6 +482,8 @@ class BuildPipeline
             includeThreadRuntimeSupport: true,
             runtimeManifest: $runtimeManifest,
             buildMode: RuntimeManifest::MODE_MONOLITHIC,
+            buildTarget: $request->buildTarget,
+            iosBuildOptions: $request->iosBuildOptions,
         );
 
         $context = $context->withGeneratedClasses(
@@ -542,6 +553,7 @@ class BuildPipeline
             'bootstrap_skipped' => $bootstrap['skipped'],
             'bootstrap_disabled' => $bootstrap['disabled'],
             'ccache_enabled' => $request->useCcache,
+            'build_target' => $request->buildTarget,
             'timings' => $timings,
             'file_writes' => [
                 'comparator' => $scaffolder->writeComparatorName(),
@@ -551,6 +563,9 @@ class BuildPipeline
             ],
             'runtime_manifest' => $runtimeManifestPath,
         ];
+        if ($request->isIosTarget() && is_file($metadataDir . '/ios_build.json')) {
+            $summary['ios_build_manifest'] = $metadataDir . '/ios_build.json';
+        }
 
         file_put_contents($metadataDir . '/classmap.json', json_encode($emission['classmap'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]');
         file_put_contents($metadataDir . '/skipped_classes.json', json_encode($analysis->skippedClasses, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]');
@@ -587,6 +602,10 @@ class BuildPipeline
                 qtVersionPatch: $runtimeManifest->qtVersionPatch,
                 extensionVersion: $runtimeManifest->extensionVersion,
                 builderAbiVersion: $runtimeManifest->builderAbiVersion,
+                buildTarget: $runtimeManifest->buildTarget,
+                iosSdks: $runtimeManifest->iosSdks,
+                iosMinimumVersion: $runtimeManifest->iosMinimumVersion,
+                iosArchitectures: $runtimeManifest->iosArchitectures,
             );
             $abiManifest->write($metadataDir . '/module_abi.json');
             $summary['abi_manifest'] = $metadataDir . '/module_abi.json';
@@ -624,7 +643,18 @@ class BuildPipeline
 
     private function moduleBinaryExists(ExtensionBuildContext $context): bool
     {
-        return is_file($context->outputDir . '/modules/' . $context->extensionName . '.so');
+        $expectedPaths = $context->expectedBinaryPaths();
+        if ($expectedPaths === []) {
+            return false;
+        }
+
+        foreach ($expectedPaths as $path) {
+            if (!is_file($path)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function renderCacheUsage(OutputInterface $output, string $metadataDir): void
@@ -1789,7 +1819,10 @@ class BuildPipeline
 
         if (!$bootstrapEnabled) {
             $bootstrapDisabled = true;
-            $output->writeln('<comment>Skipping bootstrap (--no-build).</comment>');
+            $message = $context->isMobileTarget()
+                ? sprintf('Skipping bootstrap (target=%s implies --no-build).', $context->buildTarget)
+                : 'Skipping bootstrap (--no-build).';
+            $output->writeln('<comment>' . $message . '</comment>');
 
             return [
                 'result' => null,
@@ -2134,7 +2167,7 @@ class BuildPipeline
             return;
         }
 
-        if (!mkdir($directory, 0755, true) && !is_dir($directory)) {
+        if (!@mkdir($directory, 0755, true) && !is_dir($directory)) {
             throw new \RuntimeException(sprintf('Could not create directory: %s', $directory));
         }
     }

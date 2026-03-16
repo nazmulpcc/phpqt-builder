@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace QtBuilder\Qt;
 
+use QtBuilder\Build\BuildTarget;
+use QtBuilder\Build\IosBuildOptions;
 use QtBuilder\Contracts\SystemInformation;
 use RuntimeException;
 
@@ -16,6 +18,23 @@ class QtInstallationResolver
      */
     public function resolve(?string $qtPath = null, array $modules = ['QtCore']): QtInstallation
     {
+        return $this->resolveForTarget($qtPath, $modules);
+    }
+
+    /**
+     * @param list<string> $modules
+     */
+    public function resolveForTarget(
+        ?string $qtPath = null,
+        array $modules = ['QtCore'],
+        string $buildTarget = BuildTarget::DESKTOP,
+        ?IosBuildOptions $iosBuildOptions = null,
+    ): QtInstallation
+    {
+        if ($buildTarget === BuildTarget::IOS) {
+            return $this->resolveIosInstallation($qtPath, $modules, $iosBuildOptions);
+        }
+
         if ($qtPath !== null && $qtPath !== '') {
             return $this->resolveFromPath($qtPath, $modules, []);
         }
@@ -49,6 +68,47 @@ class QtInstallationResolver
         }
 
         throw new RuntimeException('Unable to resolve a Qt installation. Pass --qt-path or install qtpaths/qmake.');
+    }
+
+    /**
+     * @param list<string> $modules
+     */
+    private function resolveIosInstallation(?string $qtPath, array $modules, ?IosBuildOptions $iosBuildOptions): QtInstallation
+    {
+        $resolvedPath = $qtPath;
+        if ($resolvedPath === null || trim($resolvedPath) === '') {
+            $resolvedPath = $this->discoverIosQtPath();
+        }
+
+        if ($resolvedPath === null || trim($resolvedPath) === '') {
+            throw new RuntimeException('Unable to resolve a Qt for iOS installation. Pass --qt-path to an iOS Qt kit (for example ~/Qt/<version>/ios).');
+        }
+
+        $installation = $this->resolveFromPath($resolvedPath, $modules, []);
+        if (!$this->isIosQtRoot($resolvedPath) && !$this->isIosQtRoot($installation->rootPath)) {
+            throw new RuntimeException(sprintf(
+                'The Qt path %s is not a Qt for iOS installation. Pass --qt-path to an iOS Qt kit.',
+                $resolvedPath,
+            ));
+        }
+
+        return new QtInstallation(
+            rootPath: $installation->rootPath,
+            osFamily: $installation->osFamily,
+            includeRoots: $installation->includeRoots,
+            libraryRoots: $installation->libraryRoots,
+            moduleHeaderRoots: $installation->moduleHeaderRoots,
+            moduleLinkFlags: $installation->moduleLinkFlags,
+            tools: $installation->tools,
+            qtVersion: $installation->qtVersion,
+            qtVersionMajor: $installation->qtVersionMajor,
+            qtVersionMinor: $installation->qtVersionMinor,
+            qtVersionPatch: $installation->qtVersionPatch,
+            buildTarget: BuildTarget::IOS,
+            iosSdks: $iosBuildOptions?->sdks ?? [IosBuildOptions::SDK_IPHONEOS, IosBuildOptions::SDK_IPHONESIMULATOR],
+            iosMinimumVersion: $iosBuildOptions?->minimumVersion ?? '15.0',
+            iosArchitectures: $iosBuildOptions?->architectures ?? ['arm64'],
+        );
     }
 
     /**
@@ -205,6 +265,29 @@ class QtInstallationResolver
         }
 
         return null;
+    }
+
+    private function discoverIosQtPath(): ?string
+    {
+        $home = getenv('HOME');
+        if (!is_string($home) || $home === '') {
+            return null;
+        }
+
+        $matches = glob($home . '/Qt/*/ios', GLOB_ONLYDIR);
+        if ($matches === false || $matches === []) {
+            return null;
+        }
+
+        sort($matches, SORT_NATURAL);
+
+        return end($matches) ?: null;
+    }
+
+    private function isIosQtRoot(string $path): bool
+    {
+        $normalized = strtolower(str_replace('\\', '/', $path));
+        return preg_match('#(?:^|/)ios(?:/|$)#', $normalized) === 1;
     }
 
     /**

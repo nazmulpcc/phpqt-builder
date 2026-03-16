@@ -40,6 +40,8 @@ readonly class ExtensionBuildContext
         public ?string $currentQtModule = null,
         public string $buildMode = RuntimeManifest::MODE_MONOLITHIC,
         public string $builderAbiVersion = RuntimeManifest::BUILDER_ABI_VERSION,
+        public string $buildTarget = BuildTarget::DESKTOP,
+        public ?IosBuildOptions $iosBuildOptions = null,
     ) {}
 
     public function withGeneratedClasses(
@@ -72,6 +74,8 @@ readonly class ExtensionBuildContext
             $this->currentQtModule,
             $this->buildMode,
             $this->builderAbiVersion,
+            $this->buildTarget,
+            $this->iosBuildOptions,
         );
     }
 
@@ -88,6 +92,53 @@ readonly class ExtensionBuildContext
     public function metadataDir(): string
     {
         return $this->buildRootDir . '/generated';
+    }
+
+    public function isIosTarget(): bool
+    {
+        return $this->buildTarget === BuildTarget::IOS;
+    }
+
+    public function isMobileTarget(): bool
+    {
+        return in_array($this->buildTarget, [BuildTarget::IOS, BuildTarget::ANDROID], true);
+    }
+
+    public function shouldWriteConfigM4(): bool
+    {
+        return true;
+    }
+
+    public function configHeaderFilename(): string
+    {
+        return 'config.h';
+    }
+
+    public function iosArtifactsDir(): string
+    {
+        return $this->buildRootDir . '/ios';
+    }
+
+    public function iosStaticLibraryPath(string $sdk): string
+    {
+        return $this->iosArtifactsDir() . '/' . $sdk . '/lib' . $this->extensionName . '.a';
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function expectedBinaryPaths(): array
+    {
+        if ($this->isIosTarget()) {
+            $sdks = $this->iosBuildOptions?->sdks ?? [];
+
+            return array_values(array_map(
+                fn(string $sdk): string => $this->iosStaticLibraryPath($sdk),
+                $sdks,
+            ));
+        }
+
+        return [$this->outputDir . '/modules/' . $this->extensionName . '.so'];
     }
 
     /**

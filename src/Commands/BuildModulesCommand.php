@@ -10,16 +10,20 @@ use QtBuilder\Build\BuildExecutionRequest;
 use QtBuilder\Build\BuildDiscoveryService;
 use QtBuilder\Build\BuildLayout;
 use QtBuilder\Build\BuildPipeline;
+use QtBuilder\Build\BuildTarget;
 use QtBuilder\Build\Dependencies\ModuleDependencyResolver;
 use QtBuilder\Build\Dependencies\ResolvedModuleGraph;
 use QtBuilder\Build\Dependencies\StaticModuleDependencyResolver;
 use QtBuilder\Build\ExtensionBuildContext;
 use QtBuilder\Build\ExtensionBootstrapper;
 use QtBuilder\Build\ExtensionScaffolder;
+use QtBuilder\Build\IosBuildOptions;
+use QtBuilder\Build\IosExtensionBootstrapper;
 use QtBuilder\Build\ModuleAbiManifest;
 use QtBuilder\Build\ProcessExtensionBootstrapper;
 use QtBuilder\Build\RuntimeManifest;
 use QtBuilder\Build\RuntimeManifestBuilder;
+use QtBuilder\Build\TargetAwareExtensionBootstrapper;
 use QtBuilder\Contracts\SystemInformation;
 use QtBuilder\IO\FileWriteStats;
 use QtBuilder\IO\SmartFileWriter;
@@ -44,7 +48,10 @@ class BuildModulesCommand extends Command
         private readonly BuildDirectoryCleaner $buildDirectoryCleaner = new BuildDirectoryCleaner(),
         ?ModuleDependencyResolver $dependencyResolver = null,
     ) {
-        $this->bootstrapper = $bootstrapper ?? new ProcessExtensionBootstrapper($systemInformation);
+        $this->bootstrapper = $bootstrapper ?? new TargetAwareExtensionBootstrapper(
+            new ProcessExtensionBootstrapper($systemInformation),
+            new IosExtensionBootstrapper($systemInformation),
+        );
         $this->dependencyResolver = $dependencyResolver ?? new StaticModuleDependencyResolver();
 
         parent::__construct();
@@ -55,6 +62,12 @@ class BuildModulesCommand extends Command
         $this
             ->addArgument('modules', InputArgument::OPTIONAL, 'Comma-separated Qt modules to build', 'QtCore')
             ->addOption('qt-path', null, InputOption::VALUE_REQUIRED, 'Path to the Qt installation root')
+            ->addOption('target', null, InputOption::VALUE_REQUIRED, 'Build target (desktop or ios)', BuildTarget::DESKTOP)
+            ->addOption('sdk', null, InputOption::VALUE_REQUIRED, 'iOS SDK selection (iphoneos, iphonesimulator, all)', 'all')
+            ->addOption('ios-min-version', null, InputOption::VALUE_REQUIRED, 'Minimum iOS deployment target', '15.0')
+            ->addOption('arch', null, InputOption::VALUE_REQUIRED, 'Comma-separated architecture list for iOS builds')
+            ->addOption('xcode-path', null, InputOption::VALUE_REQUIRED, 'Path to the Xcode developer directory')
+            ->addOption('developer-dir', null, InputOption::VALUE_REQUIRED, 'Path to the active Apple developer directory')
             ->addOption('ext-version', null, InputOption::VALUE_REQUIRED, 'Extension version', '0.1.0')
             ->addOption('output', 'o', InputOption::VALUE_REQUIRED, 'Base output directory; each module is written under <output>/<Module>', 'build')
             ->addOption('force', 'F', InputOption::VALUE_NONE, 'Clear each selected module build root before starting')
@@ -84,8 +97,10 @@ class BuildModulesCommand extends Command
 
         $jobs = $this->resolveJobs($input->getOption('jobs'));
         $qtPath = $input->getOption('qt-path') !== null ? (string) $input->getOption('qt-path') : null;
+        $buildTarget = BuildTarget::normalize((string) $input->getOption('target'));
+        $iosBuildOptions = $this->resolveIosBuildOptions($input, $buildTarget);
         $extensionVersion = (string) $input->getOption('ext-version');
-        $bootstrapEnabled = !(bool) $input->getOption('no-build');
+        $bootstrapEnabled = !(bool) $input->getOption('no-build') && !$this->targetImpliesNoBuild($buildTarget);
         try {
             $useCcache = $this->resolveCcacheUsage($input);
         } catch (\RuntimeException $e) {
@@ -104,7 +119,12 @@ class BuildModulesCommand extends Command
             }
         }
 
-        $analysisInstallation = $qtResolver->resolve($qtPath, $resolvedGraph->buildOrder);
+        try {
+            $analysisInstallation = $qtResolver->resolveForTarget($qtPath, $resolvedGraph->buildOrder, $buildTarget, $iosBuildOptions);
+        } catch (\RuntimeException $e) {
+            $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
+            return self::FAILURE;
+        }
         $analysis = $pipeline->analyze(
             new BuildExecutionRequest(
                 installation: $analysisInstallation,
@@ -119,6 +139,8 @@ class BuildModulesCommand extends Command
                 dependencySource: $resolvedGraph->dependencySource,
                 reuseDiscoveryCache: true,
                 bootstrapEnabled: false,
+                buildTarget: $buildTarget,
+                iosBuildOptions: $iosBuildOptions,
             ),
             $output,
         );
@@ -156,7 +178,12 @@ class BuildModulesCommand extends Command
             $moduleLayout = new BuildLayout($moduleBuildRoot);
             $extensionName = $resolvedGraph->extensionNameFor($module);
             $nativeModules = $this->nativeModulesForModule($resolvedGraph, $module);
-            $installation = $qtResolver->resolve($qtPath, $nativeModules);
+            try {
+                $installation = $qtResolver->resolveForTarget($qtPath, $nativeModules, $buildTarget, $iosBuildOptions);
+            } catch (\RuntimeException $e) {
+                $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
+                return self::FAILURE;
+            }
             $localClasses = $this->generatedClassesForModule($analysis, $module);
 
             $context = new ExtensionBuildContext(
@@ -181,6 +208,8 @@ class BuildModulesCommand extends Command
                 runtimeManifest: $runtimeManifest,
                 currentQtModule: $module,
                 buildMode: RuntimeManifest::MODE_MODULAR,
+                buildTarget: $buildTarget,
+                iosBuildOptions: $iosBuildOptions,
             );
 
             $output->writeln(sprintf('<info>Building %s as %s...</info>', $module, $extensionName));
@@ -499,6 +528,7 @@ class BuildModulesCommand extends Command
             'bootstrap_error' => $bootstrap['error'],
             'bootstrap_skipped' => $bootstrap['skipped'],
             'bootstrap_disabled' => $bootstrap['disabled'],
+            'build_target' => $context->buildTarget,
             'file_writes' => [
                 'comparator' => $writeComparatorName,
                 'class' => $classWriteStats->toArray(),
@@ -507,6 +537,9 @@ class BuildModulesCommand extends Command
             ],
             'runtime_manifest' => $runtimeManifestPath,
         ];
+        if ($context->isIosTarget() && is_file($metadataDir . '/ios_build.json')) {
+            $summary['ios_build_manifest'] = $metadataDir . '/ios_build.json';
+        }
 
         $abiManifest = new ModuleAbiManifest(
             module: $module,
@@ -529,6 +562,10 @@ class BuildModulesCommand extends Command
             qtVersionPatch: $runtimeManifest->qtVersionPatch,
             extensionVersion: $runtimeManifest->extensionVersion,
             builderAbiVersion: $runtimeManifest->builderAbiVersion,
+            buildTarget: $runtimeManifest->buildTarget,
+            iosSdks: $runtimeManifest->iosSdks,
+            iosMinimumVersion: $runtimeManifest->iosMinimumVersion,
+            iosArchitectures: $runtimeManifest->iosArchitectures,
         );
         $abiManifest->write($metadataDir . '/module_abi.json');
         $summary['abi_manifest'] = $metadataDir . '/module_abi.json';
@@ -656,7 +693,7 @@ class BuildModulesCommand extends Command
             return;
         }
 
-        if (!mkdir($directory, 0755, true) && !is_dir($directory)) {
+        if (!@mkdir($directory, 0755, true) && !is_dir($directory)) {
             throw new \RuntimeException(sprintf('Could not create directory: %s', $directory));
         }
     }
@@ -689,5 +726,39 @@ class BuildModulesCommand extends Command
         }
 
         return $hasCcache;
+    }
+
+    private function resolveIosBuildOptions(InputInterface $input, string $buildTarget): ?IosBuildOptions
+    {
+        if ($buildTarget !== BuildTarget::IOS) {
+            return null;
+        }
+
+        $architectures = [];
+        $archOption = $input->getOption('arch');
+        if (is_string($archOption) && trim($archOption) !== '') {
+            $architectures = array_values(array_filter(array_map('trim', explode(',', $archOption)), static fn(string $value): bool => $value !== ''));
+        }
+
+        $developerDir = null;
+        foreach (['developer-dir', 'xcode-path'] as $optionName) {
+            $value = $input->getOption($optionName);
+            if (is_string($value) && trim($value) !== '') {
+                $developerDir = trim($value);
+                break;
+            }
+        }
+
+        return new IosBuildOptions(
+            sdks: IosBuildOptions::normalizeSdks((string) $input->getOption('sdk')),
+            minimumVersion: trim((string) $input->getOption('ios-min-version')) ?: '15.0',
+            architectures: $architectures,
+            developerDir: $developerDir,
+        );
+    }
+
+    private function targetImpliesNoBuild(string $buildTarget): bool
+    {
+        return in_array($buildTarget, [BuildTarget::IOS, BuildTarget::ANDROID], true);
     }
 }

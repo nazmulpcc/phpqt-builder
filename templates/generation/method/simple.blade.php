@@ -150,7 +150,22 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
 
 @endif
 @endif
-@if($method->returnStrategy === 'void')
+@if($ctx->nativeCppType === 'QMenu' && $method->name === 'setAsDockMenu')
+    // Keep this as a one-off availability guard for now. If we add a few more
+    // method-specific platform checks like this, move them into shared
+    // availability metadata/generation instead of growing this template branch.
+#if defined(Q_OS_IOS)
+    zend_throw_exception_ex(
+        qt_runtime_exception_ce(),
+        0,
+        "Qt\\Widgets\\QMenu::setAsDockMenu() is not available on iOS."
+    );
+    RETURN_THROWS();
+#else
+    intern->native_ptr->setAsDockMenu();
+    return;
+#endif
+@elseif($method->returnStrategy === 'void')
 @include('generation.return.void', ['ctx' => $ctx, 'method' => $method])
 @elseif($method->returnStrategy === 'scalar')
 @include('generation.return.scalar', ['ctx' => $ctx, 'method' => $method])

@@ -24,6 +24,7 @@ class EnumHolderCache
         array $skippedClasses,
         array $classNamespaces,
         array $queuedHeaders = [],
+        string $cacheNamespace = BuildTarget::DESKTOP,
     ): ?EnumHolderRegistry {
         $path = $this->path($metadataDir);
         if (!is_file($path)) {
@@ -40,7 +41,7 @@ class EnumHolderCache
         }
 
         $cacheKey = (string) ($decoded['cache_key'] ?? '');
-        if ($cacheKey === '' || $cacheKey !== $this->cacheKey($includePaths, $acceptedCandidates, $skippedClasses, $classNamespaces, $queuedHeaders)) {
+        if ($cacheKey === '' || $cacheKey !== $this->cacheKey($includePaths, $acceptedCandidates, $skippedClasses, $classNamespaces, $queuedHeaders, $cacheNamespace)) {
             return null;
         }
 
@@ -115,13 +116,14 @@ class EnumHolderCache
         array $classNamespaces,
         EnumHolderRegistry $registry,
         array $queuedHeaders = [],
+        string $cacheNamespace = BuildTarget::DESKTOP,
     ): string {
         $path = $this->path($metadataDir);
         @mkdir($metadataDir, 0755, true);
 
         $payload = [
             'schema_version' => self::SCHEMA_VERSION,
-            'cache_key' => $this->cacheKey($includePaths, $acceptedCandidates, $skippedClasses, $classNamespaces, $queuedHeaders),
+            'cache_key' => $this->cacheKey($includePaths, $acceptedCandidates, $skippedClasses, $classNamespaces, $queuedHeaders, $cacheNamespace),
             'holders' => array_map(
                 static fn(EnumHolderDefinition $holder): array => $holder->toArray(),
                 $registry->holders(),
@@ -151,6 +153,7 @@ class EnumHolderCache
         array $skippedClasses,
         array $classNamespaces,
         array $queuedHeaders = [],
+        string $cacheNamespace = BuildTarget::DESKTOP,
     ): string {
         $normalizedIncludePaths = array_values(array_unique(array_map(
             static fn(string $path): string => self::normalizePath($path),
@@ -218,6 +221,7 @@ class EnumHolderCache
 
         return hash('sha256', json_encode([
             'schema' => self::SCHEMA_VERSION,
+            'cache_namespace' => $cacheNamespace,
             'include_paths' => $normalizedIncludePaths,
             'class_namespaces' => $classNamespacePayload,
             'headers' => $headers,

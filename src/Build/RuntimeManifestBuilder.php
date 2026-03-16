@@ -77,12 +77,16 @@ final class RuntimeManifestBuilder
 
         return new RuntimeManifest(
             buildMode: $buildMode,
+            buildTarget: $installation->buildTarget,
             qtVersion: $installation->qtVersion,
             qtVersionMajor: $installation->qtVersionMajor,
             qtVersionMinor: $installation->qtVersionMinor,
             qtVersionPatch: $installation->qtVersionPatch,
             extensionVersion: $extensionVersion,
             builderAbiVersion: RuntimeManifest::BUILDER_ABI_VERSION,
+            iosSdks: $installation->iosSdks,
+            iosMinimumVersion: $installation->iosMinimumVersion,
+            iosArchitectures: $installation->iosArchitectures,
             requestedModules: array_values($requestedModules),
             expandedModules: array_values($graph->expandedModules()),
             dependencySource: $graph->dependencySource,
