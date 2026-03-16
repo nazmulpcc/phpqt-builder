@@ -25,6 +25,8 @@ class ClangArgumentBuilder
         '-std=c++17',
     ];
 
+    private const string DEFAULT_IOS_DEPLOYMENT_TARGET = '15.0';
+
     /**
      * @param list<string> $extraIncludePaths  Additional -I paths supplied by the caller (e.g. CLI --include).
      */
@@ -42,15 +44,16 @@ class ClangArgumentBuilder
     {
         $args = self::BASE_ARGS;
         $hasExplicitQtIncludes = $this->hasExplicitQtIncludePath();
+        $applePlatform = $this->detectApplePlatform();
 
         $args = [...$args, ...$this->extraIncludeArgs()];
-        $args = [...$args, ...$this->discoverSystemIncludes()];
+        $args = [...$args, ...$this->discoverSystemIncludes($applePlatform)];
         $args = [...$args, ...$this->discoverClangResourceDir()];
         if (!$hasExplicitQtIncludes) {
             $args = [...$args, ...$this->discoverQtIncludes()];
         }
         $args = [...$args, ...$this->qtFeatureOverrides()];
-        $args = [...$args, ...$this->platformDefines()];
+        $args = [...$args, ...$this->platformDefines($applePlatform)];
 
         return array_values(array_unique($args));
     }
@@ -77,11 +80,11 @@ class ClangArgumentBuilder
     /**
      * @return list<string>
      */
-    private function discoverSystemIncludes(): array
+    private function discoverSystemIncludes(?string $applePlatform = null): array
     {
         return match (PHP_OS_FAMILY) {
             'Windows' => $this->windowsSystemIncludes(),
-            'Darwin' => $this->darwinSystemIncludes(),
+            'Darwin' => $this->darwinSystemIncludes($applePlatform),
             default => $this->linuxSystemIncludes(),
         };
     }
@@ -102,7 +105,7 @@ class ClangArgumentBuilder
     /**
      * @return list<string>
      */
-    private function darwinSystemIncludes(): array
+    private function darwinSystemIncludes(?string $applePlatform = null): array
     {
         $candidates = [
             '/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include',
@@ -113,10 +116,17 @@ class ClangArgumentBuilder
 
         $args = $this->resolveIncludePaths($candidates);
 
-        $sdkPath = trim((string) shell_exec('xcrun --show-sdk-path 2>/dev/null'));
+        $sdkName = $this->darwinSdkName($applePlatform);
+        $sdkPath = trim((string) shell_exec(sprintf('xcrun --sdk %s --show-sdk-path 2>/dev/null', escapeshellarg($sdkName))));
         if ($sdkPath !== '' && is_dir($sdkPath)) {
             $args[] = '-isysroot';
             $args[] = $sdkPath;
+        }
+
+        $targetTriple = $this->darwinTargetTriple($applePlatform);
+        if ($targetTriple !== null) {
+            $args[] = '-target';
+            $args[] = $targetTriple;
         }
 
         return $args;
@@ -232,13 +242,22 @@ class ClangArgumentBuilder
     /**
      * @return list<string>
      */
-    private function platformDefines(): array
+    private function platformDefines(?string $applePlatform = null): array
     {
         return match (PHP_OS_FAMILY) {
             'Windows' => ['-D', '_WIN32', '-D', '_WINDOWS'],
             'Linux' => ['-D', '__linux__'],
+            'Darwin' => $this->darwinPlatformDefines($applePlatform),
             default => [],
         };
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function darwinPlatformDefines(?string $applePlatform = null): array
+    {
+        return [];
     }
 
     // ------------------------------------------------------------------
@@ -312,5 +331,49 @@ class ClangArgumentBuilder
         }
 
         return false;
+    }
+
+    private function detectApplePlatform(): ?string
+    {
+        if (PHP_OS_FAMILY !== 'Darwin') {
+            return null;
+        }
+
+        foreach ($this->extraIncludePaths as $path) {
+            if (!is_string($path) || $path === '' || str_starts_with($path, '-')) {
+                continue;
+            }
+
+            $normalized = strtolower(str_replace('\\', '/', $path));
+            if (preg_match('#(?:^|/)iphonesimulator(?:/|$)#', $normalized) === 1) {
+                return 'ios-simulator';
+            }
+
+            if (preg_match('#(?:^|/)ios(?:/|$)#', $normalized) === 1) {
+                return 'ios';
+            }
+        }
+
+        return null;
+    }
+
+    private function darwinSdkName(?string $applePlatform): string
+    {
+        return match ($applePlatform) {
+            'ios' => 'iphoneos',
+            'ios-simulator' => 'iphonesimulator',
+            default => 'macosx',
+        };
+    }
+
+    private function darwinTargetTriple(?string $applePlatform): ?string
+    {
+        $minimumVersion = (string) (getenv('IPHONEOS_DEPLOYMENT_TARGET') ?: self::DEFAULT_IOS_DEPLOYMENT_TARGET);
+
+        return match ($applePlatform) {
+            'ios' => sprintf('arm64-apple-ios%s', $minimumVersion),
+            'ios-simulator' => sprintf('arm64-apple-ios%s-simulator', $minimumVersion),
+            default => null,
+        };
     }
 }

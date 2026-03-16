@@ -18,6 +18,10 @@ class QtInstallationResolver
      */
     public function resolve(?string $qtPath = null, array $modules = ['QtCore']): QtInstallation
     {
+        if ($qtPath !== null && $qtPath !== '' && $this->isIosQtRoot($qtPath)) {
+            return $this->resolveForTarget($qtPath, $modules, BuildTarget::IOS);
+        }
+
         return $this->resolveForTarget($qtPath, $modules);
     }
 

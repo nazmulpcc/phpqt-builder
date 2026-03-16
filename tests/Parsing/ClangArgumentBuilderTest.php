@@ -51,3 +51,23 @@ it('skips auto-discovered qt include roots when explicit qt includes are provide
         expect($argsWithExplicitQt)->not->toContain($autoQtInclude);
     }
 });
+
+it('uses iphoneos sdk args when include roots point at an ios qt kit on darwin', function (): void {
+    if (PHP_OS_FAMILY !== 'Darwin') {
+        test()->markTestSkipped('iOS clang argument selection is only relevant on Darwin hosts.');
+    }
+
+    $sdkPath = trim((string) shell_exec('xcrun --sdk iphoneos --show-sdk-path 2>/dev/null'));
+    if ($sdkPath === '') {
+        test()->markTestSkipped('iphoneos SDK is not available on this host.');
+    }
+
+    $builder = new ClangArgumentBuilder([
+        '/Users/example/Qt/6.8.3/ios/include',
+        '/Users/example/Qt/6.8.3/ios/lib/QtCore.framework/Headers',
+    ]);
+    $args = $builder->build();
+
+    expect($args)->toContain('-isysroot', $sdkPath);
+    expect($args)->toContain('-target', 'arm64-apple-ios15.0');
+});
