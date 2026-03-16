@@ -28,6 +28,7 @@
 typedef struct _qt_qmetaobjectconnection_handle {
     QMetaObject::Connection connection;
     QPropertyNotifier *property_notifier;
+    QObject *helper_object;
 } qt_qmetaobjectconnection_handle;
 
 typedef struct _qt_qmetaobjectconnection_object {
@@ -46,6 +47,7 @@ static inline qt_qmetaobjectconnection_object *qt_qmetaobjectconnection_from_obj
 #define Z_QMETAOBJECTCONNECTION_P(zv) qt_qmetaobjectconnection_from_obj(Z_OBJ_P(zv))
 
 PHP_QT_API void qt_qmetaobjectconnection_wrap(zval *return_value, const QMetaObject::Connection &connection);
+PHP_QT_API void qt_qmetaobjectconnection_wrap_with_helper(zval *return_value, const QMetaObject::Connection &connection, QObject *helper_object);
 PHP_QT_API void qt_qmetaobjectconnection_wrap_property_notifier(zval *return_value, QPropertyNotifier &&notifier);
 PHP_MINIT_FUNCTION(qt_qmetaobjectconnection);
 

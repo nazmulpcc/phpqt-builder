@@ -31,16 +31,19 @@
 @if($ctx->nativeCppType === 'QString')
 #include <Zend/zend_interfaces.h>
 @endif
+@if($ctx->hasQObjectPropertySupport() || $ctx->hasSignals())
+#include "qt_qmetaobjectconnection.h"
+@endif
 @if($ctx->hasQObjectPropertySupport())
 #include "qt_qvariant.h"
 #include <QMetaMethod>
 #include <QMetaProperty>
+#include <QSignalMapper>
 @endif
 @if($ctx->hasPreventDestroy || $ctx->hasSignals() || $ctx->hasPostCallOwnershipHandling())
 #include <QObject>
 @endif
 @if($ctx->hasSignals())
-#include "qt_qmetaobjectconnection.h"
 #include <QCoreApplication>
 #include <QMetaObject>
 #include <QPointer>
@@ -1795,8 +1798,37 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connectPropertyNotify)
         return;
     }
 
-    zend_throw_error(NULL, "QObject::connectPropertyNotify() requires a bindable Qt property on this Qt build.");
-    RETURN_THROWS();
+    auto *_qt_mapper = new QSignalMapper();
+    QObject::connect(_qt_mapper, &QSignalMapper::mappedObject, _qt_mapper, [_qt_callback](QObject *) mutable {
+        auto _qt_callback_copy = _qt_callback;
+        qt_signal_dispatch([_qt_callback_copy]() mutable {
+            qt_signal_callback_invoke(_qt_callback_copy, 0, nullptr);
+        });
+    });
+    _qt_mapper->setMapping(_qt_obj, _qt_obj);
+
+    const int _qt_map_index = _qt_mapper->metaObject()->indexOfSlot("map()");
+    if (_qt_map_index < 0) {
+        delete _qt_mapper;
+        zend_throw_error(NULL, "QObject::connectPropertyNotify() could not resolve the Qt signal-mapper slot.");
+        RETURN_THROWS();
+    }
+
+    auto _qt_map_method = _qt_mapper->metaObject()->method(_qt_map_index);
+    if (!_qt_map_method.isValid()) {
+        delete _qt_mapper;
+        zend_throw_error(NULL, "QObject::connectPropertyNotify() could not resolve the Qt signal-mapper method.");
+        RETURN_THROWS();
+    }
+
+    QMetaObject::Connection _qt_connection = QObject::connect(
+        _qt_obj,
+        _qt_notify,
+        _qt_mapper,
+        _qt_map_method
+    );
+    qt_qmetaobjectconnection_wrap_with_helper(return_value, _qt_connection, _qt_mapper);
+    return;
 
 }
 @endif
@@ -1859,6 +1891,11 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, disconnect)
         if (disconnected) {
             connection_intern->native_ptr->connection = QMetaObject::Connection();
         }
+    }
+
+    if (connection_intern->native_ptr->helper_object != NULL) {
+        delete connection_intern->native_ptr->helper_object;
+        connection_intern->native_ptr->helper_object = NULL;
     }
 
     RETURN_BOOL(disconnected);

@@ -286,7 +286,11 @@ it('adds qobject property apis and handlers', function (): void {
         Assert::assertStringContainsString('auto _qt_bindable = _qt_property.bindable(_qt_obj);', $cpp);
         Assert::assertStringContainsString('auto _qt_notifier = _qt_bindable.addNotifier([_qt_callback]() mutable {', $cpp);
         Assert::assertStringContainsString('qt_qmetaobjectconnection_wrap_property_notifier(return_value, std::move(_qt_notifier));', $cpp);
-        Assert::assertStringContainsString('QObject::connectPropertyNotify() requires a bindable Qt property on this Qt build.', $cpp);
+        Assert::assertStringContainsString('auto *_qt_mapper = new QSignalMapper();', $cpp);
+        Assert::assertStringContainsString('QObject::connect(_qt_mapper, &QSignalMapper::mappedObject, _qt_mapper, [_qt_callback](QObject *) mutable {', $cpp);
+        Assert::assertStringContainsString('const int _qt_map_index = _qt_mapper->metaObject()->indexOfSlot("map()");', $cpp);
+        Assert::assertStringContainsString('QMetaObject::Connection _qt_connection = QObject::connect(', $cpp);
+        Assert::assertStringContainsString('qt_qmetaobjectconnection_wrap_with_helper(return_value, _qt_connection, _qt_mapper);', $cpp);
 });
 
 it('adds qobject property handlers to derived classes', function (): void {
