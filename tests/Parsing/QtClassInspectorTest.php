@@ -196,3 +196,37 @@ it('prefers the namespaced class defined in the requested header over included c
         ->and(array_column($classData['methods'], 'name'))->toContain('setTranslation')
         ->and(array_column($classData['methods'], 'name'))->not->toContain('map');
 });
+
+it('filters Q_GADGET marker methods during inspection', function (): void {
+    $fixtureRoot = qt_fixture_path('policy-qt');
+    $includeRoot = $fixtureRoot . '/include';
+    $header = $includeRoot . '/QtCore/qgadgetmarkerthing.h';
+
+    $inspector = new QtClassInspector(new ClangArgumentBuilder([
+        $includeRoot,
+        $includeRoot . '/QtCore',
+    ]));
+
+    $classData = $inspector->inspect($header, 'QGadgetMarkerThing');
+    expect($classData)->not->toBeNull()
+        ->and(array_column($classData['methods'], 'name'))->toContain('value')
+        ->and(array_column($classData['methods'], 'name'))->not->toContain('qt_check_for_QGADGET_macro');
+});
+
+it('filters Q_OBJECT marker methods during inspection', function (): void {
+    $fixtureRoot = qt_fixture_path('policy-qt');
+    $includeRoot = $fixtureRoot . '/include';
+    $header = $includeRoot . '/QtCore/qobjectmarkerthing.h';
+
+    $inspector = new QtClassInspector(new ClangArgumentBuilder([
+        $includeRoot,
+        $includeRoot . '/QtCore',
+    ]));
+
+    $classData = $inspector->inspect($header, 'QObjectMarkerThing');
+    expect($classData)->not->toBeNull()
+        ->and(array_column($classData['methods'], 'name'))->toContain('ping')
+        ->and(array_column($classData['methods'], 'name'))->not->toContain('qt_static_metacall')
+        ->and(array_column($classData['methods'], 'name'))->not->toContain('qt_metacall')
+        ->and(array_column($classData['methods'], 'name'))->not->toContain('qt_metacast');
+});

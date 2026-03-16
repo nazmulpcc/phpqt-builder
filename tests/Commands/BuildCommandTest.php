@@ -247,6 +247,39 @@ it('generates abstract shells and concrete children', function (): void {
     expect($abstractStub)->toContain('abstract class QAbstractParentThing');
 });
 
+it('does not emit Qt meta-macro marker methods into generated wrappers', function (): void {
+    $fixtureRoot = qt_fixture_path('policy-qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-meta-markers-' . bin2hex(random_bytes(4));
+    $outputDir = $buildRoot . '/ext';
+    $bootstrapper = new FakeExtensionBootstrapper();
+
+    $result = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            'modules' => 'QtCore',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+        ],
+    );
+
+    expect($result)->toBeSuccessfulCommandResult();
+
+    $gadgetStub = (string) file_get_contents($outputDir . '/classes/qt_qgadgetmarkerthing.stub.php');
+    $gadgetSource = (string) file_get_contents($outputDir . '/classes/qt_qgadgetmarkerthing.cpp');
+    $objectStub = (string) file_get_contents($outputDir . '/classes/qt_qobjectmarkerthing.stub.php');
+    $objectSource = (string) file_get_contents($outputDir . '/classes/qt_qobjectmarkerthing.cpp');
+
+    expect($gadgetStub)->not->toContain('qt_check_for_QGADGET_macro')
+        ->and($gadgetSource)->not->toContain('qt_check_for_QGADGET_macro')
+        ->and($objectStub)->not->toContain('qt_static_metacall')
+        ->and($objectSource)->not->toContain('qt_static_metacall')
+        ->and($objectStub)->not->toContain('qt_metacall')
+        ->and($objectSource)->not->toContain('qt_metacall')
+        ->and($objectStub)->not->toContain('qt_metacast')
+        ->and($objectSource)->not->toContain('qt_metacast');
+});
+
 it('generates synthetic QList parents for supported list-derived classes', function (): void {
     $fixtureRoot = qt_fixture_path('list-parent-qt');
     $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-list-parent-' . bin2hex(random_bytes(4));

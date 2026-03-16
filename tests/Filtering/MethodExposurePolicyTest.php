@@ -36,6 +36,20 @@ it('filters macro-like and helper methods by name', function (): void {
                 'is_static' => true,
             ],
             [
+                'name' => 'qt_check_for_QGADGET_macro',
+                'return_type' => 'void',
+                'access' => 'public',
+                'parameters' => [],
+                'is_static' => false,
+            ],
+            [
+                'name' => 'qt_static_metacall',
+                'return_type' => 'void',
+                'access' => 'public',
+                'parameters' => [],
+                'is_static' => true,
+            ],
+            [
                 'name' => 'size',
                 'return_type' => 'int',
                 'access' => 'public',
@@ -55,6 +69,8 @@ it('filters macro-like and helper methods by name', function (): void {
     Assert::assertContains('QT_CORE_CONSTEXPR_INLINE_SINCE', $skippedNames);
     Assert::assertContains('Q_DECLARE_STRONGLY_ORDERED', $skippedNames);
     Assert::assertContains('compare_helper', $skippedNames);
+    Assert::assertContains('qt_check_for_QGADGET_macro', $skippedNames);
+    Assert::assertContains('qt_static_metacall', $skippedNames);
     Assert::assertContains('method_name_filtered', $skippedReasons);
 });
 

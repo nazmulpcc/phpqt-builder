@@ -11,6 +11,7 @@ use QtBuilder\Parsing\CppToPhpTypeMapper;
 use QtBuilder\Support\CppClassTypeResolver;
 use QtBuilder\Support\CppName;
 use QtBuilder\Support\OpenGLNumericPointerArrayRegistry;
+use QtBuilder\Support\QtMetaMethodArtifacts;
 use QtBuilder\Support\TypeResolutionContext;
 
 class MethodExposurePolicy
@@ -255,7 +256,7 @@ class MethodExposurePolicy
             return true;
         }
 
-        if (in_array($methodName, self::NAME_SKIP, true)) {
+        if (QtMetaMethodArtifacts::isMethodArtifact($methodName) || in_array($methodName, self::NAME_SKIP, true)) {
             return true;
         }
 

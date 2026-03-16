@@ -215,6 +215,38 @@ it('feeds discovery cache into the build command', function (): void {
     expect(substr_count($build['display'], 'Module acceptance:'))->toBe(1);
 });
 
+it('does not persist Qt meta-macro marker methods in class facts caches', function (): void {
+    $fixtureRoot = qt_fixture_path('policy-qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-discover-meta-markers-' . bin2hex(random_bytes(4));
+    $classCacheDir = $buildRoot . '/classes/desktop';
+
+    $result = qt_command_result(
+        new BuildDiscoverCommand(FakeSystemInformation::passing()),
+        [
+            '--qt-path' => $fixtureRoot,
+            'modules' => 'QtCore',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+        ],
+    );
+
+    expect($result)->toBeSuccessfulCommandResult();
+
+    $gadgetCache = glob($classCacheDir . '/*qgadgetmarkerthing*.json') ?: [];
+    $objectCache = glob($classCacheDir . '/*qobjectmarkerthing*.json') ?: [];
+
+    expect($gadgetCache)->not->toBe([])
+        ->and($objectCache)->not->toBe([]);
+
+    $gadgetPayload = qt_decode_json((string) file_get_contents($gadgetCache[0]));
+    $objectPayload = qt_decode_json((string) file_get_contents($objectCache[0]));
+
+    expect(array_column($gadgetPayload['methods'] ?? [], 'name'))->not->toContain('qt_check_for_QGADGET_macro')
+        ->and(array_column($objectPayload['methods'] ?? [], 'name'))->not->toContain('qt_static_metacall')
+        ->and(array_column($objectPayload['methods'] ?? [], 'name'))->not->toContain('qt_metacall')
+        ->and(array_column($objectPayload['methods'] ?? [], 'name'))->not->toContain('qt_metacast');
+});
+
 it('rejects an ext directory as the build root for discovery', function (): void {
     $fixtureRoot = qt_fixture_path('qt');
     $buildRoot = sys_get_temp_dir() . '/qtbuilder-discover-invalid-' . bin2hex(random_bytes(4));

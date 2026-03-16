@@ -15,6 +15,7 @@ use CParser\ParameterCursor;
 use CParser\TypeAliasCursor;
 use CParser\TranslationUnit;
 use CParser\TranslationUnitFlags;
+use QtBuilder\Support\QtMetaMethodArtifacts;
 
 /**
  * Parses a C++ header and extracts structured metadata for a given class.
@@ -321,6 +322,10 @@ class QtClassInspector
 
         foreach ($this->tu->cursors(CursorKind::CXXMethod) as $method) {
             if (!$method instanceof MethodCursor || !$this->belongsToClass($method, $classCursor)) {
+                continue;
+            }
+
+            if (QtMetaMethodArtifacts::isMethodArtifact($method->getSpelling())) {
                 continue;
             }
 
@@ -661,6 +666,10 @@ class QtClassInspector
         }
 
         foreach ($class->getMethods() as $method) {
+            if (QtMetaMethodArtifacts::isMethodArtifact($method->getSpelling())) {
+                continue;
+            }
+
             $methods[] = $this->extractMethod($method);
         }
 
