@@ -40,5 +40,5 @@ AS_VAR_IF([PHP_{!! strtoupper($ctx->extensionName) !!}], [no],, [
   PHP_NEW_EXTENSION([{!! $ctx->extensionName !!}],
     [{!! implode(' ', array_merge([$ctx->moduleSourceFilename()], $ctx->classSources())) !!}],
     [$ext_shared],,
-    [-std=c++17 -DZEND_ENABLE_STATIC_TSRMLS_CACHE=1])
+    [-std=c++17 -DZEND_ENABLE_STATIC_TSRMLS_CACHE=1 -DPHP_SKIP_COMPAT_LOOKUP_MACRO=1])
 ])
