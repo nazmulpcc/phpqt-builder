@@ -12,6 +12,14 @@
 #endif
 
 #include "php.h"
+#ifdef PHP_WIN32
+# ifdef mkdir
+#  undef mkdir
+# endif
+# ifdef rmdir
+#  undef rmdir
+# endif
+#endif
 #include <QObject>
 
 #ifndef PHP_QT_API

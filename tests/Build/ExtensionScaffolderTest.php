@@ -52,14 +52,51 @@ it('does not write core files before finalize', function (): void {
     $scaffolder->prepare($context);
 
     expect(is_file($outputDir . '/config.m4'))->toBeFalse()
+        ->and(is_file($outputDir . '/config.w32'))->toBeFalse()
         ->and(is_file($outputDir . '/php_qt.h'))->toBeFalse()
         ->and(is_file($outputDir . '/qt.cpp'))->toBeFalse();
 
     $scaffolder->finalize($context);
 
     expect(is_file($outputDir . '/config.m4'))->toBeTrue()
+        ->and(is_file($outputDir . '/config.w32'))->toBeTrue()
         ->and(is_file($outputDir . '/php_qt.h'))->toBeTrue()
         ->and(is_file($outputDir . '/qt.cpp'))->toBeTrue();
+});
+
+it('emits a clean windows config.w32 for static php-src builds', function (): void {
+    $outputDir = qt_temp_dir('qtbuilder-scaffolder-win32-') . '/ext';
+    $installation = new QtInstallation(
+        rootPath: 'Z:\\6.8.3\\msvc2022_64',
+        osFamily: 'Windows',
+        includeRoots: ['Z:\\6.8.3\\msvc2022_64\\include', 'Z:\\6.8.3\\msvc2022_64\\include\\QtCore'],
+        libraryRoots: ['Z:\\6.8.3\\msvc2022_64\\lib'],
+        moduleHeaderRoots: ['QtCore' => 'Z:\\6.8.3\\msvc2022_64\\include\\QtCore'],
+        tools: [],
+    );
+    $context = new ExtensionBuildContext('qt', '0.1.0', dirname($outputDir), $outputDir, $installation, ['QtCore'], ['QPoint']);
+
+    $scaffolder = new ExtensionScaffolder();
+    $scaffolder->prepare($context);
+    $scaffolder->finalize($context);
+
+    $config = (string) file_get_contents($outputDir . '/config.w32');
+
+    expect($config)->toContain(
+        'ARG_ENABLE("qt", "QT support", "no");',
+        'var qt_include_roots = ["Z:\\\\6.8.3\\\\msvc2022_64\\\\include","Z:\\\\6.8.3\\\\msvc2022_64\\\\include\\\\QtCore"];',
+        'var qt_library_root = "Z:\\\\6.8.3\\\\msvc2022_64\\\\lib";',
+        'var qt_libraries = ["Qt6Core.lib"];',
+        'var qt_sources = ["qt_qpoint.cpp"];',
+        'CHECK_LIB(qt_libraries[j], "qt", qt_library_root)',
+        'EXTENSION("qt", "qt.cpp", PHP_QT_SHARED);',
+        'ADD_SOURCES(configure_module_dirname + "\\\\classes", qt_sources[k], "qt");',
+        'AC_DEFINE("HAVE_QT", 1, "Define to 1 if the PHP extension \'qt\' is available.");',
+    )->not->toContain(
+        '#incl@php',
+        'EFILE_FRAGMENT();',
+        'CESS;',
+    );
 });
 
 it('links all requested darwin framework modules', function (): void {
@@ -659,7 +696,7 @@ it('skips unchanged core scaffold files on repeated finalize', function (): void
     $scaffolder->prepare($context);
     $scaffolder->finalize($context);
     $firstStats = $scaffolder->lastWriteStats()->toArray();
-    expect($firstStats['written'])->toBe(3);
+    expect($firstStats['written'])->toBe(4);
 
     $moduleSource = $outputDir . '/qt.cpp';
     touch($moduleSource, 1_000_000_000);
@@ -671,7 +708,7 @@ it('skips unchanged core scaffold files on repeated finalize', function (): void
     clearstatcache(true, $moduleSource);
     $after = filemtime($moduleSource);
 
-    expect($secondStats['unchanged'])->toBe(3)
+    expect($secondStats['unchanged'])->toBe(4)
         ->and($secondStats['written'])->toBe(0)
         ->and($after)->toBe($before);
 });

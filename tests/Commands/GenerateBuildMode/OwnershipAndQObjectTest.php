@@ -279,9 +279,10 @@ it('adds qobject property apis and handlers', function (): void {
         Assert::assertStringContainsString('ZEND_ACC_PUBLIC | ZEND_ACC_VIRTUAL', $cpp);
         Assert::assertStringContainsString('qt_qobject_handlers.read_property = qt_qobject_read_property;', $cpp);
         Assert::assertStringContainsString('qt_qobject_handlers.get_properties_for = qt_qobject_get_properties_for;', $cpp);
-        Assert::assertStringContainsString('object_init_ex(target, qt_ce_qvariant);', $cpp);
-        Assert::assertStringContainsString('value.metaType().flags().testFlag(QMetaType::IsEnumeration)', $cpp);
-        Assert::assertStringContainsString('ZVAL_LONG(target, (zend_long) value.toLongLong());', $cpp);
+        Assert::assertStringContainsString('qt_variant_to_zval(target, value);', $cpp);
+        Assert::assertStringContainsString('return qt_zval_to_variant(value, out);', $cpp);
+        Assert::assertStringNotContainsString('#include "qt_qvariant.h"', $cpp);
+        Assert::assertStringNotContainsString('object_init_ex(target, qt_ce_qvariant);', $cpp);
 });
 
 it('adds qobject property handlers to derived classes', function (): void {

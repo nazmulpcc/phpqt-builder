@@ -12,6 +12,14 @@ $buildInfoDependencies = $buildInfoModule !== null && $buildInfoModule->dependen
 
 #include "php.h"
 #include "ext/standard/info.h"
+#ifdef PHP_WIN32
+# ifdef mkdir
+#  undef mkdir
+# endif
+# ifdef rmdir
+#  undef rmdir
+# endif
+#endif
 #include <QtCore/QCoreApplication>
 #include <QtCore/QMetaObject>
 #include <QtCore/QObject>
@@ -403,7 +411,7 @@ PHP_RSHUTDOWN_FUNCTION({!! $ctx->extensionName !!})
     return SUCCESS;
 }
 
-zend_module_entry {!! $ctx->extensionName !!}_module_entry = {
+extern "C" zend_module_entry {!! $ctx->extensionName !!}_module_entry = {
     STANDARD_MODULE_HEADER,
     "{!! $ctx->extensionName !!}",
     NULL,

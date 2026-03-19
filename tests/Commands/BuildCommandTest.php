@@ -29,6 +29,7 @@ it('generates the extension tree from a fixture qt root', function (): void {
 
     expect($result)->toBeSuccessfulCommandResult();
     expect(is_file($outputDir . '/config.m4'))->toBeTrue()
+        ->and(is_file($outputDir . '/config.w32'))->toBeTrue()
         ->and(is_file($outputDir . '/php_qt.h'))->toBeTrue()
         ->and(is_file($outputDir . '/qt.cpp'))->toBeTrue()
         ->and(is_file($outputDir . '/classes/qt_buildinfo.cpp'))->toBeTrue()

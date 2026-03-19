@@ -28,6 +28,10 @@ class ClassExposurePolicy
         'QFutureInterface',
         'QFutureInterfaceBase',
         'QFutureWatcherBase',
+        'QAnyStringView',
+        'QStringTokenizer',
+        'QStringTokenizerBase',
+        'QStringTokenizerBaseBase',
     ];
 
     /** @var list<string> */

@@ -7,6 +7,14 @@
 #pragma once
 
 #include "php.h"
+#ifdef PHP_WIN32
+# ifdef mkdir
+#  undef mkdir
+# endif
+# ifdef rmdir
+#  undef rmdir
+# endif
+#endif
 #include "php_qt.h"
 
 extern zend_class_entry *{!! $ctx->ceVarName !!};

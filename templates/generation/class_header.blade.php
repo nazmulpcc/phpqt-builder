@@ -17,6 +17,14 @@
 
 #include "php.h"
 #include "zend_exceptions.h"
+#ifdef PHP_WIN32
+# ifdef mkdir
+#  undef mkdir
+# endif
+# ifdef rmdir
+#  undef rmdir
+# endif
+#endif
 @foreach($ctx->nativeIncludes as $include)
 #include {!! $include !!}
 @endforeach

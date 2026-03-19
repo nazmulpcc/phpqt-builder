@@ -90,6 +90,16 @@ readonly class ExtensionBuildContext
         return $this->buildRootDir . '/generated';
     }
 
+    public function windowsLibraryRoot(): ?string
+    {
+        $root = $this->installation->libraryRoots[0] ?? null;
+        if (!is_string($root) || $root === '') {
+            return null;
+        }
+
+        return $this->normalizeWindowsPath($root);
+    }
+
     /**
      * @return list<string>
      */
@@ -99,6 +109,20 @@ readonly class ExtensionBuildContext
             ...$this->installation->includeRoots,
             ...$this->importIncludeRoots,
         ]));
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function windowsCompileIncludeRoots(): array
+    {
+        return array_values(array_map(
+            fn(string $path): string => $this->normalizeWindowsPath($path),
+            array_values(array_filter(
+                $this->compileIncludeRoots(),
+                static fn(string $path): bool => $path !== '' && !str_starts_with($path, '-'),
+            )),
+        ));
     }
 
     /**
@@ -136,6 +160,17 @@ readonly class ExtensionBuildContext
                 static fn(EnumHolderDefinition $holder): string => 'classes/' . $holder->filePrefix() . '.cpp',
                 $this->enumHolders,
             ),
+        ));
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function classSourceBasenames(): array
+    {
+        return array_values(array_map(
+            static fn(string $path): string => basename($path),
+            $this->classSources(),
         ));
     }
 
@@ -292,6 +327,17 @@ readonly class ExtensionBuildContext
         return $module;
     }
 
+    /**
+     * @return list<string>
+     */
+    public function windowsModuleLibraryFiles(): array
+    {
+        return array_values(array_map(
+            static fn(string $library): string => $library . '.lib',
+            $this->moduleLibraryNames(),
+        ));
+    }
+
     public function requiresBuildInfoRegistration(): bool
     {
         return $this->buildMode === RuntimeManifest::MODE_MODULAR
@@ -306,5 +352,10 @@ readonly class ExtensionBuildContext
         }
 
         return $this->runtimeManifest->module($this->currentQtModule);
+    }
+
+    private function normalizeWindowsPath(string $path): string
+    {
+        return str_replace('/', '\\', $path);
     }
 }

@@ -163,8 +163,6 @@ class ClangArgumentBuilder
                 continue;
             }
 
-            // Filter to directories that look like version numbers (e.g. "21", "18.1.8")
-            // to avoid picking up non-resource dirs like "intercept-cc".
             $versionDirs = array_filter(
                 $matches,
                 static fn(string $path): bool => preg_match('/\/\d+(\.\d+)*$/', $path) === 1 && is_dir($path),
@@ -208,7 +206,6 @@ class ClangArgumentBuilder
             if (is_dir($path)) {
                 $args[] = '-I' . $path;
 
-                // Also add each direct subdirectory (QtCore, QtGui, etc.)
                 $subdirs = glob($path . '/*');
                 if ($subdirs !== false) {
                     foreach ($subdirs as $subdir) {
@@ -218,7 +215,7 @@ class ClangArgumentBuilder
                     }
                 }
 
-                break; // Use the first Qt root we find
+                break;
             }
         }
 
@@ -235,7 +232,7 @@ class ClangArgumentBuilder
     private function platformDefines(): array
     {
         return match (PHP_OS_FAMILY) {
-            'Windows' => ['-D', '_WIN32', '-D', '_WINDOWS'],
+            'Windows' => ['-D_WIN32', '-D_WINDOWS'],
             'Linux' => ['-D', '__linux__'],
             default => [],
         };

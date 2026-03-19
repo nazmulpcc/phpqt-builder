@@ -32,7 +32,6 @@
 #include <Zend/zend_interfaces.h>
 @endif
 @if($ctx->hasQObjectPropertySupport())
-#include "qt_qvariant.h"
 #include <QMetaMethod>
 #include <QMetaProperty>
 @endif
@@ -462,91 +461,11 @@ static zend_always_inline bool qt_qobject_has_dynamic_property(QObject *obj, zen
 
 static void qt_qobject_variant_to_property_zval(zval *target, const QVariant &value)
 {
-    if (!value.isValid() || value.isNull()) {
-        ZVAL_NULL(target);
-        return;
-    }
-
-    switch (value.metaType().id()) {
-        case QMetaType::Bool:
-            ZVAL_BOOL(target, value.toBool());
-            return;
-        case QMetaType::Char:
-        case QMetaType::SChar:
-        case QMetaType::UChar:
-        case QMetaType::Short:
-        case QMetaType::UShort:
-        case QMetaType::Int:
-        case QMetaType::UInt:
-        case QMetaType::LongLong:
-        case QMetaType::ULongLong:
-            ZVAL_LONG(target, (zend_long) value.toLongLong());
-            return;
-        case QMetaType::Float:
-        case QMetaType::Double:
-            ZVAL_DOUBLE(target, value.toDouble());
-            return;
-        case QMetaType::QString: {
-            QByteArray _qt_utf8 = value.toString().toUtf8();
-            ZVAL_STRINGL(target, _qt_utf8.constData(), _qt_utf8.size());
-            return;
-        }
-        case QMetaType::QByteArray: {
-            QByteArray _qt_bytes = value.toByteArray();
-            ZVAL_STRINGL(target, _qt_bytes.constData(), _qt_bytes.size());
-            return;
-        }
-        default:
-            break;
-    }
-
-    if (value.metaType().flags().testFlag(QMetaType::IsEnumeration)) {
-        ZVAL_LONG(target, (zend_long) value.toLongLong());
-        return;
-    }
-
-    if (value.canConvert<QVariantList>()) {
-        QVariantList _qt_list = value.toList();
-        array_init_size(target, (uint32_t) _qt_list.size());
-        for (const QVariant &_qt_item : _qt_list) {
-            zval _qt_value;
-            ZVAL_NULL(&_qt_value);
-            qt_qobject_variant_to_property_zval(&_qt_value, _qt_item);
-            add_next_index_zval(target, &_qt_value);
-        }
-        return;
-    }
-
-    if (value.canConvert<QVariantMap>()) {
-        QVariantMap _qt_map = value.toMap();
-        array_init_size(target, (uint32_t) _qt_map.size());
-        for (auto _qt_it = _qt_map.cbegin(); _qt_it != _qt_map.cend(); ++_qt_it) {
-            QByteArray _qt_key = _qt_it.key().toUtf8();
-            zval _qt_value;
-            ZVAL_NULL(&_qt_value);
-            qt_qobject_variant_to_property_zval(&_qt_value, _qt_it.value());
-            add_assoc_zval_ex(target, _qt_key.constData(), _qt_key.size(), &_qt_value);
-        }
-        return;
-    }
-
-    object_init_ex(target, {!! $ctx->ceVarNameForPhpType('QVariant') !!});
-    qt_qvariant_object *_qt_variant_intern = qt_qvariant_from_obj(Z_OBJ_P(target));
-    _qt_variant_intern->native_ptr = new QVariant(value);
+    qt_variant_to_zval(target, value);
 }
 
 static bool qt_qobject_zval_to_property_variant(zval *value, QVariant *out)
 {
-    if (Z_TYPE_P(value) == IS_OBJECT && {!! $ctx->ceVarNameForPhpType('QVariant') !!} != NULL && instanceof_function(Z_OBJCE_P(value), {!! $ctx->ceVarNameForPhpType('QVariant') !!})) {
-        qt_qvariant_object *_qt_variant_intern = qt_qvariant_from_obj(Z_OBJ_P(value));
-        if (_qt_variant_intern->native_ptr == NULL) {
-            *out = QVariant();
-        } else {
-            *out = *_qt_variant_intern->native_ptr;
-        }
-        return true;
-    }
-
     return qt_zval_to_variant(value, out);
 }
 

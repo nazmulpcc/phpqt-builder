@@ -1625,6 +1625,7 @@ class BuildPipeline
             ];
         }
         $this->removeStaleEnumHolderFiles($outputDir, $context->enumHolders);
+        $this->removeStaleGeneratedClassFiles($context, $outputDir);
 
         if ($generatedClasses !== []) {
             $output->writeln(sprintf('<info>Emitting %d generated class wrapper(s)...</info>', count($generatedClasses)));
@@ -1752,6 +1753,71 @@ class BuildPipeline
 
                 if (!@unlink($path) && file_exists($path)) {
                     throw new \RuntimeException(sprintf('Could not remove stale enum holder object file: %s', $path));
+                }
+
+                $removedAny = true;
+            }
+        }
+
+        if ($removedAny) {
+            $qtDepPath = dirname($outputDir) . '/qt.dep';
+            if (is_file($qtDepPath) && !@unlink($qtDepPath) && file_exists($qtDepPath)) {
+                throw new \RuntimeException(sprintf('Could not remove stale extension dependency file: %s', $qtDepPath));
+            }
+        }
+    }
+
+    private function removeStaleGeneratedClassFiles(ExtensionBuildContext $context, string $outputDir): void
+    {
+        if (!is_dir($outputDir)) {
+            return;
+        }
+
+        $activePrefixes = [];
+        foreach ($context->classMinits() as $minitName) {
+            if ($minitName !== '') {
+                $activePrefixes[$minitName] = true;
+            }
+        }
+
+        $removedAny = false;
+
+        foreach (glob($outputDir . '/qt_*') ?: [] as $path) {
+            $basename = basename($path);
+            $prefix = null;
+
+            if (preg_match('/^(qt_[^.]+)\.(?:h|cpp|stub\.php|dep|lo)$/', $basename, $matches) === 1) {
+                $prefix = $matches[1];
+            } elseif (preg_match('/^(qt_[^_]+(?:_[^_]+)*)_arginfo\.h$/', $basename, $matches) === 1) {
+                $prefix = $matches[1];
+            }
+
+            if ($prefix === null || str_starts_with($prefix, 'qt_enum_') || isset($activePrefixes[$prefix])) {
+                continue;
+            }
+
+            if (!@unlink($path) && file_exists($path)) {
+                throw new \RuntimeException(sprintf('Could not remove stale generated class file: %s', $path));
+            }
+
+            $removedAny = true;
+        }
+
+        $libsDir = $outputDir . '/.libs';
+        if (is_dir($libsDir)) {
+            foreach (glob($libsDir . '/qt_*') ?: [] as $path) {
+                $basename = basename($path);
+                if (preg_match('/^(qt_[^.]+)\.(?:o|obj)$/', $basename, $matches) !== 1) {
+                    continue;
+                }
+
+                $prefix = $matches[1];
+                if (str_starts_with($prefix, 'qt_enum_') || isset($activePrefixes[$prefix])) {
+                    continue;
+                }
+
+                if (!@unlink($path) && file_exists($path)) {
+                    throw new \RuntimeException(sprintf('Could not remove stale generated class object file: %s', $path));
                 }
 
                 $removedAny = true;

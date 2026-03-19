@@ -6,7 +6,13 @@
 #ifndef PHP_{!! strtoupper($ctx->extensionName) !!}_H
 # define PHP_{!! strtoupper($ctx->extensionName) !!}_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 extern zend_module_entry {!! $ctx->extensionName !!}_module_entry;
+#ifdef __cplusplus
+}
+#endif
 # define phpext_{!! $ctx->extensionName !!}_ptr &{!! $ctx->extensionName !!}_module_entry
 
 # define PHP_{!! strtoupper($ctx->extensionName) !!}_VERSION "{!! $ctx->extensionVersion !!}"
