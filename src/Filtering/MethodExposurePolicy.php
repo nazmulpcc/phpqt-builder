@@ -22,6 +22,7 @@ class MethodExposurePolicy
         'metaObject',
         'qt_metacall',
         'qt_metacast',
+        'qt_check_for_QGADGET_macro',
         'tr',
         'trUtf8',
         'fromRawData',

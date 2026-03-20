@@ -504,6 +504,9 @@ class BuildPipeline
             $analysis->generatedClassHeaders,
             $output,
         );
+        if ($context->installation->osFamily === 'Windows') {
+            $this->relocateWindowsSourceBuckets($context);
+        }
         $timings['emission'] = microtime(true) - $emissionStartedAt;
         $this->renderPhaseTiming($output, 'Emission', $timings['emission']);
         $scaffoldFiles = $scaffolder->finalize($context);
@@ -1829,6 +1832,66 @@ class BuildPipeline
             if (is_file($qtDepPath) && !@unlink($qtDepPath) && file_exists($qtDepPath)) {
                 throw new \RuntimeException(sprintf('Could not remove stale extension dependency file: %s', $qtDepPath));
             }
+        }
+    }
+
+    private function relocateWindowsSourceBuckets(ExtensionBuildContext $context): void
+    {
+        $classesDir = $context->outputDir . '/classes';
+        if (!is_dir($classesDir)) {
+            return;
+        }
+
+        foreach (glob($context->outputDir . '/src_*', GLOB_ONLYDIR) ?: [] as $bucketDir) {
+            $this->removeDirectory($bucketDir);
+        }
+
+        foreach ($context->windowsSourceBuckets() as $bucketDir => $files) {
+            $targetDir = $context->outputDir . '/' . $bucketDir;
+            $this->ensureDirectory($targetDir);
+
+            foreach ($files as $filename) {
+                $sourcePath = $classesDir . '/' . $filename;
+                if (!is_file($sourcePath)) {
+                    throw new \RuntimeException(sprintf('Expected generated source file not found for Windows bucketing: %s', $sourcePath));
+                }
+
+                $targetPath = $targetDir . '/' . $filename;
+                if (is_file($targetPath) && !@unlink($targetPath) && file_exists($targetPath)) {
+                    throw new \RuntimeException(sprintf('Could not replace Windows bucketed source file: %s', $targetPath));
+                }
+
+                if (!@rename($sourcePath, $targetPath)) {
+                    throw new \RuntimeException(sprintf('Could not move generated source file into Windows bucket: %s -> %s', $sourcePath, $targetPath));
+                }
+            }
+        }
+    }
+
+    private function removeDirectory(string $directory): void
+    {
+        if (!is_dir($directory)) {
+            return;
+        }
+
+        foreach (scandir($directory) ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+
+            $path = $directory . '/' . $entry;
+            if (is_dir($path)) {
+                $this->removeDirectory($path);
+                continue;
+            }
+
+            if (!@unlink($path) && file_exists($path)) {
+                throw new \RuntimeException(sprintf('Could not remove file: %s', $path));
+            }
+        }
+
+        if (!@rmdir($directory) && is_dir($directory)) {
+            throw new \RuntimeException(sprintf('Could not remove directory: %s', $directory));
         }
     }
 

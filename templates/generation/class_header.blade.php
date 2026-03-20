@@ -15,14 +15,23 @@
 #include "config.h"
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include "php.h"
 #include "zend_exceptions.h"
+#ifdef __cplusplus
+}
+#endif
 #ifdef PHP_WIN32
 # ifdef mkdir
 #  undef mkdir
 # endif
 # ifdef rmdir
 #  undef rmdir
+# endif
+# ifdef asprintf
+#  undef asprintf
 # endif
 #endif
 @foreach($ctx->nativeIncludes as $include)

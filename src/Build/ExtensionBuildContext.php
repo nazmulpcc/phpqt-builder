@@ -9,6 +9,8 @@ use QtBuilder\Qt\QtInstallation;
 
 readonly class ExtensionBuildContext
 {
+    private const WINDOWS_SOURCE_BUCKET_SIZE = 64;
+
     /**
      * @param list<string> $modules
      * @param list<string> $linkModules
@@ -172,6 +174,26 @@ readonly class ExtensionBuildContext
             static fn(string $path): string => basename($path),
             $this->classSources(),
         ));
+    }
+
+    /**
+     * @return array<string, list<string>>
+     */
+    public function windowsSourceBuckets(): array
+    {
+        $sources = $this->classSourceBasenames();
+        if ($sources === []) {
+            return [];
+        }
+
+        $chunks = array_chunk($sources, self::WINDOWS_SOURCE_BUCKET_SIZE);
+        $buckets = [];
+
+        foreach ($chunks as $index => $chunk) {
+            $buckets[sprintf('src_%02d', $index)] = array_values($chunk);
+        }
+
+        return $buckets;
     }
 
     /**

@@ -87,10 +87,10 @@ it('emits a clean windows config.w32 for static php-src builds', function (): vo
         'var qt_include_roots = ["Z:\\\\6.8.3\\\\msvc2022_64\\\\include","Z:\\\\6.8.3\\\\msvc2022_64\\\\include\\\\QtCore"];',
         'var qt_library_root = "Z:\\\\6.8.3\\\\msvc2022_64\\\\lib";',
         'var qt_libraries = ["Qt6Core.lib"];',
-        'var qt_sources = ["qt_qpoint.cpp"];',
+        'var qt_source_buckets = {"src_00":["qt_qpoint.cpp"]};',
         'CHECK_LIB(qt_libraries[j], "qt", qt_library_root)',
         'EXTENSION("qt", "qt.cpp", PHP_QT_SHARED);',
-        'ADD_SOURCES(configure_module_dirname + "\\\\classes", qt_sources[k], "qt");',
+        'ADD_SOURCES(configure_module_dirname + "\\\\" + bucket_dir, bucket_sources.join(" "), "qt");',
         'AC_DEFINE("HAVE_QT", 1, "Define to 1 if the PHP extension \'qt\' is available.");',
     )->not->toContain(
         '#incl@php',

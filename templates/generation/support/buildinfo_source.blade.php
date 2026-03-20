@@ -263,28 +263,28 @@ PHP_QT_API zend_result qt_buildinfo_register_module(
     return SUCCESS;
 }
 
-PHP_METHOD(BuildInfo, buildMode)
+PHP_METHOD(Qt_BuildInfo, buildMode)
 {
     ZEND_PARSE_PARAMETERS_NONE();
 
     RETURN_STRING("{{ $manifest->buildMode }}");
 }
 
-PHP_METHOD(BuildInfo, qtVersion)
+PHP_METHOD(Qt_BuildInfo, qtVersion)
 {
     ZEND_PARSE_PARAMETERS_NONE();
 
     RETURN_STRING("{{ $manifest->qtVersion }}");
 }
 
-PHP_METHOD(BuildInfo, extensionVersion)
+PHP_METHOD(Qt_BuildInfo, extensionVersion)
 {
     ZEND_PARSE_PARAMETERS_NONE();
 
     RETURN_STRING("{{ $manifest->extensionVersion }}");
 }
 
-PHP_METHOD(BuildInfo, builtModules)
+PHP_METHOD(Qt_BuildInfo, builtModules)
 {
     ZEND_PARSE_PARAMETERS_NONE();
 
@@ -295,14 +295,14 @@ PHP_METHOD(BuildInfo, builtModules)
     );
 }
 
-PHP_METHOD(BuildInfo, loadedModules)
+PHP_METHOD(Qt_BuildInfo, loadedModules)
 {
     ZEND_PARSE_PARAMETERS_NONE();
 
     qt_buildinfo_add_loaded_modules(return_value);
 }
 
-PHP_METHOD(BuildInfo, hasModule)
+PHP_METHOD(Qt_BuildInfo, hasModule)
 {
     char *module_name = NULL;
     size_t module_name_len = 0;
@@ -314,7 +314,7 @@ PHP_METHOD(BuildInfo, hasModule)
     RETURN_BOOL(qt_buildinfo_find_module(module_name, module_name_len) != NULL);
 }
 
-PHP_METHOD(BuildInfo, isLoaded)
+PHP_METHOD(Qt_BuildInfo, isLoaded)
 {
     char *module_name = NULL;
     size_t module_name_len = 0;
@@ -327,7 +327,7 @@ PHP_METHOD(BuildInfo, isLoaded)
     RETURN_BOOL(entry != NULL && entry->loaded);
 }
 
-PHP_METHOD(BuildInfo, moduleInfo)
+PHP_METHOD(Qt_BuildInfo, moduleInfo)
 {
     char *module_name = NULL;
     size_t module_name_len = 0;
@@ -344,7 +344,7 @@ PHP_METHOD(BuildInfo, moduleInfo)
     qt_buildinfo_add_module_info(return_value, entry);
 }
 
-PHP_METHOD(BuildInfo, manifest)
+PHP_METHOD(Qt_BuildInfo, manifest)
 {
     zval requested_modules;
     zval expanded_modules;
@@ -407,15 +407,15 @@ PHP_METHOD(BuildInfo, manifest)
 }
 
 static const zend_function_entry qt_buildinfo_methods[] = {
-    ZEND_ME(BuildInfo, buildMode, arginfo_class_Qt_BuildInfo_buildMode, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
-    ZEND_ME(BuildInfo, qtVersion, arginfo_class_Qt_BuildInfo_qtVersion, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
-    ZEND_ME(BuildInfo, extensionVersion, arginfo_class_Qt_BuildInfo_extensionVersion, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
-    ZEND_ME(BuildInfo, builtModules, arginfo_class_Qt_BuildInfo_builtModules, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
-    ZEND_ME(BuildInfo, loadedModules, arginfo_class_Qt_BuildInfo_loadedModules, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
-    ZEND_ME(BuildInfo, hasModule, arginfo_class_Qt_BuildInfo_hasModule, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
-    ZEND_ME(BuildInfo, isLoaded, arginfo_class_Qt_BuildInfo_isLoaded, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
-    ZEND_ME(BuildInfo, moduleInfo, arginfo_class_Qt_BuildInfo_moduleInfo, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
-    ZEND_ME(BuildInfo, manifest, arginfo_class_Qt_BuildInfo_manifest, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    ZEND_ME(Qt_BuildInfo, buildMode, arginfo_class_Qt_BuildInfo_buildMode, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    ZEND_ME(Qt_BuildInfo, qtVersion, arginfo_class_Qt_BuildInfo_qtVersion, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    ZEND_ME(Qt_BuildInfo, extensionVersion, arginfo_class_Qt_BuildInfo_extensionVersion, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    ZEND_ME(Qt_BuildInfo, builtModules, arginfo_class_Qt_BuildInfo_builtModules, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    ZEND_ME(Qt_BuildInfo, loadedModules, arginfo_class_Qt_BuildInfo_loadedModules, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    ZEND_ME(Qt_BuildInfo, hasModule, arginfo_class_Qt_BuildInfo_hasModule, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    ZEND_ME(Qt_BuildInfo, isLoaded, arginfo_class_Qt_BuildInfo_isLoaded, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    ZEND_ME(Qt_BuildInfo, moduleInfo, arginfo_class_Qt_BuildInfo_moduleInfo, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    ZEND_ME(Qt_BuildInfo, manifest, arginfo_class_Qt_BuildInfo_manifest, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
     ZEND_FE_END
 };
 

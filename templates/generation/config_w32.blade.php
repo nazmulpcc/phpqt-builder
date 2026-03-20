@@ -4,7 +4,7 @@
 $includeRoots = $ctx->windowsCompileIncludeRoots();
 $libraryRoot = $ctx->windowsLibraryRoot();
 $libraries = $ctx->windowsModuleLibraryFiles();
-$classSourceBasenames = $ctx->classSourceBasenames();
+$sourceBuckets = $ctx->windowsSourceBuckets();
 @endphp
 
 ARG_ENABLE("{!! $ctx->extensionName !!}", "{!! strtoupper($ctx->extensionName) !!} support", "no");
@@ -13,7 +13,7 @@ if (PHP_{!! strtoupper($ctx->extensionName) !!} != "no") {
 	var qt_include_roots = {!! json_encode($includeRoots, JSON_UNESCAPED_SLASHES) !!};
 	var qt_library_root = {!! json_encode($libraryRoot, JSON_UNESCAPED_SLASHES) !!};
 	var qt_libraries = {!! json_encode($libraries, JSON_UNESCAPED_SLASHES) !!};
-	var qt_sources = {!! json_encode($classSourceBasenames, JSON_UNESCAPED_SLASHES) !!};
+	var qt_source_buckets = {!! json_encode($sourceBuckets, JSON_UNESCAPED_SLASHES) !!};
 	var qt_enabled = qt_library_root !== null;
 
 	ADD_FLAG("CFLAGS_{!! strtoupper($ctx->extensionName) !!}", "/std:c++17 /permissive- /EHsc /DZEND_ENABLE_STATIC_TSRMLS_CACHE=1");
@@ -32,9 +32,14 @@ if (PHP_{!! strtoupper($ctx->extensionName) !!} != "no") {
 
 	if (qt_enabled) {
 		EXTENSION("{!! $ctx->extensionName !!}", "{!! $ctx->moduleSourceFilename() !!}", PHP_{!! strtoupper($ctx->extensionName) !!}_SHARED);
-		for (var k = 0; k < qt_sources.length; k++) {
-			if (qt_sources[k].length > 0) {
-				ADD_SOURCES(configure_module_dirname + "\\classes", qt_sources[k], "{!! $ctx->extensionName !!}");
+		for (var bucket_dir in qt_source_buckets) {
+			if (!qt_source_buckets.hasOwnProperty(bucket_dir)) {
+				continue;
+			}
+
+			var bucket_sources = qt_source_buckets[bucket_dir];
+			if (bucket_sources.length > 0) {
+				ADD_SOURCES(configure_module_dirname + "\\" + bucket_dir, bucket_sources.join(" "), "{!! $ctx->extensionName !!}");
 			}
 		}
 		AC_DEFINE("HAVE_{!! strtoupper($ctx->extensionName) !!}", 1, "Define to 1 if the PHP extension '{!! $ctx->extensionName !!}' is available.");

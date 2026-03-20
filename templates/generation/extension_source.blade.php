@@ -10,14 +10,23 @@ $buildInfoDependencies = $buildInfoModule !== null && $buildInfoModule->dependen
 # include <config.h>
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include "php.h"
 #include "ext/standard/info.h"
+#ifdef __cplusplus
+}
+#endif
 #ifdef PHP_WIN32
 # ifdef mkdir
 #  undef mkdir
 # endif
 # ifdef rmdir
 #  undef rmdir
+# endif
+# ifdef asprintf
+#  undef asprintf
 # endif
 #endif
 #include <QtCore/QCoreApplication>
