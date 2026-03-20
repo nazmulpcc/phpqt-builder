@@ -10,6 +10,70 @@ use Symfony\Component\Process\Process;
 final class QtRuntimeProcessRunner
 {
     private const RESULT_PREFIX = 'PHPQT_RESULT=';
+    /** @var array<string, bool> */
+    private static array $loadedExtensionCache = [];
+
+    private static function phpBinary(): string
+    {
+        $configured = getenv('PHPQT_PHP_BIN');
+        if (is_string($configured) && $configured !== '' && is_file($configured)) {
+            return $configured;
+        }
+
+        return PHP_BINARY;
+    }
+
+    private static function qtBinPath(): ?string
+    {
+        $configured = getenv('PHPQT_QT_BIN');
+        if (!is_string($configured) || $configured === '') {
+            return null;
+        }
+
+        return is_dir($configured) ? $configured : null;
+    }
+
+    private static function isExtensionAlreadyLoaded(string $extensionName, array $env = []): bool
+    {
+        $phpBinary = self::phpBinary();
+        $cacheKey = $phpBinary . '|' . strtolower($extensionName);
+        if (array_key_exists($cacheKey, self::$loadedExtensionCache)) {
+            return self::$loadedExtensionCache[$cacheKey];
+        }
+
+        $runtimeEnv = self::buildRuntimeEnv($env, null);
+        $process = new Process(
+            [$phpBinary, '-n', '-r', sprintf('exit(extension_loaded(%s) ? 0 : 1);', var_export($extensionName, true))],
+            dirname(__DIR__, 3),
+            $runtimeEnv,
+            null,
+            10
+        );
+        $process->run();
+
+        return self::$loadedExtensionCache[$cacheKey] = ($process->getExitCode() === 0);
+    }
+
+    /**
+     * @param list<string>|null $extensionPaths
+     * @return array<string, string>
+     */
+    private static function buildRuntimeEnv(array $env, ?array $extensionPaths): array
+    {
+        $runtimeEnv = array_merge($_ENV, [
+            'PHPQT_EXTENSION' => $extensionPaths[0] ?? '',
+            'PHPQT_TEST_MODE' => '1',
+            'QT_QPA_PLATFORM' => $env['QT_QPA_PLATFORM'] ?? 'offscreen',
+        ], $env);
+
+        $qtBin = self::qtBinPath();
+        if ($qtBin !== null) {
+            $existingPath = (string) ($runtimeEnv['PATH'] ?? getenv('PATH') ?: '');
+            $runtimeEnv['PATH'] = $qtBin . PATH_SEPARATOR . $existingPath;
+        }
+
+        return $runtimeEnv;
+    }
 
     public static function extensionPath(): ?string
     {
@@ -72,13 +136,13 @@ final class QtRuntimeProcessRunner
     public static function runPhpInfo(string $extensionName, array $env = [], int $timeout = 5): QtRuntimeProcessResult
     {
         $extensionPath = self::extensionPath();
-        if ($extensionPath === null) {
+        if ($extensionPath === null && !self::isExtensionAlreadyLoaded($extensionName, $env)) {
             return new QtRuntimeProcessResult(77, '', '', [
                 'reason' => 'Built qt extension not found. Run `php qtb build` first or set PHPQT_EXTENSION.',
             ]);
         }
 
-        return self::runPhpCommand([$extensionPath], ['--ri', $extensionName], $env, $timeout);
+        return self::runPhpCommand($extensionPath !== null ? [$extensionPath] : [], ['--ri', $extensionName], $env, $timeout);
     }
 
     /**
@@ -228,19 +292,15 @@ final class QtRuntimeProcessRunner
             }
         }
 
-        if ($extensionPaths === []) {
+        if ($extensionPaths === [] && !self::isExtensionAlreadyLoaded('qt', $env)) {
             return new QtRuntimeProcessResult(77, '', '', [
                 'reason' => 'Built qt extension not found. Run `php qtb build` first or set PHPQT_EXTENSION.',
             ]);
         }
 
-        $runtimeEnv = array_merge($_ENV, [
-            'PHPQT_EXTENSION' => $extensionPaths[0],
-            'PHPQT_TEST_MODE' => '1',
-            'QT_QPA_PLATFORM' => $env['QT_QPA_PLATFORM'] ?? 'offscreen',
-        ], $env);
+        $runtimeEnv = self::buildRuntimeEnv($env, $extensionPaths);
 
-        $command = [PHP_BINARY];
+        $command = [self::phpBinary()];
         foreach ($extensionPaths as $extensionPath) {
             $command[] = '-dextension=' . $extensionPath;
         }
@@ -267,13 +327,9 @@ final class QtRuntimeProcessRunner
      */
     private static function runPhpCommand(array $extensionPaths, array $args, array $env, int $timeout): QtRuntimeProcessResult
     {
-        $runtimeEnv = array_merge($_ENV, [
-            'PHPQT_EXTENSION' => $extensionPaths[0] ?? '',
-            'PHPQT_TEST_MODE' => '1',
-            'QT_QPA_PLATFORM' => $env['QT_QPA_PLATFORM'] ?? 'offscreen',
-        ], $env);
+        $runtimeEnv = self::buildRuntimeEnv($env, $extensionPaths);
 
-        $command = [PHP_BINARY];
+        $command = [self::phpBinary()];
         foreach ($extensionPaths as $extensionPath) {
             $command[] = '-dextension=' . $extensionPath;
         }
