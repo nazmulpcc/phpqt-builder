@@ -51,6 +51,8 @@ it('runs requested example directly', function (): void {
             $captured = $argv;
             return 0;
         },
+        null,
+        static fn (string $extension): bool => false,
     );
 
     $tester = new CommandTester($command);
@@ -65,6 +67,36 @@ it('runs requested example directly', function (): void {
         ->and($captured)->toBe([
             '/usr/bin/php',
             '-dextension=' . $projectRoot . '/qt.so',
+            $projectRoot . '/examples/login-form/run.php',
+        ]);
+});
+
+it('skips manual extension loading when qt is already loaded', function (): void {
+    $projectRoot = example_test_dir('qtbuilder-example-command-');
+    mkdir($projectRoot . '/examples/login-form', 0777, true);
+    file_put_contents($projectRoot . '/examples/login-form/run.php', "<?php\n");
+
+    $captured = [];
+    $command = new ExampleCommand(
+        $projectRoot,
+        static function (array $argv, OutputInterface $output) use (&$captured): int {
+            $captured = $argv;
+            return 0;
+        },
+        null,
+        static fn (string $extension): bool => $extension === 'qt',
+    );
+
+    $tester = new CommandTester($command);
+    $exitCode = $tester->execute([
+        'name' => 'login-form',
+        '--examples-dir' => $projectRoot . '/examples',
+        '--php' => '/usr/bin/php',
+    ]);
+
+    expect($exitCode)->toBe(Command::SUCCESS)
+        ->and($captured)->toBe([
+            '/usr/bin/php',
             $projectRoot . '/examples/login-form/run.php',
         ]);
 });
