@@ -197,6 +197,21 @@ readonly class ExtensionBuildContext
     }
 
     /**
+     * @return array<string, string>
+     */
+    public function windowsUnitySourceFiles(): array
+    {
+        $unitySources = [];
+
+        foreach (array_keys($this->windowsSourceBuckets()) as $bucketDir) {
+            $suffix = substr($bucketDir, 4);
+            $unitySources[$bucketDir] = sprintf('qt_bucket_%s.cpp', $suffix !== false ? $suffix : '00');
+        }
+
+        return $unitySources;
+    }
+
+    /**
      * @return list<string>
      */
     public function classMinits(): array

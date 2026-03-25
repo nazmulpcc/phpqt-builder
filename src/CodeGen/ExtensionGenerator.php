@@ -80,6 +80,8 @@ class ExtensionGenerator
             throw new \RuntimeException(sprintf('Could not create output directory: %s', $outputDir));
         }
 
+        $files = [...$files, ...$this->writeSharedHelperSupport($outputDir)];
+
         // Render each template
         $headerContent = $this->render('generation.class_header', $ctx);
         $sourceContent = $this->render('generation.class_source', $ctx);
@@ -203,7 +205,7 @@ class ExtensionGenerator
      */
     private function writeSignalConnectionSupport(string $outputDir): array
     {
-        $files = [];
+        $files = $this->writePhpCompatHeader($outputDir);
 
         $headerFile = $outputDir . '/qt_qmetaobjectconnection.h';
         $sourceFile = $outputDir . '/qt_qmetaobjectconnection.cpp';
@@ -238,7 +240,7 @@ class ExtensionGenerator
      */
     private function writeBuildInfoSupport(string $outputDir, ExtensionBuildContext $context): array
     {
-        $files = [];
+        $files = $this->writePhpCompatHeader($outputDir);
 
         $headerFile = $outputDir . '/qt_buildinfo.h';
         $sourceFile = $outputDir . '/qt_buildinfo.cpp';
@@ -273,7 +275,7 @@ class ExtensionGenerator
      */
     private function writeEnumHolderSupport(string $outputDir, EnumHolderDefinition $definition): array
     {
-        $files = [];
+        $files = $this->writePhpCompatHeader($outputDir);
         $ctx = EnumHolderContext::fromDefinition($definition);
 
         $headerFile = $outputDir . '/' . $ctx->filePrefix . '.h';
@@ -309,7 +311,7 @@ class ExtensionGenerator
      */
     private function writeThreadRuntimeSupport(string $outputDir): array
     {
-        $files = [];
+        $files = $this->writePhpCompatHeader($outputDir);
 
         $supportFiles = [
             ['qt_qthreadruntime.h', 'generation.support.qthreadruntime_header'],
@@ -321,6 +323,47 @@ class ExtensionGenerator
             ['qt_qpromise.h', 'generation.support.qpromise_header'],
             ['qt_qpromise.cpp', 'generation.support.qpromise_source'],
             ['qt_qpromise.stub.php', 'generation.support.qpromise_stub'],
+        ];
+
+        foreach ($supportFiles as [$filename, $view]) {
+            $path = $outputDir . '/' . $filename;
+            $result = $this->fileWriter->write(
+                $path,
+                $this->cleanOutput($this->blade->run($view, [])),
+            );
+            $this->lastWriteStats->record($result);
+            $files[] = $path;
+        }
+
+        return $files;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function writePhpCompatHeader(string $outputDir): array
+    {
+        $path = $outputDir . '/qt_php_compat.h';
+        $result = $this->fileWriter->write(
+            $path,
+            $this->cleanOutput($this->blade->run('generation.php_compat_header', [])),
+        );
+        $this->lastWriteStats->record($result);
+
+        return [$path];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function writeSharedHelperSupport(string $outputDir): array
+    {
+        $files = $this->writePhpCompatHeader($outputDir);
+        $supportFiles = [
+            ['qt_class_helpers.h', 'generation.support.class_helpers_header'],
+            ['qt_qobject_helpers.h', 'generation.support.qobject_helpers_header'],
+            ['qt_signal_helpers.h', 'generation.support.signal_helpers_header'],
+            ['qt_ownership_helpers.h', 'generation.support.ownership_helpers_header'],
         ];
 
         foreach ($supportFiles as [$filename, $view]) {

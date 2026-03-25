@@ -87,10 +87,11 @@ it('emits a clean windows config.w32 for static php-src builds', function (): vo
         'var qt_include_roots = ["Z:\\\\6.8.3\\\\msvc2022_64\\\\include","Z:\\\\6.8.3\\\\msvc2022_64\\\\include\\\\QtCore"];',
         'var qt_library_root = "Z:\\\\6.8.3\\\\msvc2022_64\\\\lib";',
         'var qt_libraries = ["Qt6Core.lib"];',
-        'var qt_source_buckets = {"src_00":["qt_qpoint.cpp"]};',
+        'var qt_unity_sources = {"src_00":"qt_bucket_00.cpp"};',
+        'ADD_FLAG("CFLAGS_QT", "/std:c++17 /permissive- /EHsc /bigobj /DZEND_ENABLE_STATIC_TSRMLS_CACHE=1");',
         'CHECK_LIB(qt_libraries[j], "qt", qt_library_root)',
         'EXTENSION("qt", "qt.cpp", PHP_QT_SHARED);',
-        'ADD_SOURCES(configure_module_dirname + "\\\\" + bucket_dir, bucket_sources.join(" "), "qt");',
+        'ADD_SOURCES(configure_module_dirname + "\\\\" + bucket_dir, unity_source, "qt");',
         'AC_DEFINE("HAVE_QT", 1, "Define to 1 if the PHP extension \'qt\' is available.");',
     )->not->toContain(
         '#incl@php',
@@ -328,6 +329,34 @@ it('uses a generated header guard that does not collide with qt', function (): v
 
     expect($header)->toContain('#ifndef QT_QABSTRACTANIMATION_H')
         ->not->toContain('#ifndef QABSTRACTANIMATION_H');
+});
+
+it('emits a php compat header with known php macro undefs', function (): void {
+    $outputDir = qt_temp_dir('qtbuilder-generator-');
+    $generator = new ExtensionGenerator();
+    $phpClass = new PhpClass(
+        name: 'QPoint',
+        parent: null,
+        isAbstract: false,
+        isCopyConstructible: true,
+        hasPublicConstructor: true,
+        hasPublicDestructor: true,
+        properties: [],
+        methods: [],
+        signals: [],
+    );
+
+    $generator->generate($phpClass, 'Qt\\Core', $outputDir);
+
+    $compat = (string) file_get_contents($outputDir . '/qt_php_compat.h');
+
+    expect($compat)->toContain(
+        '# ifdef mkdir',
+        '# ifdef rmdir',
+        '# ifdef asprintf',
+        '# ifdef free',
+        '# ifdef lookup',
+    );
 });
 
 it('includes qstring and qbytearray headers in generated source', function (): void {
@@ -663,7 +692,7 @@ it('skips unchanged class outputs on repeated generation', function (): void {
 
     $generator->generate($phpClass, 'Qt\\Core', $outputDir);
     $firstStats = $generator->lastWriteStats()->toArray();
-    expect($firstStats['written'])->toBe(3);
+    expect($firstStats['written'])->toBe(8);
 
     $headerFile = $outputDir . '/qt_qpoint.h';
     touch($headerFile, 1_000_000_000);
@@ -675,7 +704,7 @@ it('skips unchanged class outputs on repeated generation', function (): void {
     clearstatcache(true, $headerFile);
     $after = filemtime($headerFile);
 
-    expect($secondStats['unchanged'])->toBe(3)
+    expect($secondStats['unchanged'])->toBe(8)
         ->and($secondStats['written'])->toBe(0)
         ->and($after)->toBe($before);
 });
@@ -696,7 +725,7 @@ it('skips unchanged core scaffold files on repeated finalize', function (): void
     $scaffolder->prepare($context);
     $scaffolder->finalize($context);
     $firstStats = $scaffolder->lastWriteStats()->toArray();
-    expect($firstStats['written'])->toBe(4);
+    expect($firstStats['written'])->toBe(5);
 
     $moduleSource = $outputDir . '/qt.cpp';
     touch($moduleSource, 1_000_000_000);
@@ -708,7 +737,7 @@ it('skips unchanged core scaffold files on repeated finalize', function (): void
     clearstatcache(true, $moduleSource);
     $after = filemtime($moduleSource);
 
-    expect($secondStats['unchanged'])->toBe(4)
+    expect($secondStats['unchanged'])->toBe(5)
         ->and($secondStats['written'])->toBe(0)
         ->and($after)->toBe($before);
 });

@@ -51,6 +51,7 @@ class ExtensionScaffolder
         return [
             $context->outputDir . '/config.m4',
             $context->outputDir . '/config.w32',
+            $context->outputDir . '/qt_php_compat.h',
             $context->outputDir . '/' . $context->phpHeaderFilename(),
             $context->outputDir . '/' . $context->moduleSourceFilename(),
         ];
@@ -65,6 +66,10 @@ class ExtensionScaffolder
         $this->lastWriteStats->record($this->fileWriter->write(
             $context->outputDir . '/config.w32',
             $this->cleanOutput($this->blade->run('generation.config_w32', ['ctx' => $context])),
+        ));
+        $this->lastWriteStats->record($this->fileWriter->write(
+            $context->outputDir . '/qt_php_compat.h',
+            $this->cleanOutput($this->blade->run('generation.php_compat_header', ['ctx' => $context])),
         ));
         $this->lastWriteStats->record($this->fileWriter->write(
             $context->outputDir . '/' . $context->phpHeaderFilename(),

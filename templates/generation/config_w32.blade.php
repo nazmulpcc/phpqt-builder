@@ -4,7 +4,7 @@
 $includeRoots = $ctx->windowsCompileIncludeRoots();
 $libraryRoot = $ctx->windowsLibraryRoot();
 $libraries = $ctx->windowsModuleLibraryFiles();
-$sourceBuckets = $ctx->windowsSourceBuckets();
+$unitySourceFiles = $ctx->windowsUnitySourceFiles();
 @endphp
 
 ARG_ENABLE("{!! $ctx->extensionName !!}", "{!! strtoupper($ctx->extensionName) !!} support", "no");
@@ -13,10 +13,10 @@ if (PHP_{!! strtoupper($ctx->extensionName) !!} != "no") {
 	var qt_include_roots = {!! json_encode($includeRoots, JSON_UNESCAPED_SLASHES) !!};
 	var qt_library_root = {!! json_encode($libraryRoot, JSON_UNESCAPED_SLASHES) !!};
 	var qt_libraries = {!! json_encode($libraries, JSON_UNESCAPED_SLASHES) !!};
-	var qt_source_buckets = {!! json_encode($sourceBuckets, JSON_UNESCAPED_SLASHES) !!};
+	var qt_unity_sources = {!! json_encode($unitySourceFiles, JSON_UNESCAPED_SLASHES) !!};
 	var qt_enabled = qt_library_root !== null;
 
-	ADD_FLAG("CFLAGS_{!! strtoupper($ctx->extensionName) !!}", "/std:c++17 /permissive- /EHsc /DZEND_ENABLE_STATIC_TSRMLS_CACHE=1");
+	ADD_FLAG("CFLAGS_{!! strtoupper($ctx->extensionName) !!}", "/std:c++17 /permissive- /EHsc /bigobj /DZEND_ENABLE_STATIC_TSRMLS_CACHE=1");
 	ADD_FLAG("CFLAGS_{!! strtoupper($ctx->extensionName) !!}", " /I \"" + configure_module_dirname + "\"");
 	ADD_FLAG("CFLAGS_{!! strtoupper($ctx->extensionName) !!}", " /I \"" + configure_module_dirname + "\\classes\"");
 
@@ -32,14 +32,14 @@ if (PHP_{!! strtoupper($ctx->extensionName) !!} != "no") {
 
 	if (qt_enabled) {
 		EXTENSION("{!! $ctx->extensionName !!}", "{!! $ctx->moduleSourceFilename() !!}", PHP_{!! strtoupper($ctx->extensionName) !!}_SHARED);
-		for (var bucket_dir in qt_source_buckets) {
-			if (!qt_source_buckets.hasOwnProperty(bucket_dir)) {
+		for (var bucket_dir in qt_unity_sources) {
+			if (!qt_unity_sources.hasOwnProperty(bucket_dir)) {
 				continue;
 			}
 
-			var bucket_sources = qt_source_buckets[bucket_dir];
-			if (bucket_sources.length > 0) {
-				ADD_SOURCES(configure_module_dirname + "\\" + bucket_dir, bucket_sources.join(" "), "{!! $ctx->extensionName !!}");
+			var unity_source = qt_unity_sources[bucket_dir];
+			if (unity_source) {
+				ADD_SOURCES(configure_module_dirname + "\\" + bucket_dir, unity_source, "{!! $ctx->extensionName !!}");
 			}
 		}
 		AC_DEFINE("HAVE_{!! strtoupper($ctx->extensionName) !!}", 1, "Define to 1 if the PHP extension '{!! $ctx->extensionName !!}' is available.");

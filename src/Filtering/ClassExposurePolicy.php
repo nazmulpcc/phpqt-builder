@@ -47,6 +47,7 @@ class ClassExposurePolicy
         'QProperty',
         'QBinding',
         'QInternal',
+        'QVulkan',
     ];
 
     /** @var list<string> */

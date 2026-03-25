@@ -21,17 +21,7 @@ extern "C" {
 #ifdef __cplusplus
 }
 #endif
-#ifdef PHP_WIN32
-# ifdef mkdir
-#  undef mkdir
-# endif
-# ifdef rmdir
-#  undef rmdir
-# endif
-# ifdef asprintf
-#  undef asprintf
-# endif
-#endif
+#include "qt_php_compat.h"
 
 #ifndef PHP_QT_API
 # if defined(PHP_WIN32)
