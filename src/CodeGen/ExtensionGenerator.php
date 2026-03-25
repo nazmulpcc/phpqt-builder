@@ -25,6 +25,10 @@ class ExtensionGenerator
     private TypeBridge $typeBridge;
     private readonly SmartFileWriter $fileWriter;
     private FileWriteStats $lastWriteStats;
+    /** @var array<string, true> */
+    private array $emittedPhpCompatHeaders = [];
+    /** @var array<string, true> */
+    private array $emittedSharedHelperSupport = [];
 
     public function __construct(
         ?string $templatePath = null,
@@ -343,12 +347,18 @@ class ExtensionGenerator
      */
     private function writePhpCompatHeader(string $outputDir): array
     {
+        $outputKey = $this->outputDirKey($outputDir);
+        if (isset($this->emittedPhpCompatHeaders[$outputKey])) {
+            return [];
+        }
+
         $path = $outputDir . '/qt_php_compat.h';
         $result = $this->fileWriter->write(
             $path,
             $this->cleanOutput($this->blade->run('generation.php_compat_header', [])),
         );
         $this->lastWriteStats->record($result);
+        $this->emittedPhpCompatHeaders[$outputKey] = true;
 
         return [$path];
     }
@@ -358,6 +368,11 @@ class ExtensionGenerator
      */
     private function writeSharedHelperSupport(string $outputDir): array
     {
+        $outputKey = $this->outputDirKey($outputDir);
+        if (isset($this->emittedSharedHelperSupport[$outputKey])) {
+            return [];
+        }
+
         $files = $this->writePhpCompatHeader($outputDir);
         $supportFiles = [
             ['qt_class_helpers.h', 'generation.support.class_helpers_header'],
@@ -376,6 +391,13 @@ class ExtensionGenerator
             $files[] = $path;
         }
 
+        $this->emittedSharedHelperSupport[$outputKey] = true;
+
         return $files;
+    }
+
+    private function outputDirKey(string $outputDir): string
+    {
+        return rtrim(str_replace('\\', '/', $outputDir), '/');
     }
 }

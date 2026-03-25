@@ -10,7 +10,6 @@ it('preserves module-qualified qt header paths for generated includes', function
     $reflection = new ReflectionClass(BuildPipeline::class);
     $pipeline = $reflection->newInstanceWithoutConstructor();
     $method = $reflection->getMethod('relativeQtHeaderPath');
-    $method->setAccessible(true);
 
     expect($method->invoke($pipeline, '/opt/qt/include/Qt3DCore/QNode'))->toBe('Qt3DCore/QNode')
         ->and($method->invoke($pipeline, '/opt/qt/include/Qt3DCore/qnode.h'))->toBe('Qt3DCore/qnode.h')
@@ -22,7 +21,6 @@ it('tracks return_type dependencies for re-analysis when nested candidates are r
     $reflection = new ReflectionClass(BuildPipeline::class);
     $pipeline = $reflection->newInstanceWithoutConstructor();
     $method = $reflection->getMethod('generatedExtractCandidateDependencies');
-    $method->setAccessible(true);
 
     $classData = [
         'methods' => [[
@@ -74,7 +72,6 @@ it('emits windows unity bucket sources that include the generated class sources'
     $reflection = new ReflectionClass(BuildPipeline::class);
     $pipeline = $reflection->newInstanceWithoutConstructor();
     $method = $reflection->getMethod('relocateWindowsSourceBuckets');
-    $method->setAccessible(true);
     $method->invoke($pipeline, $context);
 
     $bucket = $outputDir . '/src_00/qt_bucket_00.cpp';
@@ -85,4 +82,14 @@ it('emits windows unity bucket sources that include the generated class sources'
         '#include "../classes/qt_alpha.cpp"',
         '#include "../classes/qt_beta.cpp"',
     );
+
+    touch($bucket, 1_000_000_000);
+    clearstatcache(true, $bucket);
+    $before = filemtime($bucket);
+
+    $method->invoke($pipeline, $context);
+
+    clearstatcache(true, $bucket);
+    $after = filemtime($bucket);
+    expect($after)->toBe($before);
 });

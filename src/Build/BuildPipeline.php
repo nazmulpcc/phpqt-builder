@@ -9,6 +9,7 @@ use QtBuilder\Containers\QListSpecializationResolver;
 use QtBuilder\Definition\PhpClass;
 use QtBuilder\Definition\PhpMethod;
 use QtBuilder\IO\FileWriteStats;
+use QtBuilder\IO\SmartFileWriter;
 use QtBuilder\Scanning\HeaderCandidate;
 use QtBuilder\Support\CppName;
 use QtBuilder\Support\GeneratedTypeIdentity;
@@ -1838,12 +1839,40 @@ class BuildPipeline
     private function relocateWindowsSourceBuckets(ExtensionBuildContext $context): void
     {
         $classesDir = $context->outputDir . '/classes';
+        $writer = new SmartFileWriter();
         if (!is_dir($classesDir)) {
             return;
         }
 
-        foreach (glob($context->outputDir . '/src_*', GLOB_ONLYDIR) ?: [] as $bucketDir) {
-            $this->removeDirectory($bucketDir);
+        $unitySources = $context->windowsUnitySourceFiles();
+        $activeBucketDirs = array_fill_keys(array_keys($unitySources), true);
+        foreach (glob($context->outputDir . '/src_*', GLOB_ONLYDIR) ?: [] as $existingBucketDir) {
+            $bucketName = basename($existingBucketDir);
+            if (!isset($activeBucketDirs[$bucketName])) {
+                $this->removeDirectory($existingBucketDir);
+                continue;
+            }
+
+            $expectedUnityFile = $unitySources[$bucketName] ?? null;
+            foreach (scandir($existingBucketDir) ?: [] as $entry) {
+                if ($entry === '.' || $entry === '..') {
+                    continue;
+                }
+
+                $path = $existingBucketDir . '/' . $entry;
+                if (is_dir($path)) {
+                    $this->removeDirectory($path);
+                    continue;
+                }
+
+                if ($entry === $expectedUnityFile) {
+                    continue;
+                }
+
+                if (!@unlink($path) && file_exists($path)) {
+                    throw new \RuntimeException(sprintf('Could not remove stale Windows unity bucket file: %s', $path));
+                }
+            }
         }
 
         foreach ($context->windowsSourceBuckets() as $bucketDir => $files) {
@@ -1856,7 +1885,6 @@ class BuildPipeline
                 }
             }
 
-            $unitySources = $context->windowsUnitySourceFiles();
             $unityFilename = $unitySources[$bucketDir] ?? null;
             if (!is_string($unityFilename) || $unityFilename === '') {
                 throw new \RuntimeException(sprintf('Missing Windows unity source filename for bucket: %s', $bucketDir));
@@ -1878,9 +1906,7 @@ class BuildPipeline
 
             $contents = implode("\n", $lines) . "\n";
             $targetPath = $targetDir . '/' . $unityFilename;
-            if (file_put_contents($targetPath, $contents) === false) {
-                throw new \RuntimeException(sprintf('Could not write Windows unity bucket source file: %s', $targetPath));
-            }
+            $writer->write($targetPath, $contents);
         }
     }
 

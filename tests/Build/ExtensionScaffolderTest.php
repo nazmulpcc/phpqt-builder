@@ -704,7 +704,7 @@ it('skips unchanged class outputs on repeated generation', function (): void {
     clearstatcache(true, $headerFile);
     $after = filemtime($headerFile);
 
-    expect($secondStats['unchanged'])->toBe(8)
+    expect($secondStats['unchanged'])->toBe(3)
         ->and($secondStats['written'])->toBe(0)
         ->and($after)->toBe($before);
 });
