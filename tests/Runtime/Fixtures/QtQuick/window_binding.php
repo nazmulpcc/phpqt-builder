@@ -32,7 +32,7 @@ $app = new \Qt\Gui\QGuiApplication($argc, []);
 $sales = new \Qt\Core\QObject();
 $sales->objectName = 'sales-1';
 $notifyHits = 0;
-$sales->connectPropertyNotify('objectName', function () use (&$notifyHits): void {
+$connection = $sales->connectPropertyNotify('objectName', function () use (&$notifyHits): void {
     $notifyHits++;
 });
 
