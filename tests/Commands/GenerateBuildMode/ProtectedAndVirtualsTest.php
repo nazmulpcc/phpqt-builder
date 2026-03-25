@@ -89,6 +89,7 @@ it('generates protected virtual methods with native trampolines', function (): v
         Assert::assertStringContainsString('constexpr zend_long _qt_virtual_timeout_ms = 2000;', $cpp);
         Assert::assertStringContainsString('qt_runtime_dispatch_owner_sync([this, &_qt_dispatch_result]() mutable {', $cpp);
         Assert::assertStringContainsString('void qt_runtime_record_virtual_timeout(void);', $helpers);
+        Assert::assertStringContainsString('zend_class_entry *qt_runtime_exception_ce(void);', $helpers);
         Assert::assertStringContainsString('zend_hash_str_find_ptr_lc(&ce->function_table, function_name, strlen(function_name))', $helpers);
         Assert::assertStringContainsString('zend_call_known_function(method, object, object->ce, retval, param_count, params, NULL);', $helpers);
         Assert::assertStringNotContainsString('static zend_always_inline bool qt_method_is_overridden_in_ce(', $cpp);

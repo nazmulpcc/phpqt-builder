@@ -36,6 +36,7 @@ extern "C" {
 bool qt_runtime_is_shutdown_in_progress(void);
 bool qt_runtime_can_call_zend(void);
 bool qt_runtime_is_owner_thread(void);
+zend_class_entry *qt_runtime_exception_ce(void);
 bool qt_runtime_enqueue_owner_task(std::function<void()> task);
 void qt_runtime_record_virtual_timeout(void);
 void qt_runtime_owner_safe_point(void);
