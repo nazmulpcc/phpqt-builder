@@ -1610,6 +1610,7 @@ class BuildPipeline
         OutputInterface $output,
     ): array {
         $generator = new ExtensionGenerator();
+        $supportsRuntimeNotifyFunctorConnect = $context->installation->osFamily !== 'Windows';
         $fileWriteStats = new FileWriteStats();
         $classmap = [];
         $outputDir = $context->outputDir . '/classes';
@@ -1658,6 +1659,7 @@ class BuildPipeline
                     $classNativeTypes,
                     $classMetadata,
                     false,
+                    $supportsRuntimeNotifyFunctorConnect,
                 );
                 $fileWriteStats->merge($generator->lastWriteStats());
                 $classmap[] = [

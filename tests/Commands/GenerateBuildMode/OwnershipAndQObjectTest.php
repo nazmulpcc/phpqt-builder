@@ -287,14 +287,60 @@ it('adds qobject property apis and handlers', function (): void {
         Assert::assertStringContainsString('ZEND_ACC_PUBLIC | ZEND_ACC_VIRTUAL', $cpp);
         Assert::assertStringContainsString('qt_qobject_handlers.read_property = qt_qobject_read_property;', $cpp);
         Assert::assertStringContainsString('qt_qobject_handlers.get_properties_for = qt_qobject_get_properties_for;', $cpp);
-        Assert::assertStringContainsString('#ifdef PHP_WIN32', $cpp);
-        Assert::assertStringContainsString('QObject::connectPropertyNotify() is not supported in this build yet', $cpp);
         Assert::assertStringContainsString('auto _qt_notify = _qt_property.notifySignal();', $cpp);
         Assert::assertStringContainsString('QMetaObject::Connection _qt_connection = QMetaObject::connect(', $cpp);
+        Assert::assertStringContainsString('_qt_property_notify_handler_t{_qt_callback}', $cpp);
+        Assert::assertStringNotContainsString('#include <QSignalMapper>', $cpp);
+        Assert::assertStringNotContainsString('qt_qmetaobjectconnection_wrap_aux(', $cpp);
+        Assert::assertStringNotContainsString('connectPropertyNotify() is not supported in this build yet', $cpp);
         Assert::assertStringNotContainsString('static bool qt_qobject_should_delegate_to_std_property(', $cpp);
         Assert::assertStringNotContainsString('static inline void qt_qobject_variant_to_property_zval(', $cpp);
         Assert::assertStringNotContainsString('#include "qt_qvariant.h"', $cpp);
         Assert::assertStringNotContainsString('object_init_ex(target, qt_ce_qvariant);', $cpp);
+});
+
+it('uses a signal mapper bridge for qobject property notify on windows generation', function (): void {
+        $fixtureRoot = qt_fixture_path('ownership-qt');
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-qobject-properties-windows-' . bin2hex(random_bytes(4));
+
+        $systemInformation = FakeSystemInformation::passing();
+        $systemInformation->setOsFamily('Windows');
+
+        $command = new GenerateCommand($systemInformation);
+        $tester = new CommandTester($command);
+
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qobject.h',
+            'class' => 'QObject',
+            '--qt-path' => '/definitely/not/a/qt/root',
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+            ],
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QObject',
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qobject.cpp');
+
+        Assert::assertStringContainsString('#include <QSignalMapper>', $cpp);
+        Assert::assertStringContainsString('QSignalMapper *_qt_mapper = new QSignalMapper(_qt_obj);', $cpp);
+        Assert::assertStringContainsString('_qt_mapper->setMapping(_qt_obj, _qt_obj);', $cpp);
+        Assert::assertStringContainsString('const int _qt_map_index = _qt_mapper_meta.indexOfSlot("map()");', $cpp);
+        Assert::assertStringContainsString('const int _qt_mapped_index = _qt_mapper_meta.indexOfSignal("mappedObject(QObject*)");', $cpp);
+        Assert::assertStringContainsString('QMetaObject::Connection _qt_connection = QObject::connect(', $cpp);
+        Assert::assertStringContainsString('qOverload<QObject *>(&QSignalMapper::mappedObject)', $cpp);
+        Assert::assertStringContainsString('qt_qmetaobjectconnection_wrap_aux(', $cpp);
+        Assert::assertStringContainsString('qt_qmetaobjectconnection_create_bridge_aux(_qt_mapper, _qt_bridge_connection)', $cpp);
+        Assert::assertStringNotContainsString(
+            "QMetaObject::connect(\n        _qt_obj,\n        _qt_notify,\n        _qt_obj,\n        _qt_property_notify_handler_t{_qt_callback}",
+            $cpp,
+        );
 });
 
 it('adds qobject property handlers to derived classes', function (): void {

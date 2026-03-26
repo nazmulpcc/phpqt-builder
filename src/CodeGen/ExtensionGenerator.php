@@ -73,10 +73,19 @@ class ExtensionGenerator
         array $classNativeTypes = [],
         array $classMetadata = [],
         bool $emitSignalConnectionSupport = true,
+        ?bool $supportsRuntimeNotifyFunctorConnect = null,
     ): array
     {
         $this->lastWriteStats = new FileWriteStats();
-        $ctx = new ClassContext($phpClass, $namespace, $this->typeBridge, $classNamespaces, $classNativeTypes, $classMetadata);
+        $ctx = new ClassContext(
+            $phpClass,
+            $namespace,
+            $this->typeBridge,
+            $classNamespaces,
+            $classNativeTypes,
+            $classMetadata,
+            $this->resolveRuntimeNotifyFunctorConnectSupport($supportsRuntimeNotifyFunctorConnect),
+        );
         $files = [];
 
         // Ensure output directory exists
@@ -132,9 +141,18 @@ class ExtensionGenerator
         array $classNamespaces = [],
         array $classNativeTypes = [],
         array $classMetadata = [],
+        ?bool $supportsRuntimeNotifyFunctorConnect = null,
     ): ClassContext
     {
-        return new ClassContext($phpClass, $namespace, $this->typeBridge, $classNamespaces, $classNativeTypes, $classMetadata);
+        return new ClassContext(
+            $phpClass,
+            $namespace,
+            $this->typeBridge,
+            $classNamespaces,
+            $classNativeTypes,
+            $classMetadata,
+            $this->resolveRuntimeNotifyFunctorConnectSupport($supportsRuntimeNotifyFunctorConnect),
+        );
     }
 
     public function lastWriteStats(): FileWriteStats
@@ -399,5 +417,10 @@ class ExtensionGenerator
     private function outputDirKey(string $outputDir): string
     {
         return rtrim(str_replace('\\', '/', $outputDir), '/');
+    }
+
+    private function resolveRuntimeNotifyFunctorConnectSupport(?bool $supportsRuntimeNotifyFunctorConnect): bool
+    {
+        return $supportsRuntimeNotifyFunctorConnect ?? (PHP_OS_FAMILY !== 'Windows');
     }
 }

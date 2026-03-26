@@ -35,6 +35,9 @@
 #include <QMetaMethod>
 #include <QMetaProperty>
 @endif
+@if($ctx->isQObjectClass && !$ctx->supportsRuntimeNotifyFunctorConnect)
+#include <QSignalMapper>
+@endif
 @if($ctx->hasPreventDestroy || $ctx->hasSignals() || $ctx->hasPostCallOwnershipHandling())
 #include <QObject>
 @endif
@@ -841,10 +844,6 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, propertyInfo)
 /* connectPropertyNotify */
 ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connectPropertyNotify)
 {
-    #ifdef PHP_WIN32
-    zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!}::connectPropertyNotify() is not supported in this build yet");
-    RETURN_THROWS();
-    #else
     zend_string *name;
     zval *callback;
 
@@ -894,6 +893,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connectPropertyNotify)
         }
     };
 
+@if($ctx->supportsRuntimeNotifyFunctorConnect)
     QMetaObject::Connection _qt_connection = QMetaObject::connect(
         _qt_obj,
         _qt_notify,
@@ -902,7 +902,53 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connectPropertyNotify)
     );
 
     qt_qmetaobjectconnection_wrap(return_value, _qt_connection);
-    #endif
+@else
+    QSignalMapper *_qt_mapper = new QSignalMapper(_qt_obj);
+    _qt_mapper->setMapping(_qt_obj, _qt_obj);
+
+    const QMetaObject &_qt_mapper_meta = QSignalMapper::staticMetaObject;
+    const int _qt_map_index = _qt_mapper_meta.indexOfSlot("map()");
+    const int _qt_mapped_index = _qt_mapper_meta.indexOfSignal("mappedObject(QObject*)");
+    if (_qt_map_index < 0 || _qt_mapped_index < 0) {
+        delete _qt_mapper;
+        zend_throw_error(NULL, "QSignalMapper bridge methods are unavailable for connectPropertyNotify().");
+        RETURN_THROWS();
+    }
+
+    const QMetaMethod _qt_map_method = _qt_mapper_meta.method(_qt_map_index);
+    QMetaObject::Connection _qt_connection = QObject::connect(
+        _qt_obj,
+        _qt_notify,
+        _qt_mapper,
+        _qt_map_method
+    );
+    if (!_qt_connection) {
+        delete _qt_mapper;
+        zend_throw_error(NULL, "Failed to connect property notify bridge for property %s.", ZSTR_VAL(name));
+        RETURN_THROWS();
+    }
+
+    QMetaObject::Connection _qt_bridge_connection = QObject::connect(
+        _qt_mapper,
+        qOverload<QObject *>(&QSignalMapper::mappedObject),
+        _qt_obj,
+        [_qt_handler = _qt_property_notify_handler_t{_qt_callback}](QObject *) {
+            _qt_handler();
+        }
+    );
+    if (!_qt_bridge_connection) {
+        QObject::disconnect(_qt_connection);
+        delete _qt_mapper;
+        zend_throw_error(NULL, "Failed to connect property notify callback bridge for property %s.", ZSTR_VAL(name));
+        RETURN_THROWS();
+    }
+
+    qt_qmetaobjectconnection_wrap_aux(
+        return_value,
+        _qt_connection,
+        qt_qmetaobjectconnection_create_bridge_aux(_qt_mapper, _qt_bridge_connection)
+    );
+@endif
 }
 @endif
 @if($ctx->hasSignals())
@@ -954,12 +1000,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, disconnect)
         RETURN_FALSE;
     }
 
-    bool disconnected = QObject::disconnect(*connection_intern->native_ptr);
-    if (disconnected) {
-        *connection_intern->native_ptr = QMetaObject::Connection();
-    }
-
-    RETURN_BOOL(disconnected);
+    RETURN_BOOL(qt_qmetaobjectconnection_disconnect(connection_intern));
 }
 
 @foreach($ctx->signalOverloads as $signal)
