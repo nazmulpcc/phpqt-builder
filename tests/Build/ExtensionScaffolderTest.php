@@ -86,7 +86,9 @@ it('emits a clean windows config.w32 for static php-src builds', function (): vo
         'ARG_ENABLE("qt", "QT support", "no");',
         'var qt_include_roots = ["Z:\\\\6.8.3\\\\msvc2022_64\\\\include","Z:\\\\6.8.3\\\\msvc2022_64\\\\include\\\\QtCore"];',
         'var qt_library_root = "Z:\\\\6.8.3\\\\msvc2022_64\\\\lib";',
-        'var qt_libraries = ["Qt6Core.lib"];',
+        'var qt_release_libraries = ["Qt6Core.lib"];',
+        'var qt_debug_libraries = ["Qt6Cored.lib"];',
+        'var qt_libraries = PHP_DEBUG == "yes" ? qt_debug_libraries : qt_release_libraries;',
         'var qt_unity_sources = {"src_00":"qt_bucket_00.cpp"};',
         'ADD_FLAG("CFLAGS_QT", "/std:c++17 /permissive- /EHsc /bigobj /DZEND_ENABLE_STATIC_TSRMLS_CACHE=1");',
         'CHECK_LIB(qt_libraries[j], "qt", qt_library_root)',
@@ -507,6 +509,61 @@ it('makes generated qstring wrappers stringable', function (): void {
         'ZEND_METHOD(Qt_Core_QString, __toString)',
         'QByteArray _qt_utf8 = intern->native_ptr->toUtf8();',
         'zend_class_implements(qt_ce_qstring, 1, zend_ce_stringable);',
+    );
+});
+
+it('uses utf8 directly for generated qstring toStdString wrappers', function (): void {
+    $outputDir = qt_temp_dir('qtbuilder-generator-');
+    $generator = new ExtensionGenerator();
+    $phpClass = new PhpClass(
+        name: 'QString',
+        parent: null,
+        isAbstract: false,
+        isCopyConstructible: true,
+        hasPublicConstructor: true,
+        hasPublicDestructor: true,
+        properties: [],
+        methods: [
+            new PhpMethod(
+                name: 'toStdString',
+                access: 'public',
+                isStatic: false,
+                isSignal: false,
+                isSlot: false,
+                isAbstractMethod: false,
+                returnType: 'string',
+                parameters: [],
+                overloads: [
+                    new MethodOverload(
+                        declaringClass: 'QString',
+                        returnType: 'std::string',
+                        smartPointerReturnTargetCppType: null,
+                        parameters: [],
+                        access: 'public',
+                        isConst: true,
+                        isStatic: false,
+                        isVirtual: false,
+                        isPureVirtual: false,
+                    ),
+                ],
+            ),
+        ],
+        signals: [],
+        isQObjectDerived: false,
+        nativeIncludes: ['<QString>'],
+        nativeCppType: 'QString',
+    );
+
+    $generator->generate($phpClass, 'Qt\\Core', $outputDir);
+
+    $source = (string) file_get_contents($outputDir . '/qt_qstring.cpp');
+
+    expect($source)->toContain(
+        'ZEND_METHOD(Qt_Core_QString, toStdString)',
+        'QByteArray _result = intern->native_ptr->toUtf8();',
+        'RETURN_STRINGL(_result.constData(), _result.size());',
+    )->not->toContain(
+        'auto _result = intern->native_ptr->toStdString();',
     );
 });
 

@@ -3,7 +3,8 @@
 /** @var \QtBuilder\Build\ExtensionBuildContext $ctx */
 $includeRoots = $ctx->windowsCompileIncludeRoots();
 $libraryRoot = $ctx->windowsLibraryRoot();
-$libraries = $ctx->windowsModuleLibraryFiles();
+$releaseLibraries = $ctx->windowsReleaseModuleLibraryFiles();
+$debugLibraries = $ctx->windowsDebugModuleLibraryFiles();
 $unitySourceFiles = $ctx->windowsUnitySourceFiles();
 @endphp
 
@@ -12,7 +13,9 @@ ARG_ENABLE("{!! $ctx->extensionName !!}", "{!! strtoupper($ctx->extensionName) !
 if (PHP_{!! strtoupper($ctx->extensionName) !!} != "no") {
 	var qt_include_roots = {!! json_encode($includeRoots, JSON_UNESCAPED_SLASHES) !!};
 	var qt_library_root = {!! json_encode($libraryRoot, JSON_UNESCAPED_SLASHES) !!};
-	var qt_libraries = {!! json_encode($libraries, JSON_UNESCAPED_SLASHES) !!};
+	var qt_release_libraries = {!! json_encode($releaseLibraries, JSON_UNESCAPED_SLASHES) !!};
+	var qt_debug_libraries = {!! json_encode($debugLibraries, JSON_UNESCAPED_SLASHES) !!};
+	var qt_libraries = PHP_DEBUG == "yes" ? qt_debug_libraries : qt_release_libraries;
 	var qt_unity_sources = {!! json_encode($unitySourceFiles, JSON_UNESCAPED_SLASHES) !!};
 	var qt_enabled = qt_library_root !== null;
 

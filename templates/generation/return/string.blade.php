@@ -41,9 +41,17 @@ if ($overload?->isPureVirtual) {
     {!! $line !!}
 @endforeach
 @endif
+@if($method->shouldUseQStringUtf8Return($overload))
+    QByteArray _result = intern->native_ptr->toUtf8();
+@else
     auto _result = {!! $callExpr !!};
+@endif
 @foreach($writebackLines as $line)
     {!! $line !!}
 @endforeach
+@if($method->shouldUseQStringUtf8Return($overload))
+    RETURN_STRINGL(_result.constData(), _result.size());
+@else
     {!! $ctx->typeBridge->nativeStringToPhpReturn($cppReturnType, '_result') !!};
+@endif
 @endif

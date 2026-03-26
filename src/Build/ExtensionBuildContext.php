@@ -367,10 +367,21 @@ readonly class ExtensionBuildContext
     /**
      * @return list<string>
      */
-    public function windowsModuleLibraryFiles(): array
+    public function windowsReleaseModuleLibraryFiles(): array
     {
         return array_values(array_map(
             static fn(string $library): string => $library . '.lib',
+            $this->moduleLibraryNames(),
+        ));
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function windowsDebugModuleLibraryFiles(): array
+    {
+        return array_values(array_map(
+            static fn(string $library): string => $library . 'd.lib',
             $this->moduleLibraryNames(),
         ));
     }

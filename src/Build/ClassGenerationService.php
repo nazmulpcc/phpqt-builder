@@ -218,6 +218,7 @@ class ClassGenerationService
         $skippedMethods = [...$skippedMethods, ...$abstractConstructorAdjusted['skipped_methods']];
         $phpClass = $this->ensureProtectedUnavailableConstructor($phpClass, $sourceClassData);
         $phpClass = $this->stripQObjectRuntimeMethods($phpClass);
+        $phpClass = $this->injectSyntheticListParentMethods($phpClass, $sourceClassData, $allowedClasses, $headerPath, $className);
 
         if (!$this->shouldGenerateClassShell($phpClass, $classData)) {
             return ClassGenerationResult::skipped(
@@ -982,6 +983,7 @@ class ClassGenerationService
         $skippedMethods = [...$skippedMethods, ...$abstractConstructorAdjusted['skipped_methods']];
         $phpClass = $this->ensureProtectedUnavailableConstructor($phpClass, $sourceClassData);
         $phpClass = $this->stripQObjectRuntimeMethods($phpClass);
+        $phpClass = $this->injectSyntheticListParentMethods($phpClass, $sourceClassData, $allowedClasses, $headerPath, $className);
 
         if (!$this->shouldGenerateClassShell($phpClass, $classData)) {
             return ClassGenerationResult::skipped(
@@ -4544,6 +4546,71 @@ class ClassGenerationService
             isQObjectDerived: $phpClass->isQObjectDerived,
             classConstants: $phpClass->classConstants,
             nativeIncludes: $phpClass->nativeIncludes,
+            nativeAliasOf: $phpClass->nativeAliasOf,
+            nativeCppType: $phpClass->nativeCppType,
+            generationId: $phpClass->generationId,
+            smartPointerAliases: $phpClass->smartPointerAliases,
+        );
+    }
+
+    /**
+     * @param array<string, mixed> $sourceClassData
+     * @param list<string> $allowedClasses
+     */
+    private function injectSyntheticListParentMethods(
+        PhpClass $phpClass,
+        array $sourceClassData,
+        array $allowedClasses,
+        string $headerPath,
+        string $className,
+    ): PhpClass {
+        $parent = is_string($phpClass->parent) ? trim($phpClass->parent) : '';
+        if ($parent === '' || !$this->listSpecializationResolver->isSyntheticListClassName($parent)) {
+            return $phpClass;
+        }
+
+        $specialization = null;
+        foreach ($this->specializableBases($sourceClassData, $headerPath, $className) as $baseClass) {
+            $candidate = $this->listSpecializationResolver->specializationFor($baseClass);
+            if ($candidate !== null && $candidate->className === $parent) {
+                $specialization = $candidate;
+                break;
+            }
+        }
+
+        if ($specialization === null) {
+            return $phpClass;
+        }
+
+        $syntheticParent = $this->listSpecializationResolver->buildPhpClass($specialization, $allowedClasses);
+        $methods = $phpClass->methods;
+        $existingNames = [];
+        foreach ($methods as $method) {
+            $existingNames[$method->name] = true;
+        }
+
+        foreach ($syntheticParent->methods as $method) {
+            if (isset($existingNames[$method->name])) {
+                continue;
+            }
+
+            $methods[] = $method;
+            $existingNames[$method->name] = true;
+        }
+
+        return new PhpClass(
+            name: $phpClass->name,
+            parent: $phpClass->parent,
+            isAbstract: $phpClass->isAbstract,
+            isCopyConstructible: $phpClass->isCopyConstructible,
+            hasPublicConstructor: $phpClass->hasPublicConstructor,
+            hasPublicDestructor: $phpClass->hasPublicDestructor,
+            properties: $phpClass->properties,
+            methods: $methods,
+            signals: $phpClass->signals,
+            isQObjectDerived: $phpClass->isQObjectDerived,
+            classConstants: $phpClass->classConstants,
+            nativeIncludes: array_values(array_unique([...$phpClass->nativeIncludes, ...$syntheticParent->nativeIncludes])),
             nativeAliasOf: $phpClass->nativeAliasOf,
             nativeCppType: $phpClass->nativeCppType,
             generationId: $phpClass->generationId,

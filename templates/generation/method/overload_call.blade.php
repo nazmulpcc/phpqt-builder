@@ -60,11 +60,19 @@ if (!$overload->isPureVirtual) {
 {!! $indent !!}{!! $macro !!}({!! $returnExpr !!});
 @endif
 @elseif($overload->returnStrategy === 'string')
+@if($method->shouldUseQStringUtf8Return($overload))
+{!! $indent !!}QByteArray _result = intern->native_ptr->toUtf8();
+@else
 {!! $indent !!}auto _result = {!! $callExpr !!};
+@endif
 @foreach($writebackLines as $line)
 {!! $indent !!}{!! $line !!}
 @endforeach
+@if($method->shouldUseQStringUtf8Return($overload))
+{!! $indent !!}RETURN_STRINGL(_result.constData(), _result.size());
+@else
 {!! $indent !!}{!! $ctx->typeBridge->nativeStringToPhpReturn($overload->cppReturnType, '_result') !!};
+@endif
 @elseif($overload->returnStrategy === 'value_object')
 @php
     $returnPhpClass = trim(str_replace(['const ', '&', '*'], '', $overload->phpReturnType));
