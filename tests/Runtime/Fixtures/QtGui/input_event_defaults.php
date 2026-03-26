@@ -20,9 +20,9 @@ $mouse = new QMouseEvent(
     QEvent::MouseButtonPress,
     new QPointF(20.0, 30.0),
     new QPointF(20.0, 30.0),
-    \Qt\MouseButton::LeftButton,
-    \Qt\MouseButtons::LeftButton,
-    \Qt\KeyboardModifier::NoModifier,
+    1,
+    1,
+    0,
 );
 
 $wheel = new QWheelEvent(
@@ -30,9 +30,9 @@ $wheel = new QWheelEvent(
     new QPointF(50.0, 50.0),
     new QPoint(0, 0),
     new QPoint(0, 120),
-    \Qt\MouseButtons::NoButton,
-    \Qt\KeyboardModifier::NoModifier,
-    \Qt\ScrollPhase::NoScrollPhase,
+    0,
+    0,
+    0,
     false,
 );
 

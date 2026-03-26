@@ -27,10 +27,47 @@ final class QtRuntimeProcessRunner
     {
         $configured = getenv('PHPQT_QT_BIN');
         if (!is_string($configured) || $configured === '') {
-            return null;
+            $root = self::qtRootPath();
+            if ($root === null) {
+                return null;
+            }
+
+            $candidate = $root . DIRECTORY_SEPARATOR . 'bin';
+
+            return is_dir($candidate) ? $candidate : null;
         }
 
         return is_dir($configured) ? $configured : null;
+    }
+
+    private static function qtRootPath(): ?string
+    {
+        $configured = getenv('PHPQT_QT_ROOT');
+        if (is_string($configured) && $configured !== '' && is_dir($configured)) {
+            return $configured;
+        }
+
+        $binPath = getenv('PHPQT_QT_BIN');
+        if (is_string($binPath) && $binPath !== '') {
+            $candidate = dirname($binPath);
+            if (is_dir($candidate)) {
+                return $candidate;
+            }
+        }
+
+        $configW32 = dirname(__DIR__, 3) . '/build/ext/config.w32';
+        if (is_file($configW32)) {
+            $contents = file_get_contents($configW32);
+            if (is_string($contents) && preg_match('/var qt_library_root = "([^"]+)";/', $contents, $matches) === 1) {
+                $libraryRoot = str_replace('\\', DIRECTORY_SEPARATOR, $matches[1]);
+                $candidate = dirname($libraryRoot);
+                if (is_dir($candidate)) {
+                    return $candidate;
+                }
+            }
+        }
+
+        return null;
     }
 
     private static function isExtensionAlreadyLoaded(string $extensionName, array $env = []): bool
@@ -70,6 +107,19 @@ final class QtRuntimeProcessRunner
         if ($qtBin !== null) {
             $existingPath = (string) ($runtimeEnv['PATH'] ?? getenv('PATH') ?: '');
             $runtimeEnv['PATH'] = $qtBin . PATH_SEPARATOR . $existingPath;
+        }
+
+        $qtRoot = self::qtRootPath();
+        if ($qtRoot !== null) {
+            $pluginPath = $qtRoot . DIRECTORY_SEPARATOR . 'plugins';
+            if (!isset($runtimeEnv['QT_PLUGIN_PATH']) && is_dir($pluginPath)) {
+                $runtimeEnv['QT_PLUGIN_PATH'] = $pluginPath;
+            }
+
+            $qmlImportPath = $qtRoot . DIRECTORY_SEPARATOR . 'qml';
+            if (!isset($runtimeEnv['QML2_IMPORT_PATH']) && is_dir($qmlImportPath)) {
+                $runtimeEnv['QML2_IMPORT_PATH'] = $qmlImportPath;
+            }
         }
 
         return $runtimeEnv;

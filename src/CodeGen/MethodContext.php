@@ -228,6 +228,16 @@ class MethodContext
             && $selectedOverload->cppReturnType === 'std::string';
     }
 
+    public function shouldReturnNullForVoidOverload(?OverloadContext $overload = null): bool
+    {
+        $selectedOverload = $overload ?? ($this->overloads[0] ?? null);
+        if (!$selectedOverload instanceof OverloadContext || $selectedOverload->returnStrategy !== 'void') {
+            return false;
+        }
+
+        return $this->returnType === 'null' || str_contains($this->returnType, '|null') || str_contains($this->returnType, 'null|');
+    }
+
     public function overloadMatchCondition(OverloadContext $overload, string $argcVar = '_argc'): string
     {
         $conditions = [

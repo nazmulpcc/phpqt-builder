@@ -39,6 +39,8 @@ $initialSeenName = $root->property('seenName');
 $sales->objectName = 'sales-2';
 $updatedSeenName = $root->property('seenName');
 
+$sales->disconnect($connection);
+
 qt_runtime_result([
     'initial_seen_name' => $initialSeenName,
     'updated_seen_name' => $updatedSeenName,

@@ -46,6 +46,9 @@ if (!$overload->isPureVirtual) {
 @foreach($writebackLines as $line)
 {!! $indent !!}{!! $line !!}
 @endforeach
+@if($method->shouldReturnNullForVoidOverload($overload))
+{!! $indent !!}RETURN_NULL();
+@endif
 @elseif($overload->returnStrategy === 'scalar')
 @php
     $macro = $ctx->typeBridge->returnMacro($overload->phpReturnType);
