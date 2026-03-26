@@ -359,6 +359,15 @@ PHP_MINIT_FUNCTION({!! $ctx->extensionName !!})
     return SUCCESS;
 }
 
+@if($ctx->includeThreadRuntimeSupport)
+PHP_MSHUTDOWN_FUNCTION({!! $ctx->extensionName !!})
+{
+    qt_qthreadruntime_restore_sapi_deactivate();
+
+    return SUCCESS;
+}
+
+@endif
 PHP_RINIT_FUNCTION({!! $ctx->extensionName !!})
 {
 #if defined(ZTS) && defined(COMPILE_DL_{!! strtoupper($ctx->extensionName) !!})
@@ -415,7 +424,11 @@ extern "C" zend_module_entry {!! $ctx->extensionName !!}_module_entry = {
     "{!! $ctx->extensionName !!}",
     NULL,
     PHP_MINIT({!! $ctx->extensionName !!}),
+@if($ctx->includeThreadRuntimeSupport)
+    PHP_MSHUTDOWN({!! $ctx->extensionName !!}),
+@else
     NULL,
+@endif
     PHP_RINIT({!! $ctx->extensionName !!}),
     PHP_RSHUTDOWN({!! $ctx->extensionName !!}),
     PHP_MINFO({!! $ctx->extensionName !!}),

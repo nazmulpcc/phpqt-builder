@@ -22,6 +22,7 @@
 #include <Zend/zend_stream.h>
 #include <ext/standard/info.h>
 #include <main/php_main.h>
+#include <main/SAPI.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -68,6 +69,16 @@ static std::atomic_uint64_t qt_qthreadruntime_total_events_in_drained{0};
 static std::atomic_uint64_t qt_qthreadruntime_total_events_in_dropped_full{0};
 static std::atomic_uint64_t qt_qthreadruntime_total_events_in_dropped_shutdown{0};
 static std::atomic_uint64_t qt_qthreadruntime_total_listener_dispatch_errors{0};
+typedef int (*qt_qthreadruntime_sapi_deactivate_t)(void);
+
+struct qt_qthreadruntime_request_snapshot {
+    void *server_context{nullptr};
+    int argc{0};
+    char **argv{nullptr};
+};
+
+static qt_qthreadruntime_sapi_deactivate_t qt_qthreadruntime_saved_cli_deactivate = nullptr;
+static bool qt_qthreadruntime_cli_deactivate_guard_installed = false;
 
 static zend_always_inline zend_class_entry *qt_qthreadruntime_default_exception_ce()
 {
@@ -86,6 +97,117 @@ static zend_always_inline void qt_qthreadruntime_throw_nts_runtime_exception(con
         "%s requires a ZTS PHP build (thread start/management APIs are unavailable on NTS).",
         method_name
     );
+}
+
+static void qt_qthreadruntime_capture_request_snapshot(qt_qthreadruntime_request_snapshot *snapshot)
+{
+    if (snapshot == nullptr) {
+        return;
+    }
+
+    snapshot->server_context = SG(server_context);
+    snapshot->argc = SG(request_info).argc;
+    snapshot->argv = SG(request_info).argv;
+}
+
+static void qt_qthreadruntime_clear_worker_tls(void)
+{
+    qt_qthreadruntime_tls_current_state = nullptr;
+    qt_qthreadruntime_tls_current_job_id = 0;
+    qt_qthreadruntime_tls_current_task_host = nullptr;
+    qt_qthreadruntime_tls_current_task_token = 0;
+    qt_qthreadruntime_tls_worker_request = false;
+    qt_qthreadruntime_tls_interrupted = false;
+}
+
+static bool qt_qthreadruntime_prepare_worker_request(const qt_qthreadruntime_request_snapshot &snapshot)
+{
+#if !defined(ZTS)
+    (void) snapshot;
+    return false;
+#else
+    qt_qthreadruntime_tls_worker_request = true;
+    qt_qthreadruntime_tls_interrupted = false;
+
+    ts_resource(0);
+    TSRMLS_CACHE_UPDATE();
+
+    SG(server_context) = snapshot.server_context;
+    SG(request_info).argc = snapshot.argc;
+    SG(request_info).argv = snapshot.argv;
+    SG(request_info).argv0 = NULL;
+
+    PG(expose_php) = 0;
+    PG(auto_globals_jit) = 1;
+#if PHP_VERSION_ID >= 80100
+    PG(enable_dl) = false;
+#else
+    PG(enable_dl) = 0;
+#endif
+
+    if (php_request_startup() != SUCCESS) {
+        ts_free_thread();
+        qt_qthreadruntime_clear_worker_tls();
+        return false;
+    }
+
+    PG(during_request_startup) = 0;
+    SG(sapi_started) = 0;
+    SG(headers_sent) = 1;
+    SG(request_info).no_headers = 1;
+
+    return true;
+#endif
+}
+
+static void qt_qthreadruntime_shutdown_worker_request(void)
+{
+#if defined(ZTS)
+    gc_collect_cycles();
+    php_request_shutdown(NULL);
+    ts_free_thread();
+#endif
+    qt_qthreadruntime_clear_worker_tls();
+}
+
+static bool qt_qthreadruntime_is_cli_sapi(void)
+{
+    return sapi_module.name != NULL && strncmp(sapi_module.name, "cli", sizeof("cli") - 1) == 0;
+}
+
+static int qt_qthreadruntime_guarded_cli_deactivate(void)
+{
+    if (qt_qthreadruntime_is_worker_request_context()) {
+        return SUCCESS;
+    }
+
+    if (qt_qthreadruntime_saved_cli_deactivate != nullptr) {
+        return qt_qthreadruntime_saved_cli_deactivate();
+    }
+
+    return SUCCESS;
+}
+
+static void qt_qthreadruntime_install_cli_deactivate_guard(void)
+{
+    if (qt_qthreadruntime_cli_deactivate_guard_installed || !qt_qthreadruntime_is_cli_sapi()) {
+        return;
+    }
+
+    qt_qthreadruntime_saved_cli_deactivate = sapi_module.deactivate;
+    sapi_module.deactivate = qt_qthreadruntime_guarded_cli_deactivate;
+    qt_qthreadruntime_cli_deactivate_guard_installed = true;
+}
+
+PHP_QT_API void qt_qthreadruntime_restore_sapi_deactivate(void)
+{
+    if (!qt_qthreadruntime_cli_deactivate_guard_installed || !qt_qthreadruntime_is_cli_sapi()) {
+        return;
+    }
+
+    sapi_module.deactivate = qt_qthreadruntime_saved_cli_deactivate;
+    qt_qthreadruntime_saved_cli_deactivate = nullptr;
+    qt_qthreadruntime_cli_deactivate_guard_installed = false;
 }
 
 static size_t qt_qthreadruntime_env_queue_depth()
@@ -403,6 +525,7 @@ public:
 #if !defined(ZTS)
         return false;
 #else
+        qt_qthreadruntime_capture_request_snapshot(&owner_request_snapshot_);
         stopping_ = false;
         worker_bootstrap_failed_ = false;
         owner_event_drain_scheduled_.store(false, std::memory_order_release);
@@ -859,11 +982,7 @@ public:
 #if !defined(ZTS)
         return;
 #else
-        qt_qthreadruntime_tls_worker_request = true;
-        ts_resource(0);
-        TSRMLS_CACHE_UPDATE();
-
-        if (php_request_startup() != SUCCESS) {
+        if (!qt_qthreadruntime_prepare_worker_request(owner_request_snapshot_)) {
             std::lock_guard<std::mutex> lock(mutex_);
             worker_bootstrap_failed_ = true;
             running_ = false;
@@ -904,10 +1023,7 @@ public:
                 }
                 dropEventQueuesLocked(true);
                 result_cv_.notify_all();
-                gc_collect_cycles();
-                php_request_shutdown(NULL);
-                ts_free_thread();
-                qt_qthreadruntime_tls_worker_request = false;
+                qt_qthreadruntime_shutdown_worker_request();
                 return;
             }
         }
@@ -960,10 +1076,7 @@ public:
             dropEventQueuesLocked(true);
         }
 
-        gc_collect_cycles();
-        php_request_shutdown(NULL);
-        ts_free_thread();
-        qt_qthreadruntime_tls_worker_request = false;
+        qt_qthreadruntime_shutdown_worker_request();
 #endif
     }
 
@@ -1304,6 +1417,7 @@ private:
     size_t max_event_out_queue_depth_{qt_qthreadruntime_env_event_out_queue_depth()};
     size_t max_event_in_queue_depth_{qt_qthreadruntime_env_event_in_queue_depth()};
     std::string bootstrap_script_;
+    qt_qthreadruntime_request_snapshot owner_request_snapshot_;
     bool running_{false};
     bool stopping_{false};
     bool worker_bootstrap_failed_{false};
@@ -1326,6 +1440,7 @@ struct qt_qthread_task_host {
     size_t max_event_out_queue_depth_{qt_qthreadruntime_env_event_out_queue_depth()};
     size_t max_event_in_queue_depth_{qt_qthreadruntime_env_event_in_queue_depth()};
     std::string bootstrap_script_;
+    qt_qthreadruntime_request_snapshot owner_request_snapshot_;
     std::string pending_callable_name_;
     std::string pending_args_payload_;
     uint64_t pending_task_token_{0};
@@ -1586,6 +1701,7 @@ struct qt_qthread_task_host {
 
             pending_callable_name_ = callable_name;
             pending_args_payload_ = args_payload;
+            qt_qthreadruntime_capture_request_snapshot(&owner_request_snapshot_);
             has_pending_task_ = true;
             interrupted_ = false;
             pending_task_token_ = forced_token;
@@ -1885,6 +2001,7 @@ struct qt_qthread_task_host {
             inbound_cv_.notify_all();
             future_cv_.notify_all();
             thread = bound_thread_;
+            bound_thread_.clear();
         }
 
         QObject::disconnect(started_connection_);
@@ -1947,10 +2064,8 @@ private:
         qt_qthreadruntime_tls_current_task_host = this;
         qt_qthreadruntime_tls_current_task_token = task_token;
         qt_qthreadruntime_tls_interrupted = false;
-        ts_resource(0);
-        TSRMLS_CACHE_UPDATE();
 
-        bool startup_ok = php_request_startup() == SUCCESS;
+        bool startup_ok = qt_qthreadruntime_prepare_worker_request(owner_request_snapshot_);
         bool bootstrap_ok = true;
         qt_qthreadruntime_result task_result;
         task_result.success = true;
@@ -2080,15 +2195,8 @@ private:
         }
 
         if (startup_ok) {
-            gc_collect_cycles();
-            php_request_shutdown(NULL);
+            qt_qthreadruntime_shutdown_worker_request();
         }
-        ts_free_thread();
-
-        qt_qthreadruntime_tls_current_task_host = nullptr;
-        qt_qthreadruntime_tls_current_task_token = 0;
-        qt_qthreadruntime_tls_worker_request = false;
-        qt_qthreadruntime_tls_interrupted = false;
 
         qt_qthreadruntime_value terminal_payload;
         terminal_payload.type = qt_qthreadruntime_value_type::array_value;
@@ -4108,6 +4216,8 @@ static const zend_function_entry qt_qthreadruntime_methods[] = {
 
 PHP_MINIT_FUNCTION(qt_qthreadruntime)
 {
+    qt_qthreadruntime_install_cli_deactivate_guard();
+
     zend_class_entry ce;
     INIT_NS_CLASS_ENTRY(ce, "Qt\\Core", "QThreadRuntime", qt_qthreadruntime_methods);
     ce.create_object = qt_qthreadruntime_create_object;

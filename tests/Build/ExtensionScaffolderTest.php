@@ -297,15 +297,39 @@ it('emits qthreadruntime support minit and shutdown hook when enabled', function
     $scaffolder->finalize($context);
 
     $source = (string) file_get_contents($outputDir . '/qt.cpp');
+    $generator = new ExtensionGenerator();
+    $generator->generateThreadRuntimeSupport($outputDir . '/classes');
+    $runtimeSupport = (string) file_get_contents($outputDir . '/classes/qt_qthreadruntime.cpp');
 
     expect($source)->toContain(
         'PHP_MINIT(qt_qthreadruntime)',
+        'PHP_MSHUTDOWN_FUNCTION(qt)',
+        'qt_qthreadruntime_restore_sapi_deactivate();',
+        'PHP_MSHUTDOWN(qt)',
         'PHP_MINIT(qt_qfuture)',
         'PHP_MINIT(qt_qpromise)',
         'qt_qthreadruntime_is_worker_request_context()',
         'qt_qthreadruntime_shutdown_all(2000);',
         'qt_qthreadruntime_phpinfo_rows();',
     )->not->toContain('zend_ce_runtime_exception');
+
+    expect($runtimeSupport)->toContain(
+        'struct qt_qthreadruntime_request_snapshot',
+        'void *server_context{nullptr};',
+        'int argc{0};',
+        'char **argv{nullptr};',
+        'static bool qt_qthreadruntime_prepare_worker_request(const qt_qthreadruntime_request_snapshot &snapshot)',
+        'SG(server_context) = snapshot.server_context;',
+        'SG(request_info).argc = snapshot.argc;',
+        'SG(request_info).argv = snapshot.argv;',
+        'static int qt_qthreadruntime_guarded_cli_deactivate(void)',
+        'qt_qthreadruntime_saved_cli_deactivate',
+        'qt_qthreadruntime_restore_sapi_deactivate(void)',
+        'qt_qthreadruntime_capture_request_snapshot(&owner_request_snapshot_);',
+        'qt_qthreadruntime_shutdown_worker_request();',
+        'thread = bound_thread_;',
+        'bound_thread_.clear();',
+    );
 });
 
 it('uses a generated header guard that does not collide with qt', function (): void {
