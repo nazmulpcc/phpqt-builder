@@ -287,6 +287,10 @@ it('adds qobject property apis and handlers', function (): void {
         Assert::assertStringContainsString('ZEND_ACC_PUBLIC | ZEND_ACC_VIRTUAL', $cpp);
         Assert::assertStringContainsString('qt_qobject_handlers.read_property = qt_qobject_read_property;', $cpp);
         Assert::assertStringContainsString('qt_qobject_handlers.get_properties_for = qt_qobject_get_properties_for;', $cpp);
+        Assert::assertStringContainsString('#ifdef PHP_WIN32', $cpp);
+        Assert::assertStringContainsString('QObject::connectPropertyNotify() is not supported in this build yet', $cpp);
+        Assert::assertStringContainsString('auto _qt_notify = _qt_property.notifySignal();', $cpp);
+        Assert::assertStringContainsString('QMetaObject::Connection _qt_connection = QMetaObject::connect(', $cpp);
         Assert::assertStringNotContainsString('static bool qt_qobject_should_delegate_to_std_property(', $cpp);
         Assert::assertStringNotContainsString('static inline void qt_qobject_variant_to_property_zval(', $cpp);
         Assert::assertStringNotContainsString('#include "qt_qvariant.h"', $cpp);

@@ -841,8 +841,68 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, propertyInfo)
 /* connectPropertyNotify */
 ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connectPropertyNotify)
 {
+    #ifdef PHP_WIN32
     zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!}::connectPropertyNotify() is not supported in this build yet");
     RETURN_THROWS();
+    #else
+    zend_string *name;
+    zval *callback;
+
+    ZEND_PARSE_PARAMETERS_START(2, 2)
+        Z_PARAM_STR(name)
+        Z_PARAM_ZVAL(callback)
+    ZEND_PARSE_PARAMETERS_END();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    QObject *_qt_obj = intern->native_ptr != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
+    if (_qt_obj == NULL) {
+        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+    if (qt_qobject_meta_property_index(_qt_obj, name) < 0) {
+        if (qt_qobject_has_dynamic_property(_qt_obj, name)) {
+            zend_value_error("Dynamic property %s does not provide a NOTIFY signal.", ZSTR_VAL(name));
+        } else {
+            zend_value_error("Unknown property %s.", ZSTR_VAL(name));
+        }
+        RETURN_THROWS();
+    }
+
+    const int _qt_property_index = qt_qobject_meta_property_index(_qt_obj, name);
+    auto _qt_property = _qt_obj->metaObject()->property(_qt_property_index);
+    auto _qt_notify = _qt_property.notifySignal();
+    if (!_qt_notify.isValid()) {
+        zend_value_error("Property %s does not provide a NOTIFY signal.", ZSTR_VAL(name));
+        RETURN_THROWS();
+    }
+
+    auto _qt_callback = qt_signal_callback_create(_qt_obj, callback);
+    if (_qt_callback == nullptr) {
+        RETURN_THROWS();
+    }
+
+    struct _qt_property_notify_handler_t {
+        std::shared_ptr<qt_signal_callback_t> callback;
+
+        void operator()() const
+        {
+            auto _qt_callback_copy = callback;
+            qt_signal_dispatch([_qt_callback_copy]() mutable {
+                qt_signal_callback_invoke(_qt_callback_copy, 0, nullptr);
+            });
+        }
+    };
+
+    QMetaObject::Connection _qt_connection = QMetaObject::connect(
+        _qt_obj,
+        _qt_notify,
+        _qt_obj,
+        _qt_property_notify_handler_t{_qt_callback}
+    );
+
+    qt_qmetaobjectconnection_wrap(return_value, _qt_connection);
+    #endif
 }
 @endif
 @if($ctx->hasSignals())
