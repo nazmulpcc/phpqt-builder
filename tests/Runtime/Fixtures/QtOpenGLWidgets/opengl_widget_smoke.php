@@ -210,9 +210,13 @@ $widget->show();
 $frameBudget = new QTimer($widget);
 $frameBudget->setInterval(40);
 $frameBudget->onTimeout(static function () use ($widget): void {
-    if ($widget->paintHits >= 2 || $widget->error !== '') {
+    if ($widget->paintHits >= 1 || $widget->error !== '') {
         QCoreApplication::quit();
+
+        return;
     }
+
+    $widget->update();
 });
 $frameBudget->start();
 
