@@ -98,6 +98,9 @@ class ClassContext
     /** Whether this class is QObject itself */
     public readonly bool $isQObjectClass;
 
+    /** Whether runtime QMetaMethod -> functor notify connects are supported on the target platform */
+    public readonly bool $supportsRuntimeNotifyFunctorConnect;
+
     /** Whether this class needs an access shim for protected native calls */
     public readonly bool $requiresAccessShim;
 
@@ -219,6 +222,7 @@ class ClassContext
         array $classNamespaces = [],
         array $classNativeTypes = [],
         array $classMetadata = [],
+        bool $supportsRuntimeNotifyFunctorConnect = true,
     ) {
         $this->typeBridge = $typeBridge;
         $this->phpNamespace = $namespace;
@@ -235,6 +239,7 @@ class ClassContext
             : $phpClass->name;
         $this->isQObjectDerived = $phpClass->isQObjectDerived;
         $this->isQObjectClass = $phpClass->name === 'QObject';
+        $this->supportsRuntimeNotifyFunctorConnect = $supportsRuntimeNotifyFunctorConnect;
 
         // Naming
         $this->zendClassSymbol = $typeBridge->zendClassSymbol($namespace, $phpClass->name);

@@ -1,4 +1,4 @@
-{!! '<?php' !!}
+{!! '<' . '?php' !!}
 
 /** @generate-class-entries */
 

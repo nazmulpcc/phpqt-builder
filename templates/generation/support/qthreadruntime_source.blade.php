@@ -22,6 +22,7 @@
 #include <Zend/zend_stream.h>
 #include <ext/standard/info.h>
 #include <main/php_main.h>
+#include <main/SAPI.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -68,6 +69,16 @@ static std::atomic_uint64_t qt_qthreadruntime_total_events_in_drained{0};
 static std::atomic_uint64_t qt_qthreadruntime_total_events_in_dropped_full{0};
 static std::atomic_uint64_t qt_qthreadruntime_total_events_in_dropped_shutdown{0};
 static std::atomic_uint64_t qt_qthreadruntime_total_listener_dispatch_errors{0};
+typedef int (*qt_qthreadruntime_sapi_deactivate_t)(void);
+
+struct qt_qthreadruntime_request_snapshot {
+    void *server_context{nullptr};
+    int argc{0};
+    char **argv{nullptr};
+};
+
+static qt_qthreadruntime_sapi_deactivate_t qt_qthreadruntime_saved_cli_deactivate = nullptr;
+static bool qt_qthreadruntime_cli_deactivate_guard_installed = false;
 
 static zend_always_inline zend_class_entry *qt_qthreadruntime_default_exception_ce()
 {
@@ -86,6 +97,117 @@ static zend_always_inline void qt_qthreadruntime_throw_nts_runtime_exception(con
         "%s requires a ZTS PHP build (thread start/management APIs are unavailable on NTS).",
         method_name
     );
+}
+
+static void qt_qthreadruntime_capture_request_snapshot(qt_qthreadruntime_request_snapshot *snapshot)
+{
+    if (snapshot == nullptr) {
+        return;
+    }
+
+    snapshot->server_context = SG(server_context);
+    snapshot->argc = SG(request_info).argc;
+    snapshot->argv = SG(request_info).argv;
+}
+
+static void qt_qthreadruntime_clear_worker_tls(void)
+{
+    qt_qthreadruntime_tls_current_state = nullptr;
+    qt_qthreadruntime_tls_current_job_id = 0;
+    qt_qthreadruntime_tls_current_task_host = nullptr;
+    qt_qthreadruntime_tls_current_task_token = 0;
+    qt_qthreadruntime_tls_worker_request = false;
+    qt_qthreadruntime_tls_interrupted = false;
+}
+
+static bool qt_qthreadruntime_prepare_worker_request(const qt_qthreadruntime_request_snapshot &snapshot)
+{
+#if !defined(ZTS)
+    (void) snapshot;
+    return false;
+#else
+    qt_qthreadruntime_tls_worker_request = true;
+    qt_qthreadruntime_tls_interrupted = false;
+
+    ts_resource(0);
+    TSRMLS_CACHE_UPDATE();
+
+    SG(server_context) = snapshot.server_context;
+    SG(request_info).argc = snapshot.argc;
+    SG(request_info).argv = snapshot.argv;
+    SG(request_info).argv0 = NULL;
+
+    PG(expose_php) = 0;
+    PG(auto_globals_jit) = 1;
+#if PHP_VERSION_ID >= 80100
+    PG(enable_dl) = false;
+#else
+    PG(enable_dl) = 0;
+#endif
+
+    if (php_request_startup() != SUCCESS) {
+        ts_free_thread();
+        qt_qthreadruntime_clear_worker_tls();
+        return false;
+    }
+
+    PG(during_request_startup) = 0;
+    SG(sapi_started) = 0;
+    SG(headers_sent) = 1;
+    SG(request_info).no_headers = 1;
+
+    return true;
+#endif
+}
+
+static void qt_qthreadruntime_shutdown_worker_request(void)
+{
+#if defined(ZTS)
+    gc_collect_cycles();
+    php_request_shutdown(NULL);
+    ts_free_thread();
+#endif
+    qt_qthreadruntime_clear_worker_tls();
+}
+
+static bool qt_qthreadruntime_is_cli_sapi(void)
+{
+    return sapi_module.name != NULL && strncmp(sapi_module.name, "cli", sizeof("cli") - 1) == 0;
+}
+
+static int qt_qthreadruntime_guarded_cli_deactivate(void)
+{
+    if (qt_qthreadruntime_is_worker_request_context()) {
+        return SUCCESS;
+    }
+
+    if (qt_qthreadruntime_saved_cli_deactivate != nullptr) {
+        return qt_qthreadruntime_saved_cli_deactivate();
+    }
+
+    return SUCCESS;
+}
+
+static void qt_qthreadruntime_install_cli_deactivate_guard(void)
+{
+    if (qt_qthreadruntime_cli_deactivate_guard_installed || !qt_qthreadruntime_is_cli_sapi()) {
+        return;
+    }
+
+    qt_qthreadruntime_saved_cli_deactivate = sapi_module.deactivate;
+    sapi_module.deactivate = qt_qthreadruntime_guarded_cli_deactivate;
+    qt_qthreadruntime_cli_deactivate_guard_installed = true;
+}
+
+PHP_QT_API void qt_qthreadruntime_restore_sapi_deactivate(void)
+{
+    if (!qt_qthreadruntime_cli_deactivate_guard_installed || !qt_qthreadruntime_is_cli_sapi()) {
+        return;
+    }
+
+    sapi_module.deactivate = qt_qthreadruntime_saved_cli_deactivate;
+    qt_qthreadruntime_saved_cli_deactivate = nullptr;
+    qt_qthreadruntime_cli_deactivate_guard_installed = false;
 }
 
 static size_t qt_qthreadruntime_env_queue_depth()
@@ -403,6 +525,7 @@ public:
 #if !defined(ZTS)
         return false;
 #else
+        qt_qthreadruntime_capture_request_snapshot(&owner_request_snapshot_);
         stopping_ = false;
         worker_bootstrap_failed_ = false;
         owner_event_drain_scheduled_.store(false, std::memory_order_release);
@@ -859,11 +982,7 @@ public:
 #if !defined(ZTS)
         return;
 #else
-        qt_qthreadruntime_tls_worker_request = true;
-        ts_resource(0);
-        TSRMLS_CACHE_UPDATE();
-
-        if (php_request_startup() != SUCCESS) {
+        if (!qt_qthreadruntime_prepare_worker_request(owner_request_snapshot_)) {
             std::lock_guard<std::mutex> lock(mutex_);
             worker_bootstrap_failed_ = true;
             running_ = false;
@@ -904,10 +1023,7 @@ public:
                 }
                 dropEventQueuesLocked(true);
                 result_cv_.notify_all();
-                gc_collect_cycles();
-                php_request_shutdown(NULL);
-                ts_free_thread();
-                qt_qthreadruntime_tls_worker_request = false;
+                qt_qthreadruntime_shutdown_worker_request();
                 return;
             }
         }
@@ -960,10 +1076,7 @@ public:
             dropEventQueuesLocked(true);
         }
 
-        gc_collect_cycles();
-        php_request_shutdown(NULL);
-        ts_free_thread();
-        qt_qthreadruntime_tls_worker_request = false;
+        qt_qthreadruntime_shutdown_worker_request();
 #endif
     }
 
@@ -1304,6 +1417,7 @@ private:
     size_t max_event_out_queue_depth_{qt_qthreadruntime_env_event_out_queue_depth()};
     size_t max_event_in_queue_depth_{qt_qthreadruntime_env_event_in_queue_depth()};
     std::string bootstrap_script_;
+    qt_qthreadruntime_request_snapshot owner_request_snapshot_;
     bool running_{false};
     bool stopping_{false};
     bool worker_bootstrap_failed_{false};
@@ -1326,6 +1440,7 @@ struct qt_qthread_task_host {
     size_t max_event_out_queue_depth_{qt_qthreadruntime_env_event_out_queue_depth()};
     size_t max_event_in_queue_depth_{qt_qthreadruntime_env_event_in_queue_depth()};
     std::string bootstrap_script_;
+    qt_qthreadruntime_request_snapshot owner_request_snapshot_;
     std::string pending_callable_name_;
     std::string pending_args_payload_;
     uint64_t pending_task_token_{0};
@@ -1586,6 +1701,7 @@ struct qt_qthread_task_host {
 
             pending_callable_name_ = callable_name;
             pending_args_payload_ = args_payload;
+            qt_qthreadruntime_capture_request_snapshot(&owner_request_snapshot_);
             has_pending_task_ = true;
             interrupted_ = false;
             pending_task_token_ = forced_token;
@@ -1885,6 +2001,7 @@ struct qt_qthread_task_host {
             inbound_cv_.notify_all();
             future_cv_.notify_all();
             thread = bound_thread_;
+            bound_thread_.clear();
         }
 
         QObject::disconnect(started_connection_);
@@ -1947,10 +2064,8 @@ private:
         qt_qthreadruntime_tls_current_task_host = this;
         qt_qthreadruntime_tls_current_task_token = task_token;
         qt_qthreadruntime_tls_interrupted = false;
-        ts_resource(0);
-        TSRMLS_CACHE_UPDATE();
 
-        bool startup_ok = php_request_startup() == SUCCESS;
+        bool startup_ok = qt_qthreadruntime_prepare_worker_request(owner_request_snapshot_);
         bool bootstrap_ok = true;
         qt_qthreadruntime_result task_result;
         task_result.success = true;
@@ -2080,15 +2195,8 @@ private:
         }
 
         if (startup_ok) {
-            gc_collect_cycles();
-            php_request_shutdown(NULL);
+            qt_qthreadruntime_shutdown_worker_request();
         }
-        ts_free_thread();
-
-        qt_qthreadruntime_tls_current_task_host = nullptr;
-        qt_qthreadruntime_tls_current_task_token = 0;
-        qt_qthreadruntime_tls_worker_request = false;
-        qt_qthreadruntime_tls_interrupted = false;
 
         qt_qthreadruntime_value terminal_payload;
         terminal_payload.type = qt_qthreadruntime_value_type::array_value;
@@ -3079,7 +3187,7 @@ static void qt_qfuture_throw_result_error(const qt_qthreadruntime_result &result
     zend_throw_exception(exception_ce, message.c_str(), result.error.code);
 }
 
-PHP_METHOD(QFuture, isValid)
+PHP_METHOD(Qt_Core_QFuture, isValid)
 {
     ZEND_PARSE_PARAMETERS_NONE();
 
@@ -3091,7 +3199,7 @@ PHP_METHOD(QFuture, isValid)
     RETURN_BOOL(intern->host != NULL && intern->task_token != 0 && qt_qthread_task_host_future_is_valid(intern->host, intern->task_token));
 }
 
-PHP_METHOD(QFuture, isRunning)
+PHP_METHOD(Qt_Core_QFuture, isRunning)
 {
     ZEND_PARSE_PARAMETERS_NONE();
     qt_qfuture_object *intern = Z_QFUTURE_P(ZEND_THIS);
@@ -3105,7 +3213,7 @@ PHP_METHOD(QFuture, isRunning)
     RETURN_BOOL(qt_qthread_task_host_future_is_running(intern->host, intern->task_token));
 }
 
-PHP_METHOD(QFuture, isFinished)
+PHP_METHOD(Qt_Core_QFuture, isFinished)
 {
     ZEND_PARSE_PARAMETERS_NONE();
     qt_qfuture_object *intern = Z_QFUTURE_P(ZEND_THIS);
@@ -3122,7 +3230,7 @@ PHP_METHOD(QFuture, isFinished)
     RETURN_BOOL(qt_qthread_task_host_future_is_finished(intern->host, intern->task_token));
 }
 
-PHP_METHOD(QFuture, isCanceled)
+PHP_METHOD(Qt_Core_QFuture, isCanceled)
 {
     ZEND_PARSE_PARAMETERS_NONE();
     qt_qfuture_object *intern = Z_QFUTURE_P(ZEND_THIS);
@@ -3139,7 +3247,7 @@ PHP_METHOD(QFuture, isCanceled)
     RETURN_BOOL(qt_qthread_task_host_future_is_canceled(intern->host, intern->task_token));
 }
 
-PHP_METHOD(QFuture, cancel)
+PHP_METHOD(Qt_Core_QFuture, cancel)
 {
     ZEND_PARSE_PARAMETERS_NONE();
     qt_qfuture_object *intern = Z_QFUTURE_P(ZEND_THIS);
@@ -3152,7 +3260,7 @@ PHP_METHOD(QFuture, cancel)
     RETURN_BOOL(qt_qthread_task_host_future_cancel(intern->host, intern->task_token));
 }
 
-PHP_METHOD(QFuture, wait)
+PHP_METHOD(Qt_Core_QFuture, wait)
 {
     zend_long timeout_ms = 0;
     ZEND_PARSE_PARAMETERS_START(0, 1)
@@ -3182,7 +3290,7 @@ PHP_METHOD(QFuture, wait)
     RETURN_BOOL(finished);
 }
 
-PHP_METHOD(QFuture, result)
+PHP_METHOD(Qt_Core_QFuture, result)
 {
     zend_long timeout_ms = 0;
     ZEND_PARSE_PARAMETERS_START(0, 1)
@@ -3264,7 +3372,7 @@ PHP_METHOD(QFuture, result)
     }
 }
 
-PHP_METHOD(QFuture, on)
+PHP_METHOD(Qt_Core_QFuture, on)
 {
     zend_string *event_name = NULL;
     zval *listener = NULL;
@@ -3305,7 +3413,7 @@ PHP_METHOD(QFuture, on)
     RETURN_LONG((zend_long) listener_id);
 }
 
-PHP_METHOD(QFuture, off)
+PHP_METHOD(Qt_Core_QFuture, off)
 {
     zend_long listener_id = 0;
     ZEND_PARSE_PARAMETERS_START(1, 1)
@@ -3319,7 +3427,7 @@ PHP_METHOD(QFuture, off)
     RETURN_BOOL(qt_qthread_task_host_off(intern->host, (uint64_t) listener_id));
 }
 
-PHP_METHOD(QFuture, drainEvents)
+PHP_METHOD(Qt_Core_QFuture, drainEvents)
 {
     zend_long max_items = -1;
     ZEND_PARSE_PARAMETERS_START(0, 1)
@@ -3350,7 +3458,7 @@ static void qt_qfuture_create_continuation(zval *return_value, zval *parent_futu
     ZVAL_COPY(&intern->continuation->handler, handler);
 }
 
-PHP_METHOD(QFuture, then)
+PHP_METHOD(Qt_Core_QFuture, then)
 {
     zval *handler = NULL;
     ZEND_PARSE_PARAMETERS_START(1, 1)
@@ -3367,7 +3475,7 @@ PHP_METHOD(QFuture, then)
     qt_qfuture_create_continuation(return_value, ZEND_THIS, handler, QT_QFUTURE_CONTINUATION_THEN);
 }
 
-PHP_METHOD(QFuture, onFailed)
+PHP_METHOD(Qt_Core_QFuture, onFailed)
 {
     zval *handler = NULL;
     ZEND_PARSE_PARAMETERS_START(1, 1)
@@ -3384,7 +3492,7 @@ PHP_METHOD(QFuture, onFailed)
     qt_qfuture_create_continuation(return_value, ZEND_THIS, handler, QT_QFUTURE_CONTINUATION_ON_FAILED);
 }
 
-PHP_METHOD(QFuture, onCanceled)
+PHP_METHOD(Qt_Core_QFuture, onCanceled)
 {
     zval *handler = NULL;
     ZEND_PARSE_PARAMETERS_START(1, 1)
@@ -3402,19 +3510,19 @@ PHP_METHOD(QFuture, onCanceled)
 }
 
 static const zend_function_entry qt_qfuture_methods[] = {
-    ZEND_ME(QFuture, isValid, arginfo_class_Qt_Core_QFuture_isValid, ZEND_ACC_PUBLIC)
-    ZEND_ME(QFuture, isRunning, arginfo_class_Qt_Core_QFuture_isRunning, ZEND_ACC_PUBLIC)
-    ZEND_ME(QFuture, isFinished, arginfo_class_Qt_Core_QFuture_isFinished, ZEND_ACC_PUBLIC)
-    ZEND_ME(QFuture, isCanceled, arginfo_class_Qt_Core_QFuture_isCanceled, ZEND_ACC_PUBLIC)
-    ZEND_ME(QFuture, cancel, arginfo_class_Qt_Core_QFuture_cancel, ZEND_ACC_PUBLIC)
-    ZEND_ME(QFuture, wait, arginfo_class_Qt_Core_QFuture_wait, ZEND_ACC_PUBLIC)
-    ZEND_ME(QFuture, result, arginfo_class_Qt_Core_QFuture_result, ZEND_ACC_PUBLIC)
-    ZEND_ME(QFuture, on, arginfo_class_Qt_Core_QFuture_on, ZEND_ACC_PUBLIC)
-    ZEND_ME(QFuture, off, arginfo_class_Qt_Core_QFuture_off, ZEND_ACC_PUBLIC)
-    ZEND_ME(QFuture, drainEvents, arginfo_class_Qt_Core_QFuture_drainEvents, ZEND_ACC_PUBLIC)
-    ZEND_ME(QFuture, then, arginfo_class_Qt_Core_QFuture_then, ZEND_ACC_PUBLIC)
-    ZEND_ME(QFuture, onFailed, arginfo_class_Qt_Core_QFuture_onFailed, ZEND_ACC_PUBLIC)
-    ZEND_ME(QFuture, onCanceled, arginfo_class_Qt_Core_QFuture_onCanceled, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QFuture, isValid, arginfo_class_Qt_Core_QFuture_isValid, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QFuture, isRunning, arginfo_class_Qt_Core_QFuture_isRunning, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QFuture, isFinished, arginfo_class_Qt_Core_QFuture_isFinished, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QFuture, isCanceled, arginfo_class_Qt_Core_QFuture_isCanceled, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QFuture, cancel, arginfo_class_Qt_Core_QFuture_cancel, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QFuture, wait, arginfo_class_Qt_Core_QFuture_wait, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QFuture, result, arginfo_class_Qt_Core_QFuture_result, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QFuture, on, arginfo_class_Qt_Core_QFuture_on, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QFuture, off, arginfo_class_Qt_Core_QFuture_off, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QFuture, drainEvents, arginfo_class_Qt_Core_QFuture_drainEvents, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QFuture, then, arginfo_class_Qt_Core_QFuture_then, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QFuture, onFailed, arginfo_class_Qt_Core_QFuture_onFailed, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QFuture, onCanceled, arginfo_class_Qt_Core_QFuture_onCanceled, ZEND_ACC_PUBLIC)
     ZEND_FE_END
 };
 
@@ -3441,7 +3549,7 @@ static HashTable *qt_qpromise_get_gc(zend_object *object, zval **table, int *n)
     return zend_std_get_properties(object);
 }
 
-PHP_METHOD(QPromise, current)
+PHP_METHOD(Qt_Core_QPromise, current)
 {
     ZEND_PARSE_PARAMETERS_NONE();
 #if !defined(ZTS)
@@ -3462,7 +3570,7 @@ PHP_METHOD(QPromise, current)
 #endif
 }
 
-PHP_METHOD(QPromise, publish)
+PHP_METHOD(Qt_Core_QPromise, publish)
 {
     zend_string *event_name = NULL;
     zval *payload = NULL;
@@ -3487,7 +3595,7 @@ PHP_METHOD(QPromise, publish)
 #endif
 }
 
-PHP_METHOD(QPromise, receive)
+PHP_METHOD(Qt_Core_QPromise, receive)
 {
     zend_long timeout_ms = 0;
     ZEND_PARSE_PARAMETERS_START(0, 1)
@@ -3513,7 +3621,7 @@ PHP_METHOD(QPromise, receive)
 #endif
 }
 
-PHP_METHOD(QPromise, isCanceled)
+PHP_METHOD(Qt_Core_QPromise, isCanceled)
 {
     ZEND_PARSE_PARAMETERS_NONE();
 #if !defined(ZTS)
@@ -3523,7 +3631,7 @@ PHP_METHOD(QPromise, isCanceled)
 #endif
 }
 
-PHP_METHOD(QPromise, setProgressRange)
+PHP_METHOD(Qt_Core_QPromise, setProgressRange)
 {
     zend_long minimum = 0;
     zend_long maximum = 0;
@@ -3535,7 +3643,7 @@ PHP_METHOD(QPromise, setProgressRange)
     qt_qpromise_tls_progress_maximum = maximum;
 }
 
-PHP_METHOD(QPromise, setProgressValue)
+PHP_METHOD(Qt_Core_QPromise, setProgressValue)
 {
     zend_long value = 0;
     ZEND_PARSE_PARAMETERS_START(1, 1)
@@ -3558,7 +3666,7 @@ PHP_METHOD(QPromise, setProgressValue)
 #endif
 }
 
-PHP_METHOD(QPromise, setProgressValueAndText)
+PHP_METHOD(Qt_Core_QPromise, setProgressValueAndText)
 {
     zend_long value = 0;
     zend_string *text = NULL;
@@ -3584,13 +3692,13 @@ PHP_METHOD(QPromise, setProgressValueAndText)
 }
 
 static const zend_function_entry qt_qpromise_methods[] = {
-    ZEND_ME(QPromise, current, arginfo_class_Qt_Core_QPromise_current, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
-    ZEND_ME(QPromise, publish, arginfo_class_Qt_Core_QPromise_publish, ZEND_ACC_PUBLIC)
-    ZEND_ME(QPromise, receive, arginfo_class_Qt_Core_QPromise_receive, ZEND_ACC_PUBLIC)
-    ZEND_ME(QPromise, isCanceled, arginfo_class_Qt_Core_QPromise_isCanceled, ZEND_ACC_PUBLIC)
-    ZEND_ME(QPromise, setProgressRange, arginfo_class_Qt_Core_QPromise_setProgressRange, ZEND_ACC_PUBLIC)
-    ZEND_ME(QPromise, setProgressValue, arginfo_class_Qt_Core_QPromise_setProgressValue, ZEND_ACC_PUBLIC)
-    ZEND_ME(QPromise, setProgressValueAndText, arginfo_class_Qt_Core_QPromise_setProgressValueAndText, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QPromise, current, arginfo_class_Qt_Core_QPromise_current, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    ZEND_ME(Qt_Core_QPromise, publish, arginfo_class_Qt_Core_QPromise_publish, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QPromise, receive, arginfo_class_Qt_Core_QPromise_receive, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QPromise, isCanceled, arginfo_class_Qt_Core_QPromise_isCanceled, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QPromise, setProgressRange, arginfo_class_Qt_Core_QPromise_setProgressRange, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QPromise, setProgressValue, arginfo_class_Qt_Core_QPromise_setProgressValue, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QPromise, setProgressValueAndText, arginfo_class_Qt_Core_QPromise_setProgressValueAndText, ZEND_ACC_PUBLIC)
     ZEND_FE_END
 };
 
@@ -3633,12 +3741,12 @@ static HashTable *qt_qthreadruntime_get_gc(zend_object *object, zval **table, in
     return zend_std_get_properties(object);
 }
 
-PHP_METHOD(QThreadRuntime, __construct)
+PHP_METHOD(Qt_Core_QThreadRuntime, __construct)
 {
     ZEND_PARSE_PARAMETERS_NONE();
 }
 
-PHP_METHOD(QThreadRuntime, start)
+PHP_METHOD(Qt_Core_QThreadRuntime, start)
 {
     ZEND_PARSE_PARAMETERS_NONE();
 
@@ -3659,7 +3767,7 @@ PHP_METHOD(QThreadRuntime, start)
 #endif
 }
 
-PHP_METHOD(QThreadRuntime, setBootstrapScript)
+PHP_METHOD(Qt_Core_QThreadRuntime, setBootstrapScript)
 {
     zend_string *path = NULL;
     ZEND_PARSE_PARAMETERS_START(0, 1)
@@ -3686,7 +3794,7 @@ PHP_METHOD(QThreadRuntime, setBootstrapScript)
 #endif
 }
 
-PHP_METHOD(QThreadRuntime, submit)
+PHP_METHOD(Qt_Core_QThreadRuntime, submit)
 {
     zval *callable = NULL;
     zval *args = NULL;
@@ -3767,7 +3875,7 @@ PHP_METHOD(QThreadRuntime, submit)
 #endif
 }
 
-PHP_METHOD(QThreadRuntime, on)
+PHP_METHOD(Qt_Core_QThreadRuntime, on)
 {
     zend_string *event_name = NULL;
     zval *listener = NULL;
@@ -3804,7 +3912,7 @@ PHP_METHOD(QThreadRuntime, on)
 #endif
 }
 
-PHP_METHOD(QThreadRuntime, off)
+PHP_METHOD(Qt_Core_QThreadRuntime, off)
 {
     zend_long listener_id = 0;
     ZEND_PARSE_PARAMETERS_START(1, 1)
@@ -3824,7 +3932,7 @@ PHP_METHOD(QThreadRuntime, off)
 #endif
 }
 
-PHP_METHOD(QThreadRuntime, drainEvents)
+PHP_METHOD(Qt_Core_QThreadRuntime, drainEvents)
 {
     zend_long max_items = -1;
     ZEND_PARSE_PARAMETERS_START(0, 1)
@@ -3845,7 +3953,7 @@ PHP_METHOD(QThreadRuntime, drainEvents)
 #endif
 }
 
-PHP_METHOD(QThreadRuntime, send)
+PHP_METHOD(Qt_Core_QThreadRuntime, send)
 {
     zend_long job_id = 0;
     zend_string *event_name = NULL;
@@ -3894,7 +4002,7 @@ PHP_METHOD(QThreadRuntime, send)
 #endif
 }
 
-PHP_METHOD(QThreadRuntime, publish)
+PHP_METHOD(Qt_Core_QThreadRuntime, publish)
 {
     zend_string *event_name = NULL;
     zval *payload = NULL;
@@ -3921,7 +4029,7 @@ PHP_METHOD(QThreadRuntime, publish)
 #endif
 }
 
-PHP_METHOD(QThreadRuntime, receive)
+PHP_METHOD(Qt_Core_QThreadRuntime, receive)
 {
     zend_long timeout_ms = 0;
     ZEND_PARSE_PARAMETERS_START(0, 1)
@@ -3948,7 +4056,7 @@ PHP_METHOD(QThreadRuntime, receive)
 #endif
 }
 
-PHP_METHOD(QThreadRuntime, await)
+PHP_METHOD(Qt_Core_QThreadRuntime, await)
 {
     zend_long job_id = 0;
     zend_long timeout_ms = 0;
@@ -4011,7 +4119,7 @@ PHP_METHOD(QThreadRuntime, await)
 #endif
 }
 
-PHP_METHOD(QThreadRuntime, cancel)
+PHP_METHOD(Qt_Core_QThreadRuntime, cancel)
 {
     zend_long job_id = 0;
     ZEND_PARSE_PARAMETERS_START(1, 1)
@@ -4031,7 +4139,7 @@ PHP_METHOD(QThreadRuntime, cancel)
 #endif
 }
 
-PHP_METHOD(QThreadRuntime, stop)
+PHP_METHOD(Qt_Core_QThreadRuntime, stop)
 {
     zend_long timeout_ms = 5000;
     ZEND_PARSE_PARAMETERS_START(0, 1)
@@ -4052,7 +4160,7 @@ PHP_METHOD(QThreadRuntime, stop)
 #endif
 }
 
-PHP_METHOD(QThreadRuntime, isRunning)
+PHP_METHOD(Qt_Core_QThreadRuntime, isRunning)
 {
     ZEND_PARSE_PARAMETERS_NONE();
 
@@ -4068,7 +4176,7 @@ PHP_METHOD(QThreadRuntime, isRunning)
 #endif
 }
 
-PHP_METHOD(QThreadRuntime, stats)
+PHP_METHOD(Qt_Core_QThreadRuntime, stats)
 {
     ZEND_PARSE_PARAMETERS_NONE();
 
@@ -4088,26 +4196,28 @@ PHP_METHOD(QThreadRuntime, stats)
 }
 
 static const zend_function_entry qt_qthreadruntime_methods[] = {
-    ZEND_ME(QThreadRuntime, __construct, arginfo_class_Qt_Core_QThreadRuntime___construct, ZEND_ACC_PUBLIC)
-    ZEND_ME(QThreadRuntime, setBootstrapScript, arginfo_class_Qt_Core_QThreadRuntime_setBootstrapScript, ZEND_ACC_PUBLIC)
-    ZEND_ME(QThreadRuntime, start, arginfo_class_Qt_Core_QThreadRuntime_start, ZEND_ACC_PUBLIC)
-    ZEND_ME(QThreadRuntime, submit, arginfo_class_Qt_Core_QThreadRuntime_submit, ZEND_ACC_PUBLIC)
-    ZEND_ME(QThreadRuntime, on, arginfo_class_Qt_Core_QThreadRuntime_on, ZEND_ACC_PUBLIC)
-    ZEND_ME(QThreadRuntime, off, arginfo_class_Qt_Core_QThreadRuntime_off, ZEND_ACC_PUBLIC)
-    ZEND_ME(QThreadRuntime, drainEvents, arginfo_class_Qt_Core_QThreadRuntime_drainEvents, ZEND_ACC_PUBLIC)
-    ZEND_ME(QThreadRuntime, send, arginfo_class_Qt_Core_QThreadRuntime_send, ZEND_ACC_PUBLIC)
-    ZEND_ME(QThreadRuntime, publish, arginfo_class_Qt_Core_QThreadRuntime_publish, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
-    ZEND_ME(QThreadRuntime, receive, arginfo_class_Qt_Core_QThreadRuntime_receive, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
-    ZEND_ME(QThreadRuntime, await, arginfo_class_Qt_Core_QThreadRuntime_await, ZEND_ACC_PUBLIC)
-    ZEND_ME(QThreadRuntime, cancel, arginfo_class_Qt_Core_QThreadRuntime_cancel, ZEND_ACC_PUBLIC)
-    ZEND_ME(QThreadRuntime, stop, arginfo_class_Qt_Core_QThreadRuntime_stop, ZEND_ACC_PUBLIC)
-    ZEND_ME(QThreadRuntime, isRunning, arginfo_class_Qt_Core_QThreadRuntime_isRunning, ZEND_ACC_PUBLIC)
-    ZEND_ME(QThreadRuntime, stats, arginfo_class_Qt_Core_QThreadRuntime_stats, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QThreadRuntime, __construct, arginfo_class_Qt_Core_QThreadRuntime___construct, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QThreadRuntime, setBootstrapScript, arginfo_class_Qt_Core_QThreadRuntime_setBootstrapScript, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QThreadRuntime, start, arginfo_class_Qt_Core_QThreadRuntime_start, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QThreadRuntime, submit, arginfo_class_Qt_Core_QThreadRuntime_submit, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QThreadRuntime, on, arginfo_class_Qt_Core_QThreadRuntime_on, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QThreadRuntime, off, arginfo_class_Qt_Core_QThreadRuntime_off, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QThreadRuntime, drainEvents, arginfo_class_Qt_Core_QThreadRuntime_drainEvents, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QThreadRuntime, send, arginfo_class_Qt_Core_QThreadRuntime_send, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QThreadRuntime, publish, arginfo_class_Qt_Core_QThreadRuntime_publish, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    ZEND_ME(Qt_Core_QThreadRuntime, receive, arginfo_class_Qt_Core_QThreadRuntime_receive, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    ZEND_ME(Qt_Core_QThreadRuntime, await, arginfo_class_Qt_Core_QThreadRuntime_await, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QThreadRuntime, cancel, arginfo_class_Qt_Core_QThreadRuntime_cancel, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QThreadRuntime, stop, arginfo_class_Qt_Core_QThreadRuntime_stop, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QThreadRuntime, isRunning, arginfo_class_Qt_Core_QThreadRuntime_isRunning, ZEND_ACC_PUBLIC)
+    ZEND_ME(Qt_Core_QThreadRuntime, stats, arginfo_class_Qt_Core_QThreadRuntime_stats, ZEND_ACC_PUBLIC)
     ZEND_FE_END
 };
 
 PHP_MINIT_FUNCTION(qt_qthreadruntime)
 {
+    qt_qthreadruntime_install_cli_deactivate_guard();
+
     zend_class_entry ce;
     INIT_NS_CLASS_ENTRY(ce, "Qt\\Core", "QThreadRuntime", qt_qthreadruntime_methods);
     ce.create_object = qt_qthreadruntime_create_object;

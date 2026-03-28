@@ -11,7 +11,14 @@
 #include "config.h"
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include "php.h"
+#ifdef __cplusplus
+}
+#endif
+#include "qt_php_compat.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -81,6 +88,7 @@ PHP_MINIT_FUNCTION(qt_qfuture);
 PHP_MINIT_FUNCTION(qt_qpromise);
 PHP_QT_API void qt_qthreadruntime_shutdown_all(zend_long timeout_ms);
 PHP_QT_API bool qt_qthreadruntime_is_worker_request_context(void);
+PHP_QT_API void qt_qthreadruntime_restore_sapi_deactivate(void);
 PHP_QT_API void qt_qthreadruntime_phpinfo_rows(void);
 PHP_QT_API bool qt_qthreadruntime_payload_supported_for_worker(zval *value);
 PHP_QT_API bool qt_qthreadruntime_worker_publish_zval(zend_string *event_name, zval *payload, std::string *error);

@@ -1,7 +1,7 @@
 @php
 /** @var \QtBuilder\CodeGen\EnumHolderContext $ctx */
 @endphp
-{!! '<?php' !!}
+{!! '<' . '?php' !!}
 
 /** @generate-class-entries */
 

@@ -29,6 +29,7 @@ it('generates the extension tree from a fixture qt root', function (): void {
 
     expect($result)->toBeSuccessfulCommandResult();
     expect(is_file($outputDir . '/config.m4'))->toBeTrue()
+        ->and(is_file($outputDir . '/config.w32'))->toBeTrue()
         ->and(is_file($outputDir . '/php_qt.h'))->toBeTrue()
         ->and(is_file($outputDir . '/qt.cpp'))->toBeTrue()
         ->and(is_file($outputDir . '/classes/qt_buildinfo.cpp'))->toBeTrue()
@@ -138,6 +139,97 @@ it('generates the extension tree from a fixture qt root', function (): void {
 
     $stub = (string) file_get_contents($outputDir . '/classes/qt_qtree.stub.php');
     expect($stub)->toContain('QNode|null $node = null');
+});
+
+it('stages a monolithic build directly into a php-src extension tree', function (): void {
+    $fixtureRoot = qt_fixture_path('qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-stage-static-' . bin2hex(random_bytes(4));
+    $metadataDir = $buildRoot . '/generated';
+    $stageTarget = qt_temp_dir('qtbuilder-stage-target-') . '/php-src/ext/qt';
+    $system = FakeSystemInformation::passing();
+    $system->setOsFamily('Windows');
+    $bootstrapper = new FakeExtensionBootstrapper();
+
+    $result = qt_command_result(
+        new BuildCommand($system, $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            'modules' => 'QtCore',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+            '--stage-static-to' => $stageTarget,
+        ],
+    );
+
+    expect($result)->toBeSuccessfulCommandResult()
+        ->and(is_file($stageTarget . '/config.m4'))->toBeTrue()
+        ->and(is_file($stageTarget . '/config.w32'))->toBeTrue()
+        ->and(is_file($stageTarget . '/php_qt.h'))->toBeTrue()
+        ->and(is_file($stageTarget . '/qt.cpp'))->toBeTrue()
+        ->and(is_file($stageTarget . '/classes/qt_qpoint.cpp'))->toBeTrue()
+        ->and(is_file($stageTarget . '/src_00/qt_bucket_00.cpp'))->toBeTrue()
+        ->and(is_file($stageTarget . '/.qtb-stage-manifest.json'))->toBeTrue()
+        ->and(is_file($buildRoot . '/ext/configure'))->toBeFalse()
+        ->and(is_file($buildRoot . '/ext/Makefile'))->toBeFalse()
+        ->and($bootstrapper->contexts)->toHaveCount(0)
+        ->and($result['display'])->toContain(
+            'Static staging target:',
+            'Skipping bootstrap (--no-build).',
+            'Static staging complete:',
+            'Next:',
+        );
+
+    $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
+    $normalizedTarget = str_replace('\\', '/', $stageTarget);
+    expect($summary['bootstrap_disabled'] ?? null)->toBeTrue()
+        ->and($summary['static_stage']['enabled'] ?? null)->toBeTrue()
+        ->and($summary['static_stage']['successful'] ?? null)->toBeTrue()
+        ->and($summary['static_stage']['target_dir'] ?? null)->toBe($normalizedTarget)
+        ->and($summary['static_stage']['staged_files'] ?? null)->toBeGreaterThan(0);
+});
+
+it('prunes stale previously staged files when rerunning static staging', function (): void {
+    $fixtureRoot = qt_fixture_path('qt');
+    $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-stage-prune-' . bin2hex(random_bytes(4));
+    $metadataDir = $buildRoot . '/generated';
+    $stageTarget = qt_temp_dir('qtbuilder-stage-prune-target-') . '/php-src/ext/qt';
+    $bootstrapper = new FakeExtensionBootstrapper();
+
+    $first = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            'modules' => 'QtCore',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+            '--stage-static-to' => $stageTarget,
+        ],
+    );
+    expect($first)->toBeSuccessfulCommandResult();
+
+    $manifestPath = $stageTarget . '/.qtb-stage-manifest.json';
+    $manifest = qt_decode_json((string) file_get_contents($manifestPath));
+    $manifest['files'][] = 'classes/qt_stale.h';
+    file_put_contents($manifestPath, json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
+    file_put_contents($stageTarget . '/classes/qt_stale.h', "stale\n");
+
+    $second = qt_command_result(
+        new BuildCommand(FakeSystemInformation::passing(), $bootstrapper),
+        [
+            '--qt-path' => $fixtureRoot,
+            'modules' => 'QtCore',
+            '--output' => $buildRoot,
+            '--jobs' => '2',
+            '--stage-static-to' => $stageTarget,
+        ],
+    );
+
+    expect($second)->toBeSuccessfulCommandResult()
+        ->and(is_file($stageTarget . '/classes/qt_stale.h'))->toBeFalse()
+        ->and($second['display'])->toContain('Static stage file writes:');
+
+    $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
+    expect($summary['static_stage']['pruned_files'] ?? null)->toBe(1);
 });
 
 it('reuses an existing discovery cache', function (): void {

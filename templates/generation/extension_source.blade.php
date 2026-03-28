@@ -10,8 +10,15 @@ $buildInfoDependencies = $buildInfoModule !== null && $buildInfoModule->dependen
 # include <config.h>
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include "php.h"
 #include "ext/standard/info.h"
+#ifdef __cplusplus
+}
+#endif
+#include "qt_php_compat.h"
 #include <QtCore/QCoreApplication>
 #include <QtCore/QMetaObject>
 #include <QtCore/QObject>
@@ -352,6 +359,15 @@ PHP_MINIT_FUNCTION({!! $ctx->extensionName !!})
     return SUCCESS;
 }
 
+@if($ctx->includeThreadRuntimeSupport)
+PHP_MSHUTDOWN_FUNCTION({!! $ctx->extensionName !!})
+{
+    qt_qthreadruntime_restore_sapi_deactivate();
+
+    return SUCCESS;
+}
+
+@endif
 PHP_RINIT_FUNCTION({!! $ctx->extensionName !!})
 {
 #if defined(ZTS) && defined(COMPILE_DL_{!! strtoupper($ctx->extensionName) !!})
@@ -403,12 +419,16 @@ PHP_RSHUTDOWN_FUNCTION({!! $ctx->extensionName !!})
     return SUCCESS;
 }
 
-zend_module_entry {!! $ctx->extensionName !!}_module_entry = {
+extern "C" zend_module_entry {!! $ctx->extensionName !!}_module_entry = {
     STANDARD_MODULE_HEADER,
     "{!! $ctx->extensionName !!}",
     NULL,
     PHP_MINIT({!! $ctx->extensionName !!}),
+@if($ctx->includeThreadRuntimeSupport)
+    PHP_MSHUTDOWN({!! $ctx->extensionName !!}),
+@else
     NULL,
+@endif
     PHP_RINIT({!! $ctx->extensionName !!}),
     PHP_RSHUTDOWN({!! $ctx->extensionName !!}),
     PHP_MINFO({!! $ctx->extensionName !!}),

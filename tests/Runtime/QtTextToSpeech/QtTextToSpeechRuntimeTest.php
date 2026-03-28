@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 it('covers text to speech engine initialization and property types', function (): void {
-    $payload = qt_runtime_payload('QtTextToSpeech/tts_smoke.php');
+    $payload = qt_runtime_payload('QtTextToSpeech/tts_smoke.php', ['QT_PLUGIN_PATH' => '']);
 
     expect($payload['engines_is_array'])->toBeTrue()
         ->and($payload['state_is_int'])->toBeTrue()

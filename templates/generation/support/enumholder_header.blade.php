@@ -6,7 +6,14 @@
 
 #pragma once
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include "php.h"
+#ifdef __cplusplus
+}
+#endif
+#include "qt_php_compat.h"
 #include "php_qt.h"
 
 extern zend_class_entry *{!! $ctx->ceVarName !!};

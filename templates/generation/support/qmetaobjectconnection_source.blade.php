@@ -6,9 +6,61 @@
 
 #include "qt_qmetaobjectconnection.h"
 #include "qt_qmetaobjectconnection_arginfo.h"
+#include <QPointer>
+#include <QThread>
 
 zend_class_entry *qt_ce_QMetaObjectConnection = NULL;
 zend_object_handlers qt_qmetaobjectconnection_handlers;
+
+struct qt_qmetaobjectconnection_aux
+{
+    virtual ~qt_qmetaobjectconnection_aux() = default;
+    virtual void disconnect() = 0;
+};
+
+namespace {
+
+struct qt_qmetaobjectconnection_bridge_aux final : qt_qmetaobjectconnection_aux
+{
+    explicit qt_qmetaobjectconnection_bridge_aux(QObject *bridge, const QMetaObject::Connection &connection)
+        : bridge_object(bridge)
+        , bridge_connection(new QMetaObject::Connection(connection))
+    {
+    }
+
+    ~qt_qmetaobjectconnection_bridge_aux() override
+    {
+        delete bridge_connection;
+        bridge_connection = nullptr;
+    }
+
+    void disconnect() override
+    {
+        if (bridge_connection != nullptr) {
+            QObject::disconnect(*bridge_connection);
+            *bridge_connection = QMetaObject::Connection();
+        }
+
+        if (bridge_object.isNull()) {
+            return;
+        }
+
+        QObject *bridge = bridge_object.data();
+        bridge_object.clear();
+
+        if (bridge->thread() == QThread::currentThread()) {
+            delete bridge;
+            return;
+        }
+
+        bridge->deleteLater();
+    }
+
+    QPointer<QObject> bridge_object;
+    QMetaObject::Connection *bridge_connection{nullptr};
+};
+
+} // namespace
 
 static zend_object *qt_qmetaobjectconnection_create_object(zend_class_entry *ce)
 {
@@ -16,6 +68,7 @@ static zend_object *qt_qmetaobjectconnection_create_object(zend_class_entry *ce)
         sizeof(qt_qmetaobjectconnection_object), ce
     );
     intern->native_ptr = NULL;
+    intern->aux = NULL;
 
     zend_object_std_init(&intern->std, ce);
     object_properties_init(&intern->std, ce);
@@ -29,6 +82,10 @@ static void qt_qmetaobjectconnection_free_object(zend_object *object)
     if (intern->native_ptr != NULL) {
         delete intern->native_ptr;
         intern->native_ptr = NULL;
+    }
+    if (intern->aux != NULL) {
+        delete intern->aux;
+        intern->aux = NULL;
     }
 
     zend_object_std_dtor(&intern->std);
@@ -44,9 +101,45 @@ static HashTable *qt_qmetaobjectconnection_get_gc(zend_object *object, zval **ta
 
 PHP_QT_API void qt_qmetaobjectconnection_wrap(zval *return_value, const QMetaObject::Connection &connection)
 {
+    qt_qmetaobjectconnection_wrap_aux(return_value, connection, nullptr);
+}
+
+PHP_QT_API void qt_qmetaobjectconnection_wrap_aux(
+    zval *return_value,
+    const QMetaObject::Connection &connection,
+    qt_qmetaobjectconnection_aux *aux
+)
+{
     object_init_ex(return_value, qt_ce_QMetaObjectConnection);
     qt_qmetaobjectconnection_object *intern = Z_QMETAOBJECTCONNECTION_P(return_value);
     intern->native_ptr = new QMetaObject::Connection(connection);
+    intern->aux = aux;
+}
+
+PHP_QT_API qt_qmetaobjectconnection_aux *qt_qmetaobjectconnection_create_bridge_aux(
+    QObject *bridge_object,
+    const QMetaObject::Connection &bridge_connection
+)
+{
+    return new qt_qmetaobjectconnection_bridge_aux(bridge_object, bridge_connection);
+}
+
+PHP_QT_API bool qt_qmetaobjectconnection_disconnect(qt_qmetaobjectconnection_object *intern)
+{
+    if (intern->native_ptr == NULL) {
+        return false;
+    }
+
+    bool disconnected = QObject::disconnect(*intern->native_ptr);
+    if (intern->aux != NULL) {
+        intern->aux->disconnect();
+        delete intern->aux;
+        intern->aux = NULL;
+    }
+
+    *intern->native_ptr = QMetaObject::Connection();
+
+    return disconnected;
 }
 
 static const zend_function_entry qt_qmetaobjectconnection_methods[] = {

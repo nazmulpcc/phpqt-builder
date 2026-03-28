@@ -170,13 +170,19 @@ it('uses the automatic qobject ownership probe', function (): void {
         Assert::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
     
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qobjectowner.cpp');
-        Assert::assertStringContainsString('static zend_always_inline bool qt_native_has_qobject_parent(T *ptr)', $cpp);
+        $ownershipHelpers = (string) file_get_contents($outputDir . '/classes/qt_ownership_helpers.h');
+        Assert::assertFileExists($outputDir . '/classes/qt_php_compat.h');
+        Assert::assertFileExists($outputDir . '/classes/qt_class_helpers.h');
+        Assert::assertFileExists($outputDir . '/classes/qt_ownership_helpers.h');
+        Assert::assertStringContainsString('#include "qt_class_helpers.h"', $cpp);
+        Assert::assertStringContainsString('#include "qt_ownership_helpers.h"', $cpp);
         Assert::assertStringContainsString('if (qt_native_has_qobject_parent(_qt_owned_arg_0->native_ptr)) {', $cpp);
         Assert::assertStringContainsString('_qt_owned_arg_0->prevent_destroy = true;', $cpp);
-        Assert::assertStringContainsString('if (QCoreApplication::closingDown()) {', $cpp);
-        Assert::assertStringContainsString('if ((EG(flags) & EG_FLAGS_IN_SHUTDOWN) != 0) {', $cpp);
-        Assert::assertStringContainsString('if (qt_runtime_is_shutdown_in_progress()) {', $cpp);
+        Assert::assertStringContainsString('if (QCoreApplication::closingDown()) {', $ownershipHelpers);
+        Assert::assertStringContainsString('if ((EG(flags) & EG_FLAGS_IN_SHUTDOWN) != 0) {', $ownershipHelpers);
+        Assert::assertStringContainsString('if (qt_runtime_is_shutdown_in_progress()) {', $ownershipHelpers);
         Assert::assertStringContainsString('qt_runtime_try_hook_about_to_quit();', $cpp);
+        Assert::assertStringNotContainsString('static zend_always_inline bool qt_native_has_qobject_parent(T *ptr)', $cpp);
 });
 
 it('pins qt3d retained objects after setter calls', function (): void {
@@ -262,6 +268,7 @@ it('adds qobject property apis and handlers', function (): void {
     
         $stub = (string) file_get_contents($outputDir . '/classes/qt_qobject.stub.php');
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qobject.cpp');
+        Assert::assertFileExists($outputDir . '/classes/qt_qobject_helpers.h');
     
         Assert::assertStringContainsString('public function property(string $name): mixed {}', $stub);
         Assert::assertStringContainsString('public function setProperty(string $name, mixed $value): bool {}', $stub);
@@ -269,19 +276,71 @@ it('adds qobject property apis and handlers', function (): void {
         Assert::assertStringContainsString('public function propertyNames(): array {}', $stub);
         Assert::assertStringContainsString('public function propertyInfo(string $name): array {}', $stub);
         Assert::assertStringContainsString('public function connectPropertyNotify(string $name, callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
+        Assert::assertStringContainsString('#include "qt_class_helpers.h"', $cpp);
+        Assert::assertStringContainsString('#include "qt_qobject_helpers.h"', $cpp);
         Assert::assertStringContainsString('static zval *qt_qobject_read_property(', $cpp);
         Assert::assertStringContainsString('static zval *qt_qobject_write_property(', $cpp);
         Assert::assertStringContainsString('static zend_array *qt_qobject_get_properties_for(', $cpp);
-        Assert::assertStringContainsString('static bool qt_qobject_should_delegate_to_std_property(', $cpp);
         Assert::assertStringContainsString('if (qt_qobject_should_delegate_to_std_property(object, member)) {', $cpp);
         Assert::assertStringContainsString('return zend_std_write_property(object, member, value, cache_slot);', $cpp);
         Assert::assertStringContainsString('zend_declare_typed_property(', $cpp);
         Assert::assertStringContainsString('ZEND_ACC_PUBLIC | ZEND_ACC_VIRTUAL', $cpp);
         Assert::assertStringContainsString('qt_qobject_handlers.read_property = qt_qobject_read_property;', $cpp);
         Assert::assertStringContainsString('qt_qobject_handlers.get_properties_for = qt_qobject_get_properties_for;', $cpp);
-        Assert::assertStringContainsString('object_init_ex(target, qt_ce_qvariant);', $cpp);
-        Assert::assertStringContainsString('value.metaType().flags().testFlag(QMetaType::IsEnumeration)', $cpp);
-        Assert::assertStringContainsString('ZVAL_LONG(target, (zend_long) value.toLongLong());', $cpp);
+        Assert::assertStringContainsString('auto _qt_notify = _qt_property.notifySignal();', $cpp);
+        Assert::assertStringContainsString('QMetaObject::Connection _qt_connection = QMetaObject::connect(', $cpp);
+        Assert::assertStringContainsString('_qt_property_notify_handler_t{_qt_callback}', $cpp);
+        Assert::assertStringNotContainsString('#include <QSignalMapper>', $cpp);
+        Assert::assertStringNotContainsString('qt_qmetaobjectconnection_wrap_aux(', $cpp);
+        Assert::assertStringNotContainsString('connectPropertyNotify() is not supported in this build yet', $cpp);
+        Assert::assertStringNotContainsString('static bool qt_qobject_should_delegate_to_std_property(', $cpp);
+        Assert::assertStringNotContainsString('static inline void qt_qobject_variant_to_property_zval(', $cpp);
+        Assert::assertStringNotContainsString('#include "qt_qvariant.h"', $cpp);
+        Assert::assertStringNotContainsString('object_init_ex(target, qt_ce_qvariant);', $cpp);
+});
+
+it('uses a signal mapper bridge for qobject property notify on windows generation', function (): void {
+        $fixtureRoot = qt_fixture_path('ownership-qt');
+        $outputDir = sys_get_temp_dir() . '/qtbuilder-qobject-properties-windows-' . bin2hex(random_bytes(4));
+
+        $systemInformation = FakeSystemInformation::passing();
+        $systemInformation->setOsFamily('Windows');
+
+        $command = new GenerateCommand($systemInformation);
+        $tester = new CommandTester($command);
+
+        $exitCode = $tester->execute([
+            'header' => $fixtureRoot . '/include/QtCore/qobject.h',
+            'class' => 'QObject',
+            '--qt-path' => '/definitely/not/a/qt/root',
+            '--include' => [
+                $fixtureRoot . '/include',
+                $fixtureRoot . '/include/QtCore',
+            ],
+            '--module' => 'QtCore',
+            '--build-mode' => true,
+            '--output' => $outputDir,
+            '--output-subdir' => 'classes',
+            '--allowed-classes' => 'QObject',
+        ]);
+
+        Assert::assertSame(Command::SUCCESS, $exitCode, $tester->getDisplay());
+
+        $cpp = (string) file_get_contents($outputDir . '/classes/qt_qobject.cpp');
+
+        Assert::assertStringContainsString('#include <QSignalMapper>', $cpp);
+        Assert::assertStringContainsString('QSignalMapper *_qt_mapper = new QSignalMapper(_qt_obj);', $cpp);
+        Assert::assertStringContainsString('_qt_mapper->setMapping(_qt_obj, _qt_obj);', $cpp);
+        Assert::assertStringContainsString('const int _qt_map_index = _qt_mapper_meta.indexOfSlot("map()");', $cpp);
+        Assert::assertStringContainsString('const int _qt_mapped_index = _qt_mapper_meta.indexOfSignal("mappedObject(QObject*)");', $cpp);
+        Assert::assertStringContainsString('QMetaObject::Connection _qt_connection = QObject::connect(', $cpp);
+        Assert::assertStringContainsString('qOverload<QObject *>(&QSignalMapper::mappedObject)', $cpp);
+        Assert::assertStringContainsString('qt_qmetaobjectconnection_wrap_aux(', $cpp);
+        Assert::assertStringContainsString('qt_qmetaobjectconnection_create_bridge_aux(_qt_mapper, _qt_bridge_connection)', $cpp);
+        Assert::assertStringNotContainsString(
+            "QMetaObject::connect(\n        _qt_obj,\n        _qt_notify,\n        _qt_obj,\n        _qt_property_notify_handler_t{_qt_callback}",
+            $cpp,
+        );
 });
 
 it('adds qobject property handlers to derived classes', function (): void {

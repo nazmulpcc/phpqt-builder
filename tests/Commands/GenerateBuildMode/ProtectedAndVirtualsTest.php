@@ -65,8 +65,12 @@ it('generates protected virtual methods with native trampolines', function (): v
     
         $stub = (string) file_get_contents($outputDir . '/classes/qt_qprotectedvirtualthing.stub.php');
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qprotectedvirtualthing.cpp');
+        $helpers = (string) file_get_contents($outputDir . '/classes/qt_class_helpers.h');
+        Assert::assertFileExists($outputDir . '/classes/qt_php_compat.h');
+        Assert::assertFileExists($outputDir . '/classes/qt_class_helpers.h');
     
         Assert::assertStringContainsString('protected function value(): int {}', $stub);
+        Assert::assertStringContainsString('#include "qt_class_helpers.h"', $cpp);
         Assert::assertStringContainsString('class qt_access_QProtectedVirtualThing : public QProtectedVirtualThing', $cpp);
         Assert::assertStringContainsString('class qt_php_QProtectedVirtualThing : public qt_access_QProtectedVirtualThing', $cpp);
         Assert::assertStringContainsString('zend_class_entry *_qt_actual_ce = Z_OBJCE_P(ZEND_THIS);', $cpp);
@@ -84,9 +88,12 @@ it('generates protected virtual methods with native trampolines', function (): v
         Assert::assertStringContainsString('if (!qt_runtime_can_call_zend()) {', $cpp);
         Assert::assertStringContainsString('constexpr zend_long _qt_virtual_timeout_ms = 2000;', $cpp);
         Assert::assertStringContainsString('qt_runtime_dispatch_owner_sync([this, &_qt_dispatch_result]() mutable {', $cpp);
-        Assert::assertStringContainsString('void qt_runtime_record_virtual_timeout(void);', $cpp);
-        Assert::assertStringContainsString('zend_hash_str_find_ptr_lc(&ce->function_table, function_name, strlen(function_name))', $cpp);
-        Assert::assertStringContainsString('zend_call_known_function(method, object, object->ce, retval, param_count, params, NULL);', $cpp);
+        Assert::assertStringContainsString('void qt_runtime_record_virtual_timeout(void);', $helpers);
+        Assert::assertStringContainsString('zend_class_entry *qt_runtime_exception_ce(void);', $helpers);
+        Assert::assertStringContainsString('zend_hash_str_find_ptr_lc(&ce->function_table, function_name, strlen(function_name))', $helpers);
+        Assert::assertStringContainsString('zend_call_known_function(method, object, object->ce, retval, param_count, params, NULL);', $helpers);
+        Assert::assertStringNotContainsString('static zend_always_inline bool qt_method_is_overridden_in_ce(', $cpp);
+        Assert::assertStringNotContainsString('static inline void qt_delete_native_ptr(T *ptr)', $cpp);
         Assert::assertStringNotContainsString('qt_override_cache_key', $cpp);
         Assert::assertStringNotContainsString('static std::unordered_map<qt_override_cache_key', $cpp);
 });

@@ -108,7 +108,8 @@ class GenerateCommand extends Command
         $output->writeln(sprintf('<info>Generating extension code to %s...</info>', $outputDir));
 
         $generator = new ExtensionGenerator();
-        $files = $generator->generate($phpClass, $namespace, $outputDir);
+        $supportsRuntimeNotifyFunctorConnect = $this->supportsRuntimeNotifyFunctorConnect();
+        $files = $generator->generate($phpClass, $namespace, $outputDir, supportsRuntimeNotifyFunctorConnect: $supportsRuntimeNotifyFunctorConnect);
 
         foreach ($files as $file) {
             $output->writeln(sprintf('  <comment>Wrote:</comment> %s', $file));
@@ -118,7 +119,7 @@ class GenerateCommand extends Command
         $output->writeln(sprintf(
             '<info>Done. Run gen_stub.php on %s/%s.stub.php to generate _arginfo.h</info>',
             $outputDir,
-            $generator->buildContext($phpClass, $namespace)->filePrefix,
+            $generator->buildContext($phpClass, $namespace, supportsRuntimeNotifyFunctorConnect: $supportsRuntimeNotifyFunctorConnect)->filePrefix,
         ));
 
         return self::SUCCESS;
@@ -290,7 +291,16 @@ class GenerateCommand extends Command
                     'qualified_name' => $qualifiedName,
                 ],
             ];
-            $files = $generator->generate($result->phpClass, $namespace, $outputDir, $classNamespaces, [], $classMetadata);
+            $files = $generator->generate(
+                $result->phpClass,
+                $namespace,
+                $outputDir,
+                $classNamespaces,
+                [],
+                $classMetadata,
+                true,
+                $this->supportsRuntimeNotifyFunctorConnect(),
+            );
             $result = $result->withGeneratedFiles($files);
         }
 
@@ -577,5 +587,10 @@ class GenerateCommand extends Command
         }
 
         return self::FAILURE;
+    }
+
+    private function supportsRuntimeNotifyFunctorConnect(): bool
+    {
+        return $this->systemInformation->getOsFamily() !== 'Windows';
     }
 }

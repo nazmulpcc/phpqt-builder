@@ -11,7 +11,14 @@
 #include "config.h"
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include "php.h"
+#ifdef __cplusplus
+}
+#endif
+#include "qt_php_compat.h"
 #include <QObject>
 
 #ifndef PHP_QT_API
@@ -24,8 +31,11 @@
 # endif
 #endif
 
+struct qt_qmetaobjectconnection_aux;
+
 typedef struct _qt_qmetaobjectconnection_object {
     QMetaObject::Connection *native_ptr;
+    qt_qmetaobjectconnection_aux *aux;
     zend_object std; /* MUST be last */
 } qt_qmetaobjectconnection_object;
 
@@ -40,6 +50,16 @@ static inline qt_qmetaobjectconnection_object *qt_qmetaobjectconnection_from_obj
 #define Z_QMETAOBJECTCONNECTION_P(zv) qt_qmetaobjectconnection_from_obj(Z_OBJ_P(zv))
 
 PHP_QT_API void qt_qmetaobjectconnection_wrap(zval *return_value, const QMetaObject::Connection &connection);
+PHP_QT_API void qt_qmetaobjectconnection_wrap_aux(
+    zval *return_value,
+    const QMetaObject::Connection &connection,
+    qt_qmetaobjectconnection_aux *aux
+);
+PHP_QT_API qt_qmetaobjectconnection_aux *qt_qmetaobjectconnection_create_bridge_aux(
+    QObject *bridge_object,
+    const QMetaObject::Connection &bridge_connection
+);
+PHP_QT_API bool qt_qmetaobjectconnection_disconnect(qt_qmetaobjectconnection_object *intern);
 PHP_MINIT_FUNCTION(qt_qmetaobjectconnection);
 
 #endif /* QT_QMETAOBJECTCONNECTION_H */

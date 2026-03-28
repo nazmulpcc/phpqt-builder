@@ -721,3 +721,59 @@ CPP);
             'Return type QNestedOwner::Used is not supported.',
         );
 });
+
+it('injects synthetic list helper methods onto concrete list-derived classes', function (): void {
+    $service = new ClassGenerationService();
+    $method = new ReflectionMethod($service, 'injectSyntheticListParentMethods');
+
+    $phpClass = new PhpClass(
+        name: 'QItemSelection',
+        parent: 'QListOfQItemSelectionRange',
+        isAbstract: false,
+        isCopyConstructible: true,
+        hasPublicConstructor: true,
+        hasPublicDestructor: true,
+        properties: [],
+        methods: [
+            new PhpMethod(
+                name: 'select',
+                access: 'public',
+                isStatic: false,
+                isSignal: false,
+                isSlot: false,
+                isAbstractMethod: false,
+                returnType: 'void',
+                parameters: [],
+                overloads: [],
+                cppName: 'select',
+            ),
+        ],
+        signals: [],
+        nativeIncludes: ['<QtCore/QItemSelection>'],
+        nativeCppType: 'QItemSelection',
+    );
+
+    /** @var PhpClass $result */
+    $result = $method->invoke(
+        $service,
+        $phpClass,
+        [
+            'name' => 'QItemSelection',
+            'bases' => ['QList<QItemSelectionRange>'],
+            'base_specifiers' => [
+                ['type' => 'QList<QItemSelectionRange>'],
+            ],
+        ],
+        ['QItemSelection', 'QItemSelectionRange'],
+        'C:/tmp/QItemSelection',
+        'QItemSelection',
+    );
+
+    $methodNames = array_map(
+        static fn(PhpMethod $method): string => $method->name,
+        $result->methods,
+    );
+
+    expect($result->parent)->toBe('QListOfQItemSelectionRange')
+        ->and($methodNames)->toContain('count', 'size', 'isEmpty', 'clear', 'appendItem', 'itemAt');
+});

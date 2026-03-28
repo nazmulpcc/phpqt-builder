@@ -5,7 +5,7 @@
  * @var \QtBuilder\CodeGen\ClassContext $ctx
  */
 @endphp
-{!! '<?php' !!}
+{!! '<' . '?php' !!}
 
 /** @generate-class-entries */
 
@@ -13,11 +13,19 @@ namespace {!! $ctx->phpNamespace !!};
 
 @php
     $classDecl = '';
-    if ($ctx->isAbstract) $classDecl .= 'abstract ';
-    if ($ctx->isFinal) $classDecl .= 'final ';
+    if ($ctx->isAbstract) {
+        $classDecl .= 'abstract ';
+    }
+    if ($ctx->isFinal) {
+        $classDecl .= 'final ';
+    }
     $classDecl .= 'class ' . $ctx->phpClassName;
-    if ($ctx->stubParentClassName) $classDecl .= ' extends ' . $ctx->stubParentClassName;
-    if ($ctx->nativeCppType === 'QString') $classDecl .= ' implements \Stringable';
+    if ($ctx->stubParentClassName) {
+        $classDecl .= ' extends ' . $ctx->stubParentClassName;
+    }
+    if ($ctx->nativeCppType === 'QString') {
+        $classDecl .= ' implements \Stringable';
+    }
 @endphp
 {!! $classDecl !!}
 {
@@ -30,7 +38,9 @@ namespace {!! $ctx->phpNamespace !!};
 @foreach($ctx->methods as $method)
 @php
     $modifiers = $method->access;
-    if ($method->isStatic) $modifiers .= ' static';
+    if ($method->isStatic) {
+        $modifiers .= ' static';
+    }
 @endphp
 @if($ctx->nativeCppType === 'QThread' && $method->isConstructor)
     {!! $modifiers !!} function __construct(\Qt\Core\QObject|null $parent = null, ?string $bootstrapScript = null) {}
@@ -81,5 +91,6 @@ namespace {!! $ctx->phpNamespace !!};
 
     public function {!! $signal->phpMethodName !!}(callable $callback): \Qt\Core\QMetaObjectConnection {}
 @endforeach
+
 @endif
 }

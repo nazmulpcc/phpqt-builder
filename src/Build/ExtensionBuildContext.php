@@ -9,6 +9,8 @@ use QtBuilder\Qt\QtInstallation;
 
 readonly class ExtensionBuildContext
 {
+    private const WINDOWS_SOURCE_BUCKET_SIZE = 64;
+
     /**
      * @param list<string> $modules
      * @param list<string> $linkModules
@@ -90,6 +92,16 @@ readonly class ExtensionBuildContext
         return $this->buildRootDir . '/generated';
     }
 
+    public function windowsLibraryRoot(): ?string
+    {
+        $root = $this->installation->libraryRoots[0] ?? null;
+        if (!is_string($root) || $root === '') {
+            return null;
+        }
+
+        return $this->normalizeWindowsPath($root);
+    }
+
     /**
      * @return list<string>
      */
@@ -99,6 +111,20 @@ readonly class ExtensionBuildContext
             ...$this->installation->includeRoots,
             ...$this->importIncludeRoots,
         ]));
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function windowsCompileIncludeRoots(): array
+    {
+        return array_values(array_map(
+            fn(string $path): string => $this->normalizeWindowsPath($path),
+            array_values(array_filter(
+                $this->compileIncludeRoots(),
+                static fn(string $path): bool => $path !== '' && !str_starts_with($path, '-'),
+            )),
+        ));
     }
 
     /**
@@ -137,6 +163,52 @@ readonly class ExtensionBuildContext
                 $this->enumHolders,
             ),
         ));
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function classSourceBasenames(): array
+    {
+        return array_values(array_map(
+            static fn(string $path): string => basename($path),
+            $this->classSources(),
+        ));
+    }
+
+    /**
+     * @return array<string, list<string>>
+     */
+    public function windowsSourceBuckets(): array
+    {
+        $sources = $this->classSourceBasenames();
+        if ($sources === []) {
+            return [];
+        }
+
+        $chunks = array_chunk($sources, self::WINDOWS_SOURCE_BUCKET_SIZE);
+        $buckets = [];
+
+        foreach ($chunks as $index => $chunk) {
+            $buckets[sprintf('src_%02d', $index)] = array_values($chunk);
+        }
+
+        return $buckets;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function windowsUnitySourceFiles(): array
+    {
+        $unitySources = [];
+
+        foreach (array_keys($this->windowsSourceBuckets()) as $bucketDir) {
+            $suffix = substr($bucketDir, 4);
+            $unitySources[$bucketDir] = sprintf('qt_bucket_%s.cpp', $suffix !== false ? $suffix : '00');
+        }
+
+        return $unitySources;
     }
 
     /**
@@ -292,6 +364,28 @@ readonly class ExtensionBuildContext
         return $module;
     }
 
+    /**
+     * @return list<string>
+     */
+    public function windowsReleaseModuleLibraryFiles(): array
+    {
+        return array_values(array_map(
+            static fn(string $library): string => $library . '.lib',
+            $this->moduleLibraryNames(),
+        ));
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function windowsDebugModuleLibraryFiles(): array
+    {
+        return array_values(array_map(
+            static fn(string $library): string => $library . 'd.lib',
+            $this->moduleLibraryNames(),
+        ));
+    }
+
     public function requiresBuildInfoRegistration(): bool
     {
         return $this->buildMode === RuntimeManifest::MODE_MODULAR
@@ -306,5 +400,10 @@ readonly class ExtensionBuildContext
         }
 
         return $this->runtimeManifest->module($this->currentQtModule);
+    }
+
+    private function normalizeWindowsPath(string $path): string
+    {
+        return str_replace('/', '\\', $path);
     }
 }

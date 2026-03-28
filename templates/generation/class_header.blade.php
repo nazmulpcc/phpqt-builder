@@ -15,8 +15,15 @@
 #include "config.h"
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include "php.h"
 #include "zend_exceptions.h"
+#ifdef __cplusplus
+}
+#endif
+#include "../qt_php_compat.h"
 @foreach($ctx->nativeIncludes as $include)
 #include {!! $include !!}
 @endforeach

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 final class DownloadManager
 {
+    private const USER_AGENT = 'phpqt-threaded-downloader/1.0';
+
     /**
      * @return array{size:int, accept_ranges:bool}
      */
@@ -21,18 +23,15 @@ final class DownloadManager
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_TIMEOUT => 30,
             CURLOPT_CONNECTTIMEOUT => 10,
-            CURLOPT_USERAGENT => 'phpqt-threaded-downloader/1.0',
+            CURLOPT_USERAGENT => self::USER_AGENT,
         ]);
 
         $response = curl_exec($ch);
         if ($response === false) {
-            $error = curl_error($ch);
-            curl_close($ch);
-            throw new RuntimeException('Probe failed: ' . $error);
+            throw new RuntimeException($this->formatCurlFailure('Probe failed', (string) curl_error($ch)));
         }
 
         $httpCode = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-        curl_close($ch);
 
         if ($httpCode >= 400) {
             throw new RuntimeException(sprintf('Probe failed with HTTP %d.', $httpCode));
@@ -99,18 +98,17 @@ final class DownloadManager
             CURLOPT_RANGE => sprintf('%d-%d', $startByte, $endByte),
             CURLOPT_TIMEOUT => 0,
             CURLOPT_CONNECTTIMEOUT => 15,
-            CURLOPT_USERAGENT => 'phpqt-threaded-downloader/1.0',
+            CURLOPT_USERAGENT => self::USER_AGENT,
         ]);
 
         $ok = curl_exec($ch);
         $httpCode = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
         $error = $ok === false ? curl_error($ch) : null;
-        curl_close($ch);
         fclose($fh);
 
         if ($ok === false) {
             @unlink($outputPath);
-            throw new RuntimeException('Range download failed: ' . $error);
+            throw new RuntimeException($this->formatCurlFailure('Range download failed', (string) $error));
         }
 
         if ($httpCode >= 400) {
@@ -150,5 +148,43 @@ final class DownloadManager
         }
 
         fclose($out);
+    }
+
+    private function formatCurlFailure(string $prefix, string $error): string
+    {
+        $message = $prefix . ': ' . $error;
+        if (!$this->looksLikeMissingCaConfiguration($error)) {
+            return $message;
+        }
+
+        $configuredCa = [
+            'curl.cainfo' => ini_get('curl.cainfo'),
+            'openssl.cafile' => ini_get('openssl.cafile'),
+        ];
+
+        return $message . sprintf(
+            ' Configure curl.cainfo and openssl.cafile in php.ini to point at a valid CA bundle. Current values: curl.cainfo=%s, openssl.cafile=%s',
+            $this->formatIniValue($configuredCa['curl.cainfo']),
+            $this->formatIniValue($configuredCa['openssl.cafile']),
+        );
+    }
+
+    private function looksLikeMissingCaConfiguration(string $error): bool
+    {
+        $normalized = strtolower($error);
+
+        return str_contains($normalized, 'unable to get local issuer certificate')
+            || str_contains($normalized, 'problem with the ssl ca cert')
+            || str_contains($normalized, 'error setting certificate file')
+            || str_contains($normalized, 'schannel: failed to import cert file');
+    }
+
+    private function formatIniValue(mixed $value): string
+    {
+        if (!is_string($value) || $value === '') {
+            return '(not set)';
+        }
+
+        return $value;
     }
 }

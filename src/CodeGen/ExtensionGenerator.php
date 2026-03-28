@@ -25,6 +25,10 @@ class ExtensionGenerator
     private TypeBridge $typeBridge;
     private readonly SmartFileWriter $fileWriter;
     private FileWriteStats $lastWriteStats;
+    /** @var array<string, true> */
+    private array $emittedPhpCompatHeaders = [];
+    /** @var array<string, true> */
+    private array $emittedSharedHelperSupport = [];
 
     public function __construct(
         ?string $templatePath = null,
@@ -69,16 +73,27 @@ class ExtensionGenerator
         array $classNativeTypes = [],
         array $classMetadata = [],
         bool $emitSignalConnectionSupport = true,
+        ?bool $supportsRuntimeNotifyFunctorConnect = null,
     ): array
     {
         $this->lastWriteStats = new FileWriteStats();
-        $ctx = new ClassContext($phpClass, $namespace, $this->typeBridge, $classNamespaces, $classNativeTypes, $classMetadata);
+        $ctx = new ClassContext(
+            $phpClass,
+            $namespace,
+            $this->typeBridge,
+            $classNamespaces,
+            $classNativeTypes,
+            $classMetadata,
+            $this->resolveRuntimeNotifyFunctorConnectSupport($supportsRuntimeNotifyFunctorConnect),
+        );
         $files = [];
 
         // Ensure output directory exists
         if (!is_dir($outputDir) && !mkdir($outputDir, 0755, true) && !is_dir($outputDir)) {
             throw new \RuntimeException(sprintf('Could not create output directory: %s', $outputDir));
         }
+
+        $files = [...$files, ...$this->writeSharedHelperSupport($outputDir)];
 
         // Render each template
         $headerContent = $this->render('generation.class_header', $ctx);
@@ -126,9 +141,18 @@ class ExtensionGenerator
         array $classNamespaces = [],
         array $classNativeTypes = [],
         array $classMetadata = [],
+        ?bool $supportsRuntimeNotifyFunctorConnect = null,
     ): ClassContext
     {
-        return new ClassContext($phpClass, $namespace, $this->typeBridge, $classNamespaces, $classNativeTypes, $classMetadata);
+        return new ClassContext(
+            $phpClass,
+            $namespace,
+            $this->typeBridge,
+            $classNamespaces,
+            $classNativeTypes,
+            $classMetadata,
+            $this->resolveRuntimeNotifyFunctorConnectSupport($supportsRuntimeNotifyFunctorConnect),
+        );
     }
 
     public function lastWriteStats(): FileWriteStats
@@ -203,7 +227,7 @@ class ExtensionGenerator
      */
     private function writeSignalConnectionSupport(string $outputDir): array
     {
-        $files = [];
+        $files = $this->writePhpCompatHeader($outputDir);
 
         $headerFile = $outputDir . '/qt_qmetaobjectconnection.h';
         $sourceFile = $outputDir . '/qt_qmetaobjectconnection.cpp';
@@ -238,7 +262,7 @@ class ExtensionGenerator
      */
     private function writeBuildInfoSupport(string $outputDir, ExtensionBuildContext $context): array
     {
-        $files = [];
+        $files = $this->writePhpCompatHeader($outputDir);
 
         $headerFile = $outputDir . '/qt_buildinfo.h';
         $sourceFile = $outputDir . '/qt_buildinfo.cpp';
@@ -273,7 +297,7 @@ class ExtensionGenerator
      */
     private function writeEnumHolderSupport(string $outputDir, EnumHolderDefinition $definition): array
     {
-        $files = [];
+        $files = $this->writePhpCompatHeader($outputDir);
         $ctx = EnumHolderContext::fromDefinition($definition);
 
         $headerFile = $outputDir . '/' . $ctx->filePrefix . '.h';
@@ -309,7 +333,7 @@ class ExtensionGenerator
      */
     private function writeThreadRuntimeSupport(string $outputDir): array
     {
-        $files = [];
+        $files = $this->writePhpCompatHeader($outputDir);
 
         $supportFiles = [
             ['qt_qthreadruntime.h', 'generation.support.qthreadruntime_header'],
@@ -334,5 +358,69 @@ class ExtensionGenerator
         }
 
         return $files;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function writePhpCompatHeader(string $outputDir): array
+    {
+        $outputKey = $this->outputDirKey($outputDir);
+        if (isset($this->emittedPhpCompatHeaders[$outputKey])) {
+            return [];
+        }
+
+        $path = $outputDir . '/qt_php_compat.h';
+        $result = $this->fileWriter->write(
+            $path,
+            $this->cleanOutput($this->blade->run('generation.php_compat_header', [])),
+        );
+        $this->lastWriteStats->record($result);
+        $this->emittedPhpCompatHeaders[$outputKey] = true;
+
+        return [$path];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function writeSharedHelperSupport(string $outputDir): array
+    {
+        $outputKey = $this->outputDirKey($outputDir);
+        if (isset($this->emittedSharedHelperSupport[$outputKey])) {
+            return [];
+        }
+
+        $files = $this->writePhpCompatHeader($outputDir);
+        $supportFiles = [
+            ['qt_class_helpers.h', 'generation.support.class_helpers_header'],
+            ['qt_qobject_helpers.h', 'generation.support.qobject_helpers_header'],
+            ['qt_signal_helpers.h', 'generation.support.signal_helpers_header'],
+            ['qt_ownership_helpers.h', 'generation.support.ownership_helpers_header'],
+        ];
+
+        foreach ($supportFiles as [$filename, $view]) {
+            $path = $outputDir . '/' . $filename;
+            $result = $this->fileWriter->write(
+                $path,
+                $this->cleanOutput($this->blade->run($view, [])),
+            );
+            $this->lastWriteStats->record($result);
+            $files[] = $path;
+        }
+
+        $this->emittedSharedHelperSupport[$outputKey] = true;
+
+        return $files;
+    }
+
+    private function outputDirKey(string $outputDir): string
+    {
+        return rtrim(str_replace('\\', '/', $outputDir), '/');
+    }
+
+    private function resolveRuntimeNotifyFunctorConnectSupport(?bool $supportsRuntimeNotifyFunctorConnect): bool
+    {
+        return $supportsRuntimeNotifyFunctorConnect ?? (PHP_OS_FAMILY !== 'Windows');
     }
 }

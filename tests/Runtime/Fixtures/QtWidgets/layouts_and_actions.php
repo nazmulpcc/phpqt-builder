@@ -32,7 +32,7 @@ $window->addAction('Export CSV');
 
 $sugarCount = 0;
 $genericCount = 0;
-$button->onClicked(function (bool $checked = false) use (&$sugarCount): void {
+$sugarConnection = $button->onClicked(function (bool $checked = false) use (&$sugarCount): void {
     $sugarCount++;
 });
 $connection = $button->connect('clicked(bool)', function ($checked = false) use (&$genericCount): void {
@@ -49,6 +49,8 @@ foreach ($window->actions() as $action) {
         $actionTexts[] = $action->text();
     }
 }
+
+$button->disconnect($sugarConnection);
 
 qt_runtime_result([
     'window_title' => $window->windowTitle(),

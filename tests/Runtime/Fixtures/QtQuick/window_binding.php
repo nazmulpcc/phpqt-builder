@@ -32,7 +32,7 @@ $app = new \Qt\Gui\QGuiApplication($argc, []);
 $sales = new \Qt\Core\QObject();
 $sales->objectName = 'sales-1';
 $notifyHits = 0;
-$sales->connectPropertyNotify('objectName', function () use (&$notifyHits): void {
+$notifyConnection = $sales->connectPropertyNotify('objectName', function () use (&$notifyHits): void {
     $notifyHits++;
 });
 
@@ -63,6 +63,7 @@ $initialTitle = $root->title;
 $sales->objectName = 'sales-2';
 $driver = new RuntimeQuickDriver();
 \Qt\Gui\QGuiApplication::exec();
+$sales->disconnect($notifyConnection);
 
 qt_runtime_result([
     'root_count' => count($roots),

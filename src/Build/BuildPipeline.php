@@ -9,6 +9,7 @@ use QtBuilder\Containers\QListSpecializationResolver;
 use QtBuilder\Definition\PhpClass;
 use QtBuilder\Definition\PhpMethod;
 use QtBuilder\IO\FileWriteStats;
+use QtBuilder\IO\SmartFileWriter;
 use QtBuilder\Scanning\HeaderCandidate;
 use QtBuilder\Support\CppName;
 use QtBuilder\Support\GeneratedTypeIdentity;
@@ -504,6 +505,9 @@ class BuildPipeline
             $analysis->generatedClassHeaders,
             $output,
         );
+        if ($context->installation->osFamily === 'Windows') {
+            $this->relocateWindowsSourceBuckets($context);
+        }
         $timings['emission'] = microtime(true) - $emissionStartedAt;
         $this->renderPhaseTiming($output, 'Emission', $timings['emission']);
         $scaffoldFiles = $scaffolder->finalize($context);
@@ -1606,6 +1610,7 @@ class BuildPipeline
         OutputInterface $output,
     ): array {
         $generator = new ExtensionGenerator();
+        $supportsRuntimeNotifyFunctorConnect = $context->installation->osFamily !== 'Windows';
         $fileWriteStats = new FileWriteStats();
         $classmap = [];
         $outputDir = $context->outputDir . '/classes';
@@ -1625,6 +1630,7 @@ class BuildPipeline
             ];
         }
         $this->removeStaleEnumHolderFiles($outputDir, $context->enumHolders);
+        $this->removeStaleGeneratedClassFiles($context, $outputDir);
 
         if ($generatedClasses !== []) {
             $output->writeln(sprintf('<info>Emitting %d generated class wrapper(s)...</info>', count($generatedClasses)));
@@ -1653,6 +1659,7 @@ class BuildPipeline
                     $classNativeTypes,
                     $classMetadata,
                     false,
+                    $supportsRuntimeNotifyFunctorConnect,
                 );
                 $fileWriteStats->merge($generator->lastWriteStats());
                 $classmap[] = [
@@ -1763,6 +1770,172 @@ class BuildPipeline
             if (is_file($qtDepPath) && !@unlink($qtDepPath) && file_exists($qtDepPath)) {
                 throw new \RuntimeException(sprintf('Could not remove stale extension dependency file: %s', $qtDepPath));
             }
+        }
+    }
+
+    private function removeStaleGeneratedClassFiles(ExtensionBuildContext $context, string $outputDir): void
+    {
+        if (!is_dir($outputDir)) {
+            return;
+        }
+
+        $activePrefixes = [];
+        foreach ($context->classMinits() as $minitName) {
+            if ($minitName !== '') {
+                $activePrefixes[$minitName] = true;
+            }
+        }
+
+        $removedAny = false;
+
+        foreach (glob($outputDir . '/qt_*') ?: [] as $path) {
+            $basename = basename($path);
+            $prefix = null;
+
+            if (preg_match('/^(qt_[^.]+)\.(?:h|cpp|stub\.php|dep|lo)$/', $basename, $matches) === 1) {
+                $prefix = $matches[1];
+            } elseif (preg_match('/^(qt_[^_]+(?:_[^_]+)*)_arginfo\.h$/', $basename, $matches) === 1) {
+                $prefix = $matches[1];
+            }
+
+            if ($prefix === null || str_starts_with($prefix, 'qt_enum_') || isset($activePrefixes[$prefix])) {
+                continue;
+            }
+
+            if (!@unlink($path) && file_exists($path)) {
+                throw new \RuntimeException(sprintf('Could not remove stale generated class file: %s', $path));
+            }
+
+            $removedAny = true;
+        }
+
+        $libsDir = $outputDir . '/.libs';
+        if (is_dir($libsDir)) {
+            foreach (glob($libsDir . '/qt_*') ?: [] as $path) {
+                $basename = basename($path);
+                if (preg_match('/^(qt_[^.]+)\.(?:o|obj)$/', $basename, $matches) !== 1) {
+                    continue;
+                }
+
+                $prefix = $matches[1];
+                if (str_starts_with($prefix, 'qt_enum_') || isset($activePrefixes[$prefix])) {
+                    continue;
+                }
+
+                if (!@unlink($path) && file_exists($path)) {
+                    throw new \RuntimeException(sprintf('Could not remove stale generated class object file: %s', $path));
+                }
+
+                $removedAny = true;
+            }
+        }
+
+        if ($removedAny) {
+            $qtDepPath = dirname($outputDir) . '/qt.dep';
+            if (is_file($qtDepPath) && !@unlink($qtDepPath) && file_exists($qtDepPath)) {
+                throw new \RuntimeException(sprintf('Could not remove stale extension dependency file: %s', $qtDepPath));
+            }
+        }
+    }
+
+    private function relocateWindowsSourceBuckets(ExtensionBuildContext $context): void
+    {
+        $classesDir = $context->outputDir . '/classes';
+        $writer = new SmartFileWriter();
+        if (!is_dir($classesDir)) {
+            return;
+        }
+
+        $unitySources = $context->windowsUnitySourceFiles();
+        $activeBucketDirs = array_fill_keys(array_keys($unitySources), true);
+        foreach (glob($context->outputDir . '/src_*', GLOB_ONLYDIR) ?: [] as $existingBucketDir) {
+            $bucketName = basename($existingBucketDir);
+            if (!isset($activeBucketDirs[$bucketName])) {
+                $this->removeDirectory($existingBucketDir);
+                continue;
+            }
+
+            $expectedUnityFile = $unitySources[$bucketName] ?? null;
+            foreach (scandir($existingBucketDir) ?: [] as $entry) {
+                if ($entry === '.' || $entry === '..') {
+                    continue;
+                }
+
+                $path = $existingBucketDir . '/' . $entry;
+                if (is_dir($path)) {
+                    $this->removeDirectory($path);
+                    continue;
+                }
+
+                if ($entry === $expectedUnityFile) {
+                    continue;
+                }
+
+                if (!@unlink($path) && file_exists($path)) {
+                    throw new \RuntimeException(sprintf('Could not remove stale Windows unity bucket file: %s', $path));
+                }
+            }
+        }
+
+        foreach ($context->windowsSourceBuckets() as $bucketDir => $files) {
+            $targetDir = $context->outputDir . '/' . $bucketDir;
+            $this->ensureDirectory($targetDir);
+            foreach ($files as $filename) {
+                $sourcePath = $classesDir . '/' . $filename;
+                if (!is_file($sourcePath)) {
+                    throw new \RuntimeException(sprintf('Expected generated source file not found for Windows unity bucket: %s', $sourcePath));
+                }
+            }
+
+            $unityFilename = $unitySources[$bucketDir] ?? null;
+            if (!is_string($unityFilename) || $unityFilename === '') {
+                throw new \RuntimeException(sprintf('Missing Windows unity source filename for bucket: %s', $bucketDir));
+            }
+
+            $lines = [
+                '/**',
+                ' * Auto-generated by phpqt-builder -- DO NOT EDIT.',
+                ' *',
+                ' * Windows unity compilation bucket to keep linker response files below',
+                ' * the MSVC per-line limit when many Qt wrappers are generated.',
+                ' */',
+                '',
+            ];
+
+            foreach ($files as $filename) {
+                $lines[] = sprintf('#include "../classes/%s"', $filename);
+            }
+
+            $contents = implode("\n", $lines) . "\n";
+            $targetPath = $targetDir . '/' . $unityFilename;
+            $writer->write($targetPath, $contents);
+        }
+    }
+
+    private function removeDirectory(string $directory): void
+    {
+        if (!is_dir($directory)) {
+            return;
+        }
+
+        foreach (scandir($directory) ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+
+            $path = $directory . '/' . $entry;
+            if (is_dir($path)) {
+                $this->removeDirectory($path);
+                continue;
+            }
+
+            if (!@unlink($path) && file_exists($path)) {
+                throw new \RuntimeException(sprintf('Could not remove file: %s', $path));
+            }
+        }
+
+        if (!@rmdir($directory) && is_dir($directory)) {
+            throw new \RuntimeException(sprintf('Could not remove directory: %s', $directory));
         }
     }
 

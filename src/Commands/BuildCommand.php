@@ -14,6 +14,8 @@ use QtBuilder\Build\Dependencies\ResolvedModuleGraph;
 use QtBuilder\Build\Dependencies\StaticModuleDependencyResolver;
 use QtBuilder\Build\ExtensionBootstrapper;
 use QtBuilder\Build\ProcessExtensionBootstrapper;
+use QtBuilder\Build\StaticBuildStager;
+use QtBuilder\Build\StaticStageResult;
 use QtBuilder\Contracts\SystemInformation;
 use QtBuilder\Prompts\ModuleMultiSearchPrompt;
 use QtBuilder\Qt\QtInstallationResolver;
@@ -80,6 +82,7 @@ class BuildCommand extends Command
             ->addOption('ext-version', null, InputOption::VALUE_REQUIRED, 'Extension version', '0.1.0')
             ->addOption('output', 'o', InputOption::VALUE_REQUIRED, 'Build root directory; extension sources go under <output>/ext', 'build')
             ->addOption('force', 'F', InputOption::VALUE_NONE, 'Clear the selected build root before starting')
+            ->addOption('stage-static-to', null, InputOption::VALUE_REQUIRED, 'Stage generated extension sources into a php-src ext directory for static builds')
             ->addOption('no-build', null, InputOption::VALUE_NONE, 'Generate sources only and skip phpize/configure/make')
             ->addOption('ccache', null, InputOption::VALUE_NEGATABLE, 'Use ccache for configure/make when available')
             ->addOption('jobs', 'j', InputOption::VALUE_REQUIRED, 'Number of parallel discovery/bootstrap workers');
@@ -110,6 +113,13 @@ class BuildCommand extends Command
             return self::FAILURE;
         }
 
+        try {
+            $staticStageTarget = $this->resolveStaticStageTarget($input->getOption('stage-static-to'));
+        } catch (\InvalidArgumentException $e) {
+            $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
+            return self::FAILURE;
+        }
+
         if ((bool) $input->getOption('force')) {
             try {
                 $this->buildDirectoryCleaner->clear($layout->buildRootDir);
@@ -122,10 +132,14 @@ class BuildCommand extends Command
 
         $pipeline = new BuildPipeline($this->bootstrapper, $this->discoveryService);
         try {
-            $useCcache = $this->resolveCcacheUsage($input);
+            $useCcache = $staticStageTarget === null ? $this->resolveCcacheUsage($input) : false;
         } catch (\RuntimeException $e) {
             $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
             return self::FAILURE;
+        }
+        if ($staticStageTarget !== null) {
+            $output->writeln(sprintf('<comment>Static staging target:</comment> %s', $staticStageTarget));
+            $output->writeln('<comment>Static staging disables the shared bootstrap step.</comment>');
         }
         $result = $pipeline->build(
             new BuildExecutionRequest(
@@ -139,11 +153,57 @@ class BuildCommand extends Command
                 jobs: $this->resolveJobs($input->getOption('jobs')),
                 resolvedModuleGraph: $resolvedGraph,
                 dependencySource: $resolvedGraph->dependencySource,
-                bootstrapEnabled: !(bool) $input->getOption('no-build'),
+                bootstrapEnabled: !(bool) $input->getOption('no-build') && $staticStageTarget === null,
                 useCcache: $useCcache,
             ),
             $output,
         );
+
+        if ($staticStageTarget !== null) {
+            if (!$result->successful) {
+                $this->writeStaticStageSummary(
+                    $layout->metadataDir(),
+                    [
+                        'enabled' => true,
+                        'successful' => false,
+                        'target_dir' => $staticStageTarget,
+                        'error' => 'Build failed before static staging could run.',
+                    ],
+                );
+
+                return self::FAILURE;
+            }
+
+            try {
+                $stageResult = (new StaticBuildStager())->stage($layout->extensionDir(), $staticStageTarget);
+                $this->writeStaticStageSummary(
+                    $layout->metadataDir(),
+                    [
+                        'enabled' => true,
+                        'successful' => true,
+                        'target_dir' => $stageResult->targetDir,
+                        'manifest_path' => $stageResult->manifestPath,
+                        'staged_files' => count($stageResult->stagedFiles),
+                        'pruned_files' => count($stageResult->prunedFiles),
+                        'file_writes' => $stageResult->writeStats->toArray(),
+                    ],
+                );
+                $this->renderStaticStageSummary($output, $stageResult);
+            } catch (\RuntimeException|\InvalidArgumentException $e) {
+                $this->writeStaticStageSummary(
+                    $layout->metadataDir(),
+                    [
+                        'enabled' => true,
+                        'successful' => false,
+                        'target_dir' => $staticStageTarget,
+                        'error' => $e->getMessage(),
+                    ],
+                );
+                $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
+
+                return self::FAILURE;
+            }
+        }
 
         return $result->successful ? self::SUCCESS : self::FAILURE;
     }
@@ -337,5 +397,84 @@ class BuildCommand extends Command
             '<comment>Expanded modules:</comment> %s',
             implode(', ', $graph->expandedModules()),
         ));
+    }
+
+    private function resolveStaticStageTarget(mixed $stageOption): ?string
+    {
+        if ($stageOption === null) {
+            return null;
+        }
+
+        if (!is_string($stageOption) || trim($stageOption) === '') {
+            throw new \InvalidArgumentException('The --stage-static-to option requires a non-empty extension directory path.');
+        }
+
+        return $this->absolutePath($stageOption);
+    }
+
+    private function absolutePath(string $path): string
+    {
+        $normalized = trim($path);
+        $real = realpath($normalized);
+        if ($real !== false) {
+            return rtrim(str_replace('\\', '/', $real), '/');
+        }
+
+        if ($normalized !== '' && preg_match('/^(?:[A-Za-z]:[\\\\\\/]|[\\\\\\/])/', $normalized) === 1) {
+            return rtrim(str_replace('\\', '/', $normalized), '/');
+        }
+
+        $cwd = getcwd();
+        if (!is_string($cwd) || $cwd === '') {
+            return rtrim(str_replace('\\', '/', $normalized), '/');
+        }
+
+        return rtrim(str_replace('\\', '/', $cwd . '/' . ltrim($normalized, '/\\')), '/');
+    }
+
+    /**
+     * @param array<string, mixed> $staticStage
+     */
+    private function writeStaticStageSummary(string $metadataDir, array $staticStage): void
+    {
+        $summaryPath = $metadataDir . '/build_summary.json';
+        $summary = [];
+
+        if (is_file($summaryPath)) {
+            $contents = file_get_contents($summaryPath);
+            $decoded = is_string($contents) ? json_decode($contents, true) : null;
+            if (is_array($decoded)) {
+                $summary = $decoded;
+            }
+        }
+
+        $summary['static_stage'] = $staticStage;
+        $encoded = json_encode($summary, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        if (!is_string($encoded)) {
+            throw new \RuntimeException('Could not encode build summary with static stage metadata.');
+        }
+
+        file_put_contents($summaryPath, $encoded);
+    }
+
+    private function renderStaticStageSummary(OutputInterface $output, StaticStageResult $stageResult): void
+    {
+        $output->writeln(sprintf('<info>Static staging complete:</info> %s', $stageResult->targetDir));
+        $output->writeln(sprintf(
+            '<comment>Static stage file writes:</comment> %d written (%d created, %d updated), %d unchanged; %d pruned',
+            $stageResult->writeStats->written(),
+            $stageResult->writeStats->created(),
+            $stageResult->writeStats->updated(),
+            $stageResult->writeStats->unchanged(),
+            count($stageResult->prunedFiles),
+        ));
+
+        if ($this->systemInformation->getOsFamily() === 'Windows') {
+            $output->writeln('<comment>Next:</comment> rebuild php-src from the staged extension tree with your php-sdk flow (for example: buildconf, configure, then nmake).');
+
+            return;
+        }
+
+        $output->writeln('<comment>Next:</comment> rebuild your php-src tree so the staged extension directory is compiled into the static build.');
     }
 }

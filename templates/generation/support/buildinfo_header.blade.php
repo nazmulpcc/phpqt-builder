@@ -14,7 +14,14 @@
 #include "config.h"
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include "php.h"
+#ifdef __cplusplus
+}
+#endif
+#include "qt_php_compat.h"
 
 #ifndef PHP_QT_API
 # if defined(PHP_WIN32)

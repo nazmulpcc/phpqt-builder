@@ -21,11 +21,14 @@ final class ExampleCommand extends Command
     private $runner;
     /** @var callable(string, array<int, string>): string */
     private $selector;
+    /** @var callable(string): bool */
+    private $extensionLoadedChecker;
 
     public function __construct(
         private readonly string $projectRoot = __DIR__ . '/../../',
         ?callable $runner = null,
         ?callable $selector = null,
+        ?callable $extensionLoadedChecker = null,
     ) {
         $this->runner = $runner ?? fn (array $command, OutputInterface $output): int => $this->runProcess($command, $output);
         $this->selector = $selector ?? static fn (string $label, array $options): string => (string) select(
@@ -33,6 +36,7 @@ final class ExampleCommand extends Command
             options: $options,
             scroll: max(5, min(15, count($options))),
         );
+        $this->extensionLoadedChecker = $extensionLoadedChecker ?? static fn (string $extension): bool => extension_loaded($extension);
         parent::__construct();
     }
 
@@ -85,8 +89,9 @@ final class ExampleCommand extends Command
         $phpBinary = (string) $input->getOption('php');
         $command = [$phpBinary];
         $useExtension = !(bool) $input->getOption('no-extension');
+        $qtAlreadyLoaded = ($this->extensionLoadedChecker)('qt');
 
-        if ($useExtension) {
+        if ($useExtension && !$qtAlreadyLoaded) {
             $extension = (string) $input->getOption('extension');
             if (!is_file($extension)) {
                 $io->error(sprintf('Qt extension not found at: %s', $extension));

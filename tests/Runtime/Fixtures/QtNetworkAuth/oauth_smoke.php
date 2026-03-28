@@ -17,7 +17,9 @@ $flow->setAuthorizationUrl(new QUrl('https://example.com/oauth/authorize'));
 $flow->setAccessTokenUrl(new QUrl('https://example.com/oauth/token'));
 
 qt_runtime_result([
-    'client_id'             => $flow->clientIdentifier(),
-    'auth_url'              => $flow->authorizationUrl()->toString(),
+    'client_id' => $flow->clientIdentifier(),
+    'auth_scheme' => $flow->authorizationUrl()->scheme(),
+    'auth_host' => $flow->authorizationUrl()->host(),
+    'auth_path' => $flow->authorizationUrl()->path(),
     'status_is_not_granted' => $flow->status() !== QAbstractOAuth::Granted,
 ]);

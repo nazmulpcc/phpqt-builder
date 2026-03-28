@@ -779,6 +779,15 @@ class ClassDefinitionBuilder
             return 'mixed';
         }
 
+        if (\count($unique) > 1 && in_array('void', $unique, true)) {
+            $unique = array_values(array_filter(
+                $unique,
+                static fn(string $type): bool => $type !== 'void',
+            ));
+            $unique[] = 'null';
+            $unique = array_values(array_unique($unique));
+        }
+
         if (\count($unique) === 1) {
             return $unique[0];
         }
