@@ -150,6 +150,10 @@ final class QtRuntimeProcessRunner
         $candidates = [
             $root . '/.libs/' . $extensionName . '.so',
             $root . '/modules/' . $extensionName . '.so',
+            $root . '/.libs/' . $extensionName . '.dll',
+            $root . '/modules/' . $extensionName . '.dll',
+            $root . '/.libs/php_' . $extensionName . '.dll',
+            $root . '/modules/php_' . $extensionName . '.dll',
         ];
 
         foreach ($candidates as $candidate) {
