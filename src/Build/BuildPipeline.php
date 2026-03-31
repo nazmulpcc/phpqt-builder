@@ -452,20 +452,14 @@ class BuildPipeline
                 microtime(true) - $generationWarmEnumCacheWriteStartedAt,
             );
 
-            $generationCacheCandidates = $generation['accepted_candidates'];
-            $generationCachePreparedClassData = $this->preparedClassDataForCandidates(
-                $preparedClassDataByClass,
-                $generationCacheCandidates,
-            );
-            $generationCacheClassNamespaces = $this->classNamespaces($generationCacheCandidates, $request->importedAbi);
             $generationCacheWriteStartedAt = microtime(true);
             $generationAnalysisCache->write(
                 $metadataDir,
                 $request,
-                $generationCacheCandidates,
-                $generation['skipped_classes'],
+                $acceptedCandidates,
+                $skippedClasses,
                 $generationCachePreparedClassData,
-                $generationCacheClassNamespaces,
+                $classNamespaces,
                 $enumRegistry,
                 $generation,
             );
