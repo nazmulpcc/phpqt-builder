@@ -1314,12 +1314,31 @@ class BuildDiscoveryService
                 }
 
                 $cacheKey = (string) ($decoded['cache_key'] ?? '');
-                if ($cacheKey === '' || !hash_equals($this->classStructureCacheKey($lookupCandidate, $includePaths), $cacheKey)) {
+                if ($cacheKey === '') {
                     continue;
                 }
 
-                $currentMtime = @filemtime($lookupCandidate->parseHeader);
-                $currentSize = @filesize($lookupCandidate->parseHeader);
+                $cacheRecordCandidate = $this->classStructureCacheRecordCandidate($decoded);
+                $expectedCacheKeys = [$this->classStructureCacheKey($lookupCandidate, $includePaths)];
+                if ($cacheRecordCandidate instanceof HeaderCandidate) {
+                    $expectedCacheKeys[] = $this->classStructureCacheKey($cacheRecordCandidate, $includePaths);
+                }
+
+                $cacheKeyMatched = false;
+                foreach (array_values(array_unique($expectedCacheKeys)) as $expectedCacheKey) {
+                    if (hash_equals($expectedCacheKey, $cacheKey)) {
+                        $cacheKeyMatched = true;
+                        break;
+                    }
+                }
+
+                if (!$cacheKeyMatched) {
+                    continue;
+                }
+
+                $headerPath = $cacheRecordCandidate?->parseHeader ?? $lookupCandidate->parseHeader;
+                $currentMtime = @filemtime($headerPath);
+                $currentSize = @filesize($headerPath);
                 if (($decoded['parse_header_mtime'] ?? null) !== ($currentMtime !== false ? $currentMtime : null)) {
                     continue;
                 }
@@ -1336,6 +1355,29 @@ class BuildDiscoveryService
         }
 
         return null;
+    }
+
+    /**
+     * @param array<string, mixed> $record
+     */
+    private function classStructureCacheRecordCandidate(array $record): ?HeaderCandidate
+    {
+        $module = is_string($record['module'] ?? null) ? $record['module'] : '';
+        $className = is_string($record['class'] ?? null) ? $record['class'] : '';
+        $publicHeader = is_string($record['public_header'] ?? null) ? $record['public_header'] : '';
+        $parseHeader = is_string($record['parse_header'] ?? null) ? $record['parse_header'] : '';
+        if ($module === '' || $className === '' || $publicHeader === '' || $parseHeader === '') {
+            return null;
+        }
+
+        return new HeaderCandidate(
+            module: $module,
+            className: $className,
+            publicHeader: $publicHeader,
+            parseHeader: $parseHeader,
+            qualifiedClassName: is_string($record['qualified_name'] ?? null) ? $record['qualified_name'] : null,
+            generationId: is_string($record['generation_id'] ?? null) ? $record['generation_id'] : null,
+        );
     }
 
     /**
@@ -1388,6 +1430,11 @@ class BuildDiscoveryService
     private function classStructureCacheLookupCandidates(HeaderCandidate $candidate): array
     {
         $candidates = [$candidate];
+
+        $canonicalByClassName = $candidate->withQualifiedClassName($candidate->className);
+        if ($canonicalByClassName !== $candidate) {
+            $candidates[] = $canonicalByClassName;
+        }
 
         if ($candidate->qualifiedClassName !== null || $candidate->generationId !== null) {
             $candidates[] = new HeaderCandidate(

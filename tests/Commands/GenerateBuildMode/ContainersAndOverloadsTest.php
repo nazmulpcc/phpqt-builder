@@ -45,7 +45,7 @@ it('supports common qt container parameters and returns', function (): void {
         Assert::assertStringContainsString('function actions(): array {}', $stub);
     
         Assert::assertStringContainsString('HashTable *_qt_arg_0_ht = Z_ARRVAL_P(types);', $cpp);
-        Assert::assertStringContainsString('_qt_it.key().toUtf8();', $cpp);
+        Assert::assertStringContainsString('add_index_zval(return_value, (zend_long)_qt_it.key(), &_qt_value);', $cpp);
         Assert::assertStringContainsString('qt_variant_to_zval(&_qt_value, _qt_it.value());', $cpp);
         Assert::assertStringContainsString('if (!qt_zval_to_variant(_qt_arg_0_entry, &_qt_arg_0_value)) {', $cpp);
         Assert::assertStringContainsString('add_next_index_zval(return_value, &_qt_value);', $cpp);

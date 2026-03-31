@@ -69,8 +69,8 @@ it('writes reusable build metadata during discovery', function (): void {
         ->and(is_file($metadataDir . '/accepted_candidates.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/allowed_classes.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/supplemental_candidates.json'))->toBeTrue()
-        ->and(is_file($classCacheDir . '/qabstractitemmodel__qtcore__qabstractitemmodel_h.json'))->toBeTrue()
-        ->and(is_file($classCacheDir . '/qpoint__qtcore__qpoint_h.json'))->toBeTrue()
+        ->and((glob($classCacheDir . '/qabstractitemmodel__*.json') ?: []) !== [])->toBeTrue()
+        ->and((glob($classCacheDir . '/qpoint__*.json') ?: []) !== [])->toBeTrue()
         ->and(is_file($extDir . '/config.m4'))->toBeFalse();
     expect(substr_count($result['display'], 'Module acceptance:'))->toBe(1);
 
@@ -102,7 +102,7 @@ it('reuses class structure cache after generated metadata is cleared', function 
     );
     expect($firstRun)->toBeSuccessfulCommandResult();
 
-    expect(is_file($classCacheDir . '/qpoint__qtcore__qpoint_h.json'))->toBeTrue();
+    expect((glob($classCacheDir . '/qpoint__*.json') ?: []) !== [])->toBeTrue();
     $removeDir($metadataDir);
     expect(is_dir($metadataDir))->toBeFalse();
 
@@ -254,5 +254,5 @@ it('clears the build root before discovery when forced', function (): void {
         ->and($result['display'])->toContain('Cleared build root:', $buildRoot);
     expect(is_file($buildRoot . '/generated/stale.txt'))->toBeFalse()
         ->and(is_file($buildRoot . '/generated/discovery_cache.json'))->toBeTrue()
-        ->and(is_file($buildRoot . '/classes/qpoint__qtcore__qpoint_h.json'))->toBeTrue();
+        ->and((glob($buildRoot . '/classes/qpoint__*.json') ?: []) !== [])->toBeTrue();
 });

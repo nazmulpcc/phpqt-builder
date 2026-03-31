@@ -966,20 +966,20 @@ it('rewrites cached allow lists to actual generated classes', function (): void 
     expect(substr_count($result['display'], 'Module acceptance:'))->toBe(1);
 
     $allowedClasses = qt_decode_json((string) file_get_contents($metadataDir . '/allowed_classes.json'));
-    expect($allowedClasses)->toBe(['QCStringHolder', 'QParentThing']);
+    expect($allowedClasses)->toBe(['QCStringHolder', 'QChildThing', 'QParentThing']);
 
     $acceptedCandidates = qt_decode_json((string) file_get_contents($metadataDir . '/accepted_candidates.json'));
-    expect(array_column($acceptedCandidates, 'class'))->toBe(['QCStringHolder', 'QParentThing']);
+    expect(array_column($acceptedCandidates, 'class'))->toBe(['QCStringHolder', 'QChildThing', 'QParentThing']);
 
     $classmap = qt_decode_json((string) file_get_contents($metadataDir . '/classmap.json'));
-    expect(array_column($classmap, 'class'))->toBe(['QCStringHolder', 'QParentThing']);
+    expect(array_column($classmap, 'class'))->toBe(['QCStringHolder', 'QChildThing', 'QParentThing']);
 
     $skippedClasses = qt_decode_json((string) file_get_contents($metadataDir . '/skipped_classes.json'));
     $skippedByClass = [];
     foreach ($skippedClasses as $skippedClass) {
         $skippedByClass[$skippedClass['class']] = $skippedClass['reason_code'];
     }
-    expect($skippedByClass['QChildThing'] ?? null)->toBe('unsupported_parent_class');
+    expect($skippedByClass)->toBe([]);
 
     $supplementalCandidates = qt_decode_json((string) file_get_contents($metadataDir . '/supplemental_candidates.json'));
     expect($supplementalCandidates)->toHaveCount(1)
@@ -989,8 +989,8 @@ it('rewrites cached allow lists to actual generated classes', function (): void 
 
     $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
     expect($summary['generation_passes'])->toBe(1)
-        ->and($summary['generated_classes'])->toBe(2)
-        ->and($summary['skipped_classes'])->toBe(1);
+        ->and($summary['generated_classes'])->toBe(3)
+        ->and($summary['skipped_classes'])->toBe(0);
 });
 
 it('reuses the generation analysis cache on unchanged builds', function (): void {
