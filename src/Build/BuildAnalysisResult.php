@@ -25,6 +25,7 @@ readonly class BuildAnalysisResult
      * @param array<string, int> $moduleAcceptedMethodTotals
      * @param array<string, int> $moduleGeneratedMethodTotals
      * @param list<EnumHolderDefinition> $enumHolders
+     * @param array<string, mixed> $cacheMetadata
      * @param array<string, float> $timings
      */
     public function __construct(
@@ -47,6 +48,7 @@ readonly class BuildAnalysisResult
         public array $moduleGeneratedMethodTotals,
         public int $passes,
         public bool $requiresSignalConnectionSupport,
+        public array $cacheMetadata = [],
         public array $timings = [],
     ) {}
 }

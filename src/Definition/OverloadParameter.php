@@ -46,4 +46,27 @@ readonly class OverloadParameter
             'is_writable_qt_string' => $this->isWritableQtString,
         ];
     }
+
+    /**
+     * @param array<string, mixed> $payload
+     */
+    public static function fromArray(array $payload): self
+    {
+        return new self(
+            name: is_string($payload['name'] ?? null) ? $payload['name'] : '',
+            cppType: is_string($payload['cpp_type'] ?? null) ? $payload['cpp_type'] : '',
+            hasDefault: (bool) ($payload['has_default'] ?? false),
+            smartPointerTargetCppType: is_string($payload['smart_pointer_target_cpp_type'] ?? null)
+                ? $payload['smart_pointer_target_cpp_type']
+                : null,
+            isReference: (bool) ($payload['is_reference'] ?? false),
+            isConstReference: (bool) ($payload['is_const_reference'] ?? false),
+            isNonConstReference: (bool) ($payload['is_non_const_reference'] ?? false),
+            isRvalueReference: (bool) ($payload['is_rvalue_reference'] ?? false),
+            pointerDepth: max(0, (int) ($payload['pointer_depth'] ?? 0)),
+            isWritableByRef: (bool) ($payload['is_writable_by_ref'] ?? false),
+            isWritableByRefPointer: (bool) ($payload['is_writable_by_ref_pointer'] ?? false),
+            isWritableQtString: (bool) ($payload['is_writable_qt_string'] ?? false),
+        );
+    }
 }

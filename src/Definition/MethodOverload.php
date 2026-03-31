@@ -67,4 +67,33 @@ readonly class MethodOverload
             'is_pure_virtual' => $this->isPureVirtual,
         ];
     }
+
+    /**
+     * @param array<string, mixed> $payload
+     */
+    public static function fromArray(array $payload): self
+    {
+        $parameters = [];
+        foreach (($payload['parameters'] ?? []) as $parameterPayload) {
+            if (!is_array($parameterPayload)) {
+                continue;
+            }
+
+            $parameters[] = OverloadParameter::fromArray($parameterPayload);
+        }
+
+        return new self(
+            declaringClass: is_string($payload['declaring_class'] ?? null) ? $payload['declaring_class'] : '',
+            returnType: is_string($payload['return_type'] ?? null) ? $payload['return_type'] : 'void',
+            smartPointerReturnTargetCppType: is_string($payload['smart_pointer_return_target_cpp_type'] ?? null)
+                ? $payload['smart_pointer_return_target_cpp_type']
+                : null,
+            parameters: $parameters,
+            access: is_string($payload['access'] ?? null) ? $payload['access'] : 'public',
+            isConst: (bool) ($payload['is_const'] ?? false),
+            isStatic: (bool) ($payload['is_static'] ?? false),
+            isVirtual: (bool) ($payload['is_virtual'] ?? false),
+            isPureVirtual: (bool) ($payload['is_pure_virtual'] ?? false),
+        );
+    }
 }

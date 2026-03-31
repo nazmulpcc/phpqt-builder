@@ -31,6 +31,7 @@ class BuildPipeline
     {
         $analysisStartedAt = microtime(true);
         $timings = [];
+        $cacheMetadata = [];
         $metadataDir = $request->buildRootDir . '/generated';
         $this->ensureDirectory($request->outputDir);
         $this->ensureDirectory($request->outputDir . '/classes');
@@ -47,6 +48,7 @@ class BuildPipeline
         }
         $preparedClassDataByClass = [];
         $supplementalCandidates = [];
+        $classStructureCacheMissCount = 0;
 
         if ($cachedDiscovery !== null) {
             $acceptedCandidates = $cachedDiscovery->acceptedCandidates;
@@ -106,6 +108,7 @@ class BuildPipeline
                     moduleGeneratedMethodTotals: [],
                     passes: 0,
                     requiresSignalConnectionSupport: false,
+                    cacheMetadata: $cacheMetadata,
                     timings: $timings,
                 );
             }
@@ -178,65 +181,75 @@ class BuildPipeline
                     moduleGeneratedMethodTotals: [],
                     passes: 0,
                     requiresSignalConnectionSupport: false,
+                    cacheMetadata: $cacheMetadata,
                     timings: $timings + ['class_structure_cache' => microtime(true) - $classStructureStartedAt, 'analysis_total' => microtime(true) - $analysisStartedAt],
                 );
             }
             $timings['class_structure_cache'] = microtime(true) - $classStructureStartedAt;
             $this->renderPhaseTiming($output, 'Class structure cache', $timings['class_structure_cache']);
+            $classStructureCacheMissCount = (int) ($classStructures['cache_miss_count'] ?? 0);
 
-            $supplementalStartedAt = microtime(true);
             $acceptedCandidates = $classStructures['accepted_candidates'];
             $skippedClasses = [...$skippedClasses, ...$classStructures['skipped_classes']];
-            $supplemental = $this->discoveryService->augmentWithSupplementalCandidates(
-                $acceptedCandidates,
-                $classStructures['prepared_class_data'],
-                $request->modules,
-                $request->installation->includeRoots,
-                $request->outputDir,
-                $metadataDir,
-                $request->jobs,
-                $output,
-                $request->extensionName,
-                $request->importedAbi?->availableClasses ?? [],
-            );
+            $preparedClassDataByClass = $classStructures['prepared_class_data'];
 
-            if ($supplemental['errors'] !== []) {
-                foreach ($supplemental['errors'] as $error) {
-                    $message = is_string($error['reason_message'] ?? null) ? $error['reason_message'] : 'Supplemental class discovery failed.';
-                    $output->writeln(sprintf('<error>%s</error>', $message));
+            if ($cachedDiscovery !== null && $classStructureCacheMissCount === 0) {
+                $timings['supplemental_discovery'] = 0.0;
+                $this->renderDebugTiming($output, 'supplemental.cached_reuse', 0.0);
+            } else {
+                $supplementalStartedAt = microtime(true);
+                $supplemental = $this->discoveryService->augmentWithSupplementalCandidates(
+                    $acceptedCandidates,
+                    $preparedClassDataByClass,
+                    $request->modules,
+                    $request->installation->includeRoots,
+                    $request->outputDir,
+                    $metadataDir,
+                    $request->jobs,
+                    $output,
+                    $request->extensionName,
+                    $request->importedAbi?->availableClasses ?? [],
+                );
+
+                if ($supplemental['errors'] !== []) {
+                    foreach ($supplemental['errors'] as $error) {
+                        $message = is_string($error['reason_message'] ?? null) ? $error['reason_message'] : 'Supplemental class discovery failed.';
+                        $output->writeln(sprintf('<error>%s</error>', $message));
+                    }
+
+                    return new BuildAnalysisResult(
+                        metadataDir: $metadataDir,
+                        candidateCount: $candidateCount,
+                        acceptedCandidates: [],
+                        skippedClasses: [...$skippedClasses, ...$supplemental['skipped_classes']],
+                        skippedMethods: [],
+                        errors: $supplemental['errors'],
+                        generatedClasses: [],
+                        generatedPhpClasses: [],
+                        generatedClassParents: [],
+                        generatedClassDependencies: [],
+                        generatedClassHeaders: [],
+                        generatedClassModules: [],
+                        classNamespaces: [],
+                        enumHolders: [],
+                        moduleMethodTotals: $moduleMethodTotals,
+                        moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
+                        moduleGeneratedMethodTotals: [],
+                        passes: 0,
+                        requiresSignalConnectionSupport: false,
+                        cacheMetadata: $cacheMetadata,
+                        timings: $timings + ['supplemental_discovery' => microtime(true) - $supplementalStartedAt, 'analysis_total' => microtime(true) - $analysisStartedAt],
+                    );
                 }
 
-                return new BuildAnalysisResult(
-                    metadataDir: $metadataDir,
-                    candidateCount: $candidateCount,
-                    acceptedCandidates: [],
-                    skippedClasses: [...$skippedClasses, ...$supplemental['skipped_classes']],
-                    skippedMethods: [],
-                    errors: $supplemental['errors'],
-                    generatedClasses: [],
-                    generatedPhpClasses: [],
-                    generatedClassParents: [],
-                    generatedClassDependencies: [],
-                    generatedClassHeaders: [],
-                    generatedClassModules: [],
-                    classNamespaces: [],
-                    enumHolders: [],
-                    moduleMethodTotals: $moduleMethodTotals,
-                    moduleAcceptedMethodTotals: $moduleAcceptedMethodTotals,
-                    moduleGeneratedMethodTotals: [],
-                    passes: 0,
-                    requiresSignalConnectionSupport: false,
-                    timings: $timings + ['supplemental_discovery' => microtime(true) - $supplementalStartedAt, 'analysis_total' => microtime(true) - $analysisStartedAt],
-                );
+                $acceptedCandidates = $supplemental['accepted_candidates'];
+                $skippedClasses = [...$skippedClasses, ...$supplemental['skipped_classes']];
+                $preparedClassDataByClass = $supplemental['prepared_class_data'];
+                if ($supplemental['supplemental_candidates'] !== []) {
+                    $supplementalCandidates = $supplemental['supplemental_candidates'];
+                }
+                $timings['supplemental_discovery'] = microtime(true) - $supplementalStartedAt;
             }
-
-            $acceptedCandidates = $supplemental['accepted_candidates'];
-            $skippedClasses = [...$skippedClasses, ...$supplemental['skipped_classes']];
-            $preparedClassDataByClass = $supplemental['prepared_class_data'];
-            if ($supplemental['supplemental_candidates'] !== []) {
-                $supplementalCandidates = $supplemental['supplemental_candidates'];
-            }
-            $timings['supplemental_discovery'] = microtime(true) - $supplementalStartedAt;
             $this->renderPhaseTiming($output, 'Supplemental discovery', $timings['supplemental_discovery']);
         }
         file_put_contents(
@@ -246,18 +259,19 @@ class BuildPipeline
 
         $enumStartedAt = microtime(true);
         $classNamespaces = $this->classNamespaces($acceptedCandidates, $request->importedAbi);
-        $enumCandidateHeaders = (new EnumCandidateHeaderCollector())->collect(
-            $request->installation->includeRoots,
-            $acceptedCandidates,
-            $preparedClassDataByClass,
-        );
-        file_put_contents(
-            $metadataDir . '/enum_candidate_headers.json',
-            json_encode(array_map(
-                static fn(EnumCandidateHeader $entry): array => $entry->toArray(),
-                $enumCandidateHeaders,
-            ), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]',
-        );
+        $enumCandidateHeaders = [];
+        if ($cachedDiscovery !== null && $classStructureCacheMissCount === 0) {
+            $enumCandidateHeaders = $this->readEnumCandidateHeaders($metadataDir);
+        }
+
+        if ($enumCandidateHeaders === []) {
+            $enumCandidateHeaders = (new EnumCandidateHeaderCollector())->collect(
+                $request->installation->includeRoots,
+                $acceptedCandidates,
+                $preparedClassDataByClass,
+            );
+            $this->writeEnumCandidateHeaders($metadataDir, $enumCandidateHeaders);
+        }
         $enumHolderCache = new EnumHolderCache();
         $enumExtractor = new EnumHolderExtractor();
         $enumRegistry = $enumHolderCache->load(
@@ -335,62 +349,134 @@ class BuildPipeline
 
         $output->writeln('<info>Evaluating generated class set from cached class structures...</info>');
         $generationAnalysisStartedAt = microtime(true);
-        $generation = $this->resolveGeneratedCandidates(
+        $generationAnalysisCache = new GenerationAnalysisCache();
+        $generationCachePreparedClassData = $this->preparedClassDataForCandidates(
+            $preparedClassDataByClass,
+            $acceptedCandidates,
+        );
+        $cacheMetadata['generation_analysis'] = [
+            'path' => $generationAnalysisCache->path($metadataDir),
+            'hit' => false,
+        ];
+        $generation = $generationAnalysisCache->load(
+            $metadataDir,
+            $request,
             $acceptedCandidates,
             $skippedClasses,
-            $preparedClassDataByClass,
-            $output,
-            $request->importedAbi,
+            $generationCachePreparedClassData,
+            $classNamespaces,
             $enumRegistry,
         );
+        if (is_array($generation)) {
+            $cacheMetadata['generation_analysis']['hit'] = true;
+            $output->writeln(sprintf(
+                '<comment>Generation analysis cache:</comment> hit (%s).',
+                $generationAnalysisCache->path($metadataDir),
+            ));
+        } else {
+            $output->writeln('<comment>Generation analysis cache:</comment> miss.');
+            $generationResolveStartedAt = microtime(true);
+            $generation = $this->resolveGeneratedCandidates(
+                $acceptedCandidates,
+                $skippedClasses,
+                $preparedClassDataByClass,
+                $output,
+                $request->importedAbi,
+                $enumRegistry,
+            );
+            $this->renderDebugTiming(
+                $output,
+                'generation.resolve_generated_candidates',
+                microtime(true) - $generationResolveStartedAt,
+            );
+
+            $enumCacheCandidates = $generation['accepted_candidates'];
+            $enumCachePreparedClassData = $preparedClassDataByClass;
+            $enumCacheSkippedClasses = $generation['skipped_classes'];
+
+            $generationWarmClassCacheStartedAt = microtime(true);
+            $enumCacheWarmShape = $this->discoveryService->prepareClassStructures(
+                $enumCacheCandidates,
+                $request->outputDir,
+                $request->installation->includeRoots,
+                $metadataDir,
+                $request->jobs,
+                new NullOutput(),
+                $request->extensionName,
+            );
+            $this->renderDebugTiming(
+                $output,
+                'generation.prepare_class_structures_warm',
+                microtime(true) - $generationWarmClassCacheStartedAt,
+            );
+            if ($enumCacheWarmShape['errors'] === []) {
+                $enumCacheCandidates = $enumCacheWarmShape['accepted_candidates'];
+                $enumCachePreparedClassData = $enumCacheWarmShape['prepared_class_data'];
+                $enumCacheSkippedClasses = [...$generation['skipped_classes'], ...$enumCacheWarmShape['skipped_classes']];
+            }
+
+            $enumCacheClassNamespaces = $this->classNamespaces($enumCacheCandidates, $request->importedAbi);
+            if ($enumCandidateHeaders === []) {
+                $generationWarmEnumHeaderStartedAt = microtime(true);
+                $enumCandidateHeaders = (new EnumCandidateHeaderCollector())->collect(
+                    $request->installation->includeRoots,
+                    $enumCacheCandidates,
+                    $enumCachePreparedClassData,
+                );
+                $this->renderDebugTiming(
+                    $output,
+                    'generation.collect_enum_candidate_headers_warm',
+                    microtime(true) - $generationWarmEnumHeaderStartedAt,
+                );
+            } else {
+                $this->renderDebugTiming(
+                    $output,
+                    'generation.collect_enum_candidate_headers_warm_reused',
+                    0.0,
+                );
+            }
+            $this->writeEnumCandidateHeaders($metadataDir, $enumCandidateHeaders);
+            $generationWarmEnumCacheWriteStartedAt = microtime(true);
+            $enumHolderCache->write(
+                $metadataDir,
+                $request->installation->includeRoots,
+                $enumCacheCandidates,
+                $enumCacheSkippedClasses,
+                $enumCacheClassNamespaces,
+                $enumRegistry,
+                $enumCandidateHeaders,
+            );
+            $this->renderDebugTiming(
+                $output,
+                'generation.write_enum_holder_cache_warm',
+                microtime(true) - $generationWarmEnumCacheWriteStartedAt,
+            );
+
+            $generationCacheCandidates = $generation['accepted_candidates'];
+            $generationCachePreparedClassData = $this->preparedClassDataForCandidates(
+                $preparedClassDataByClass,
+                $generationCacheCandidates,
+            );
+            $generationCacheClassNamespaces = $this->classNamespaces($generationCacheCandidates, $request->importedAbi);
+            $generationCacheWriteStartedAt = microtime(true);
+            $generationAnalysisCache->write(
+                $metadataDir,
+                $request,
+                $generationCacheCandidates,
+                $generation['skipped_classes'],
+                $generationCachePreparedClassData,
+                $generationCacheClassNamespaces,
+                $enumRegistry,
+                $generation,
+            );
+            $timings['generation_analysis_cache_write'] = microtime(true) - $generationCacheWriteStartedAt;
+        }
 
         $acceptedCandidates = $generation['accepted_candidates'];
         $generatedClasses = $generation['generated_classes'];
         $skippedClasses = $generation['skipped_classes'];
         $skippedMethods = $generation['skipped_methods'];
         $errors = $generation['errors'];
-
-        $enumCacheCandidates = $acceptedCandidates;
-        $enumCachePreparedClassData = $preparedClassDataByClass;
-        $enumCacheSkippedClasses = $skippedClasses;
-
-        $enumCacheWarmShape = $this->discoveryService->prepareClassStructures(
-            $acceptedCandidates,
-            $request->outputDir,
-            $request->installation->includeRoots,
-            $metadataDir,
-            $request->jobs,
-            new NullOutput(),
-            $request->extensionName,
-        );
-        if ($enumCacheWarmShape['errors'] === []) {
-            $enumCacheCandidates = $enumCacheWarmShape['accepted_candidates'];
-            $enumCachePreparedClassData = $enumCacheWarmShape['prepared_class_data'];
-            $enumCacheSkippedClasses = [...$skippedClasses, ...$enumCacheWarmShape['skipped_classes']];
-        }
-
-        $enumCacheClassNamespaces = $this->classNamespaces($enumCacheCandidates, $request->importedAbi);
-        $enumCandidateHeaders = (new EnumCandidateHeaderCollector())->collect(
-            $request->installation->includeRoots,
-            $enumCacheCandidates,
-            $enumCachePreparedClassData,
-        );
-        file_put_contents(
-            $metadataDir . '/enum_candidate_headers.json',
-            json_encode(array_map(
-                static fn(EnumCandidateHeader $entry): array => $entry->toArray(),
-                $enumCandidateHeaders,
-            ), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]',
-        );
-        $enumHolderCache->write(
-            $metadataDir,
-            $request->installation->includeRoots,
-            $enumCacheCandidates,
-            $enumCacheSkippedClasses,
-            $enumCacheClassNamespaces,
-            $enumRegistry,
-            $enumCandidateHeaders,
-        );
 
         $this->renderModuleAcceptance(
             $output,
@@ -444,6 +530,7 @@ class BuildPipeline
             moduleGeneratedMethodTotals: $generation['module_generated_method_totals'] ?? [],
             passes: $generation['passes'],
             requiresSignalConnectionSupport: (bool) ($generation['requires_signal_connection_support'] ?? false),
+            cacheMetadata: $cacheMetadata,
             timings: $timings,
         );
     }
@@ -546,6 +633,7 @@ class BuildPipeline
             'bootstrap_skipped' => $bootstrap['skipped'],
             'bootstrap_disabled' => $bootstrap['disabled'],
             'ccache_enabled' => $request->useCcache,
+            'cache' => $analysis->cacheMetadata,
             'timings' => $timings,
             'file_writes' => [
                 'comparator' => $scaffolder->writeComparatorName(),
@@ -640,6 +728,7 @@ class BuildPipeline
             'accepted_candidates.json',
             'allowed_classes.json',
             'enum_holders_cache.json',
+            'generation_analysis_cache.json',
             'enum_candidate_headers.json',
             'supplemental_candidates.json',
         ] as $filename) {
@@ -657,6 +746,83 @@ class BuildPipeline
             $label,
             $this->formatDurationSeconds($seconds),
         ));
+    }
+
+    private function renderDebugTiming(OutputInterface $output, string $label, float $seconds): void
+    {
+        if (!$this->debugTimingEnabled()) {
+            return;
+        }
+
+        $output->writeln(sprintf(
+            '  <comment>debug:</comment> %s %s',
+            $label,
+            $this->formatDurationSeconds($seconds),
+        ));
+    }
+
+    private function debugTimingEnabled(): bool
+    {
+        $value = getenv('QTB_DEBUG_TIMING');
+
+        return is_string($value) && $value !== '' && $value !== '0';
+    }
+
+    /**
+     * @return list<EnumCandidateHeader>
+     */
+    private function readEnumCandidateHeaders(string $metadataDir): array
+    {
+        $path = $metadataDir . '/enum_candidate_headers.json';
+        if (!is_file($path)) {
+            return [];
+        }
+
+        $decoded = json_decode((string) file_get_contents($path), true);
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        $headers = [];
+        foreach ($decoded as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $header = is_string($entry['header'] ?? null) ? $entry['header'] : '';
+            $module = is_string($entry['module'] ?? null) ? $entry['module'] : '';
+            if ($header === '' || $module === '') {
+                continue;
+            }
+
+            $types = array_values(array_filter(array_map(
+                static fn(mixed $value): string => is_string($value) ? trim($value) : '',
+                is_array($entry['types'] ?? null) ? $entry['types'] : [],
+            ), static fn(string $value): bool => $value !== ''));
+            sort($types);
+
+            $headers[] = new EnumCandidateHeader(
+                header: $header,
+                module: $module,
+                types: $types,
+            );
+        }
+
+        return $headers;
+    }
+
+    /**
+     * @param list<EnumCandidateHeader> $headers
+     */
+    private function writeEnumCandidateHeaders(string $metadataDir, array $headers): void
+    {
+        file_put_contents(
+            $metadataDir . '/enum_candidate_headers.json',
+            json_encode(array_map(
+                static fn(EnumCandidateHeader $entry): array => $entry->toArray(),
+                $headers,
+            ), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '[]',
+        );
     }
 
     private function formatDurationSeconds(float $seconds): string
@@ -850,6 +1016,7 @@ class BuildPipeline
             }
 
             $passes++;
+            $passStartedAt = microtime(true);
             if ($passes > 1) {
                 $output->writeln(sprintf(
                     '<comment>Re-evaluating generated dependency set (pass %d, %d class(es)).</comment>',
@@ -873,6 +1040,7 @@ class BuildPipeline
             sort($availableClasses);
 
             $removedCandidates = [];
+            $passGenerateStartedAt = microtime(true);
             foreach ($dirtyKeys as $candidateKey) {
                 $candidate = $candidateMap[$candidateKey] ?? null;
                 if (!$candidate instanceof HeaderCandidate) {
@@ -991,6 +1159,11 @@ class BuildPipeline
                 $progressBar->finish();
                 $output->write(PHP_EOL);
             }
+            $this->renderDebugTiming(
+                $output,
+                sprintf('generation.pass_%d.generate_from_prepared_data_loop', $passes),
+                microtime(true) - $passGenerateStartedAt,
+            );
 
             $currentCandidates = array_values(array_filter(
                 $currentCandidates,
@@ -1001,23 +1174,45 @@ class BuildPipeline
             sort($currentAllowedClasses);
 
             if ($errorsByClass !== [] || $currentCandidates === [] || $removedCandidates === []) {
+                $this->renderDebugTiming(
+                    $output,
+                    sprintf('generation.pass_%d.total', $passes),
+                    microtime(true) - $passStartedAt,
+                );
                 break;
             }
 
+            $passDependentsStartedAt = microtime(true);
             $dirtyCandidates = $this->generatedImpactedDependents(
                 array_keys($removedCandidates),
                 $reverseDependencyMap,
                 $candidateMap,
+            );
+            $this->renderDebugTiming(
+                $output,
+                sprintf('generation.pass_%d.recompute_impacted_dependents', $passes),
+                microtime(true) - $passDependentsStartedAt,
+            );
+            $this->renderDebugTiming(
+                $output,
+                sprintf('generation.pass_%d.total', $passes),
+                microtime(true) - $passStartedAt,
             );
         }
 
         $generatedClasses = array_keys($candidateMap);
         sort($generatedClasses);
 
+        $syntheticClassesStartedAt = microtime(true);
         $syntheticClasses = $this->synthesizeListWrapperClasses(
             $generatedPhpClasses,
             $preparedClassDataByClass,
             $generatedClassHeaders,
+        );
+        $this->renderDebugTiming(
+            $output,
+            'generation.synthesize_list_wrapper_classes',
+            microtime(true) - $syntheticClassesStartedAt,
         );
         foreach ($syntheticClasses['generated_php_classes'] as $className => $phpClass) {
             $generatedPhpClasses[$className] = $phpClass;
@@ -1029,9 +1224,27 @@ class BuildPipeline
         }
         $generatedClasses = array_values(array_unique($generatedClasses));
         sort($generatedClasses);
+        $resolveParentsStartedAt = microtime(true);
         $generatedClassParents = $this->resolveGeneratedClassParents($rawGeneratedClassParents, $generatedPhpClasses, $generatedClassModules);
+        $this->renderDebugTiming(
+            $output,
+            'generation.resolve_generated_class_parents',
+            microtime(true) - $resolveParentsStartedAt,
+        );
+        $resolveDependenciesStartedAt = microtime(true);
         $generatedClassDependencies = $this->resolveGeneratedClassDependencies($rawGeneratedClassDependencies, $generatedPhpClasses, $generatedClassModules, $generatedClassParents);
+        $this->renderDebugTiming(
+            $output,
+            'generation.resolve_generated_class_dependencies',
+            microtime(true) - $resolveDependenciesStartedAt,
+        );
+        $normalizeParentContractsStartedAt = microtime(true);
         $generatedPhpClasses = $this->normalizeGeneratedPhpClassesAgainstParentContracts($generatedPhpClasses);
+        $this->renderDebugTiming(
+            $output,
+            'generation.normalize_parent_contracts',
+            microtime(true) - $normalizeParentContractsStartedAt,
+        );
 
         $requiresSignalConnectionSupport = false;
         foreach ($generatedPhpClasses as $phpClass) {
@@ -2036,6 +2249,35 @@ class BuildPipeline
         }
 
         return $namespaces;
+    }
+
+    /**
+     * @param array<string, array<string, mixed>> $preparedClassDataByClass
+     * @param list<HeaderCandidate> $acceptedCandidates
+     * @return array<string, array<string, mixed>>
+     */
+    private function preparedClassDataForCandidates(array $preparedClassDataByClass, array $acceptedCandidates): array
+    {
+        $candidateKeys = [];
+        foreach ($acceptedCandidates as $candidate) {
+            $candidateKeys[$candidate->identityKey()] = true;
+            $candidateKeys[$candidate->className] = true;
+            if ($candidate->qualifiedClassName !== null && $candidate->qualifiedClassName !== '') {
+                $candidateKeys[$candidate->qualifiedClassName] = true;
+            }
+        }
+
+        $resolved = [];
+        foreach ($preparedClassDataByClass as $classKey => $classData) {
+            if (!isset($candidateKeys[$classKey]) || !is_array($classData)) {
+                continue;
+            }
+
+            $resolved[$classKey] = $classData;
+        }
+        ksort($resolved);
+
+        return $resolved;
     }
 
     /**

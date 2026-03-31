@@ -47,11 +47,13 @@ it('generates the extension tree from a fixture qt root', function (): void {
         ->and(is_file($metadataDir . '/allowed_classes.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/discovery_cache.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/enum_holders_cache.json'))->toBeTrue()
+        ->and(is_file($metadataDir . '/generation_analysis_cache.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/enum_candidate_headers.json'))->toBeTrue()
         ->and(is_file($metadataDir . '/accepted_candidates.json'))->toBeTrue()
         ->and(
             is_file($classCacheDir . '/QPoint.json')
-            || is_file($classCacheDir . '/qpoint__qtcore__qpoint_h.json'),
+            || is_file($classCacheDir . '/qpoint__qtcore__qpoint_h.json')
+            || (glob($classCacheDir . '/qpoint__*.json') ?: []) !== [],
         )->toBeTrue()
         ->and(is_file($metadataDir . '/phpize.stdout.log'))->toBeTrue()
         ->and(is_file($metadataDir . '/gen_stub.stdout.log'))->toBeTrue()
@@ -63,6 +65,7 @@ it('generates the extension tree from a fixture qt root', function (): void {
             'Running 2 parallel discovery worker(s)...',
             'Class structure cache:',
             'Enum holder cache: miss.',
+            'Generation analysis cache: miss.',
             'Extracting enum holders with 2 parallel worker(s)...',
             'Enum discovery',
             'Generate analysis pass 1',
@@ -96,6 +99,7 @@ it('generates the extension tree from a fixture qt root', function (): void {
         ->and(array_column($summary['bootstrap'], 'name'))->toBe(['phpize', 'gen_stub', 'configure', 'make'])
         ->and($summary['bootstrap'][0]['duration_seconds'] ?? null)->toBeFloat()
         ->and(array_keys($summary['timings'] ?? []))->toContain('discovery', 'class_structure_cache', 'supplemental_discovery', 'enum_discovery', 'generation_analysis', 'emission', 'bootstrap', 'build_total')
+        ->and(($summary['cache']['generation_analysis']['hit'] ?? null))->toBeFalse()
         ->and($summary['file_writes']['total']['total'] ?? null)->toBeGreaterThan(0);
 
     $runtimeManifest = qt_decode_json((string) file_get_contents($metadataDir . '/runtime_manifest.json'));
@@ -989,7 +993,7 @@ it('rewrites cached allow lists to actual generated classes', function (): void 
         ->and($summary['skipped_classes'])->toBe(1);
 });
 
-it('skips bootstrap when generated files are unchanged and module binary exists', function (): void {
+it('reuses the generation analysis cache on unchanged builds', function (): void {
     $fixtureRoot = qt_fixture_path('qt');
     $buildRoot = sys_get_temp_dir() . '/qtbuilder-build-skip-bootstrap-' . bin2hex(random_bytes(4));
     $metadataDir = $buildRoot . '/generated';
@@ -1018,12 +1022,12 @@ it('skips bootstrap when generated files are unchanged and module binary exists'
 
     expect($second)->toBeSuccessfulCommandResult()
         ->and($second['display'])->toContain('Enum holder cache: hit')
-        ->and($second['display'])->toContain('No generated file changes detected; skipping bootstrap.')
-        ->and($bootstrapper->contexts)->toHaveCount(1);
+        ->and($second['display'])->toContain('Generation analysis cache: hit')
+        ->and($second['display'])->not->toContain('Generate analysis pass 1')
+        ->and($bootstrapper->contexts)->toHaveCount(2);
 
     $summary = qt_decode_json((string) file_get_contents($metadataDir . '/build_summary.json'));
-    expect($summary['bootstrap_skipped'] ?? null)->toBeTrue()
-        ->and($summary['file_writes']['total']['written'] ?? null)->toBe(0)
+    expect($summary['cache']['generation_analysis']['hit'] ?? null)->toBeTrue()
         ->and($summary['file_writes']['total']['unchanged'] ?? 0)->toBeGreaterThan(0);
 });
 

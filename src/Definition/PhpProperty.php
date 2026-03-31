@@ -33,4 +33,18 @@ readonly class PhpProperty
             'is_static' => $this->isStatic,
         ];
     }
+
+    /**
+     * @param array<string, mixed> $payload
+     */
+    public static function fromArray(array $payload): self
+    {
+        return new self(
+            name: is_string($payload['name'] ?? null) ? $payload['name'] : '',
+            phpType: is_string($payload['php_type'] ?? null) ? $payload['php_type'] : 'mixed',
+            cppType: is_string($payload['cpp_type'] ?? null) ? $payload['cpp_type'] : '',
+            access: is_string($payload['access'] ?? null) ? $payload['access'] : 'public',
+            isStatic: (bool) ($payload['is_static'] ?? false),
+        );
+    }
 }

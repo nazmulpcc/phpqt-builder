@@ -127,4 +127,79 @@ readonly class PhpClass
             ],
         ];
     }
+
+    /**
+     * @param array<string, mixed> $payload
+     */
+    public static function fromArray(array $payload): self
+    {
+        $properties = [];
+        foreach (($payload['properties'] ?? []) as $propertyPayload) {
+            if (!is_array($propertyPayload)) {
+                continue;
+            }
+
+            $properties[] = PhpProperty::fromArray($propertyPayload);
+        }
+
+        $methods = [];
+        foreach (($payload['methods'] ?? []) as $methodPayload) {
+            if (!is_array($methodPayload)) {
+                continue;
+            }
+
+            $methods[] = PhpMethod::fromArray($methodPayload);
+        }
+
+        $signals = [];
+        foreach (($payload['signals'] ?? []) as $signalPayload) {
+            if (!is_array($signalPayload)) {
+                continue;
+            }
+
+            $signals[] = PhpMethod::fromArray($signalPayload);
+        }
+
+        $classConstants = [];
+        foreach (($payload['class_constants'] ?? []) as $constantPayload) {
+            if (!is_array($constantPayload)) {
+                continue;
+            }
+
+            $classConstants[] = PhpClassConstant::fromArray($constantPayload);
+        }
+
+        $nativeIncludes = array_values(array_filter(
+            array_map(static fn(mixed $value): string => is_string($value) ? $value : '', $payload['native_includes'] ?? []),
+            static fn(string $value): bool => $value !== '',
+        ));
+
+        $smartPointerAliases = [];
+        foreach (($payload['smart_pointer_aliases'] ?? []) as $alias => $target) {
+            if (!is_string($alias) || !is_string($target) || $alias === '' || $target === '') {
+                continue;
+            }
+
+            $smartPointerAliases[$alias] = $target;
+        }
+
+        return new self(
+            name: is_string($payload['name'] ?? null) ? $payload['name'] : '',
+            parent: is_string($payload['parent'] ?? null) ? $payload['parent'] : null,
+            isAbstract: (bool) ($payload['is_abstract'] ?? false),
+            isCopyConstructible: (bool) ($payload['is_copy_constructible'] ?? true),
+            hasPublicConstructor: (bool) ($payload['has_public_constructor'] ?? true),
+            hasPublicDestructor: (bool) ($payload['has_public_destructor'] ?? true),
+            properties: $properties,
+            methods: $methods,
+            signals: $signals,
+            isQObjectDerived: (bool) ($payload['is_qobject_derived'] ?? false),
+            classConstants: $classConstants,
+            nativeIncludes: $nativeIncludes,
+            nativeAliasOf: is_string($payload['native_alias_of'] ?? null) ? $payload['native_alias_of'] : null,
+            nativeCppType: is_string($payload['native_cpp_type'] ?? null) ? $payload['native_cpp_type'] : null,
+            generationId: is_string($payload['generation_id'] ?? null) ? $payload['generation_id'] : null,
+            smartPointerAliases: $smartPointerAliases,
+        );
+    }
 }

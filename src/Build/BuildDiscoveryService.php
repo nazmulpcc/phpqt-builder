@@ -412,8 +412,11 @@ class BuildDiscoveryService
         $errorsByClass = [];
         /** @var array<string, SupplementalClassCandidate> $supplementalCandidates */
         $supplementalCandidates = [];
+        $pass = 0;
 
         do {
+            $pass++;
+            $passStartedAt = microtime(true);
             $knownClassNames = array_merge(
                 array_keys($candidateMap),
                 array_keys($preparedClassDataByClass),
@@ -430,6 +433,7 @@ class BuildDiscoveryService
 
             /** @var array<string, SupplementalClassCandidate> $queuedThisPass */
             $queuedThisPass = [];
+            $candidateLoopStartedAt = microtime(true);
             foreach ($candidateMap as $className => $candidate) {
                 $classData = $preparedClassDataByClass[$className] ?? null;
                 if (!is_array($classData)) {
@@ -470,8 +474,18 @@ class BuildDiscoveryService
                 $queuedThisPass[$supplemental->candidate->identityKey()] = $supplemental;
                 $knownClasses[$supplemental->candidate->identityKey()] = true;
             }
+            $this->renderDebugTiming(
+                $output,
+                sprintf('supplemental.pass_%d.generate_from_prepared_data_loop', $pass),
+                microtime(true) - $candidateLoopStartedAt,
+            );
 
             if ($queuedThisPass === []) {
+                $this->renderDebugTiming(
+                    $output,
+                    sprintf('supplemental.pass_%d.total', $pass),
+                    microtime(true) - $passStartedAt,
+                );
                 break;
             }
 
@@ -480,6 +494,7 @@ class BuildDiscoveryService
                 count($queuedThisPass),
             ));
 
+            $prepareStartedAt = microtime(true);
             $prepared = $this->prepareClassStructures(
                 array_values(array_map(
                     static fn(SupplementalClassCandidate $candidate): HeaderCandidate => $candidate->candidate,
@@ -491,6 +506,11 @@ class BuildDiscoveryService
                 $jobs,
                 $output,
                 $extensionName,
+            );
+            $this->renderDebugTiming(
+                $output,
+                sprintf('supplemental.pass_%d.prepare_class_structures', $pass),
+                microtime(true) - $prepareStartedAt,
             );
 
             foreach ($prepared['accepted_candidates'] as $candidate) {
@@ -518,6 +538,11 @@ class BuildDiscoveryService
             foreach ($queuedThisPass as $className => $candidate) {
                 $supplementalCandidates[$candidate->identityKey()] = $candidate;
             }
+            $this->renderDebugTiming(
+                $output,
+                sprintf('supplemental.pass_%d.total', $pass),
+                microtime(true) - $passStartedAt,
+            );
         } while ($errorsByClass === []);
 
         ksort($candidateMap);
@@ -534,6 +559,26 @@ class BuildDiscoveryService
                 $supplementalCandidates,
             )),
         ];
+    }
+
+    private function renderDebugTiming(OutputInterface $output, string $label, float $seconds): void
+    {
+        if (!$this->debugTimingEnabled()) {
+            return;
+        }
+
+        $output->writeln(sprintf(
+            '  <comment>debug:</comment> %s %s',
+            $label,
+            $this->formatDurationSeconds($seconds),
+        ));
+    }
+
+    private function debugTimingEnabled(): bool
+    {
+        $value = getenv('QTB_DEBUG_TIMING');
+
+        return is_string($value) && $value !== '' && $value !== '0';
     }
 
     /**
@@ -610,7 +655,9 @@ class BuildDiscoveryService
      *   accepted_candidates: list<HeaderCandidate>,
      *   prepared_class_data: array<string, array<string, mixed>>,
      *   skipped_classes: list<array<string, string|null>>,
-     *   errors: list<array<string, string|null>>
+     *   errors: list<array<string, string|null>>,
+     *   cache_hit_count: int,
+     *   cache_miss_count: int
      * }
      */
     public function prepareClassStructures(
@@ -761,6 +808,8 @@ class BuildDiscoveryService
             'prepared_class_data' => $preparedClassDataByClass,
             'skipped_classes' => array_values($skippedByClass),
             'errors' => array_values($errorsByClass),
+            'cache_hit_count' => $cacheHits,
+            'cache_miss_count' => count($cacheMisses),
         ];
     }
 
@@ -1133,6 +1182,15 @@ class BuildDiscoveryService
         $progressBar->maxSecondsBetweenRedraws(0.25);
 
         return $progressBar;
+    }
+
+    private function formatDurationSeconds(float $seconds): string
+    {
+        if ($seconds < 1.0) {
+            return sprintf('%.0f ms', $seconds * 1000);
+        }
+
+        return sprintf('%.2f s', $seconds);
     }
 
     /**

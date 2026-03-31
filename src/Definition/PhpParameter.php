@@ -36,4 +36,19 @@ readonly class PhpParameter
             'is_nullable_by_ref' => $this->isNullableByRef,
         ];
     }
+
+    /**
+     * @param array<string, mixed> $payload
+     */
+    public static function fromArray(array $payload): self
+    {
+        return new self(
+            name: is_string($payload['name'] ?? null) ? $payload['name'] : '',
+            phpType: is_string($payload['php_type'] ?? null) ? $payload['php_type'] : 'mixed',
+            hasDefault: (bool) ($payload['has_default'] ?? false),
+            position: max(0, (int) ($payload['position'] ?? 0)),
+            isByRef: (bool) ($payload['is_by_ref'] ?? false),
+            isNullableByRef: (bool) ($payload['is_nullable_by_ref'] ?? false),
+        );
+    }
 }
