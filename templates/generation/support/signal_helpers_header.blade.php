@@ -9,23 +9,95 @@
 
 #include "qt_class_helpers.h"
 #include <QObject>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <memory>
 
 struct qt_signal_callback_t {
     zend_fcall_info fci;
     zend_fcall_info_cache fci_cache;
+    zend_ulong owner_thread_id;
+    bool owner_owner_queue_supported;
 };
 
-template <typename InvokeCallback>
-static inline bool qt_signal_dispatch(InvokeCallback invoke)
+static inline zend_ulong qt_signal_current_thread_id()
 {
-    if (qt_runtime_can_call_zend()) {
+#if defined(ZTS)
+    if (!tsrm_is_managed_thread()) {
+        return 0;
+    }
+
+    return (zend_ulong) (uintptr_t) tsrm_thread_id();
+#else
+    return 1;
+#endif
+}
+
+static inline bool qt_signal_debug_enabled()
+{
+    static int enabled = -1;
+    if (enabled >= 0) {
+        return enabled == 1;
+    }
+
+    const char *raw = getenv("QT_SIGNAL_DEBUG");
+    enabled = (raw != NULL && *raw != '\0' && strcmp(raw, "0") != 0) ? 1 : 0;
+    return enabled == 1;
+}
+
+static inline void qt_signal_debug_log(const char *message, zend_ulong owner_thread_id)
+{
+    if (!qt_signal_debug_enabled() || message == NULL) {
+        return;
+    }
+
+    fprintf(
+        stderr,
+        "[qt-signal] %s owner=%lu current=%lu can_call=%d owner_thread=%d\n",
+        message,
+        (unsigned long) owner_thread_id,
+        (unsigned long) qt_signal_current_thread_id(),
+        qt_runtime_can_call_zend() ? 1 : 0,
+        qt_runtime_is_owner_thread() ? 1 : 0
+    );
+}
+
+static inline bool qt_signal_callback_is_owner_thread(const std::shared_ptr<qt_signal_callback_t> &callback)
+{
+    if (!callback) {
+        return false;
+    }
+
+#if defined(ZTS)
+    return callback->owner_thread_id != 0 && qt_signal_current_thread_id() == callback->owner_thread_id;
+#else
+    return true;
+#endif
+}
+
+template <typename InvokeCallback>
+static inline bool qt_signal_dispatch(const std::shared_ptr<qt_signal_callback_t> &callback, InvokeCallback invoke)
+{
+    if (!callback) {
+        return false;
+    }
+
+    if (qt_signal_callback_is_owner_thread(callback) && qt_runtime_can_call_zend()) {
+        qt_signal_debug_log("dispatch-direct", callback->owner_thread_id);
         invoke();
         return true;
     }
 
-    return qt_runtime_enqueue_owner_task([invoke]() mutable {
-        if (qt_runtime_can_call_zend()) {
+    if (!callback->owner_owner_queue_supported) {
+        qt_signal_debug_log("dispatch-drop-no-owner-queue", callback->owner_thread_id);
+        return false;
+    }
+
+    qt_signal_debug_log("dispatch-enqueue-owner", callback->owner_thread_id);
+    return qt_runtime_enqueue_owner_task([callback, invoke]() mutable {
+        qt_signal_debug_log("dispatch-owner-task", callback->owner_thread_id);
+        if (qt_signal_callback_is_owner_thread(callback) && qt_runtime_can_call_zend()) {
             invoke();
         }
     });
@@ -37,7 +109,7 @@ static inline void qt_signal_callback_clear(const std::shared_ptr<qt_signal_call
         return;
     }
 
-    if (!qt_runtime_can_call_zend()) {
+    if (!qt_signal_callback_is_owner_thread(callback) || !qt_runtime_can_call_zend()) {
         return;
     }
 
@@ -56,6 +128,9 @@ static inline std::shared_ptr<qt_signal_callback_t> qt_signal_callback_create(co
     memset(&handle->fci, 0, sizeof(handle->fci));
     memset(&handle->fci_cache, 0, sizeof(handle->fci_cache));
     ZVAL_UNDEF(&handle->fci.function_name);
+    handle->owner_thread_id = qt_signal_current_thread_id();
+    handle->owner_owner_queue_supported = qt_runtime_is_owner_thread();
+    qt_signal_debug_log("callback-create", handle->owner_thread_id);
 
     char *error = NULL;
     if (zend_fcall_info_init(callback, 0, &handle->fci, &handle->fci_cache, NULL, &error) != SUCCESS) {
@@ -73,7 +148,7 @@ static inline std::shared_ptr<qt_signal_callback_t> qt_signal_callback_create(co
     if (sender != NULL) {
         QObject::connect(sender, &QObject::destroyed, [handle]() {
             auto _qt_handle = handle;
-            qt_signal_dispatch([_qt_handle]() mutable {
+            qt_signal_dispatch(_qt_handle, [_qt_handle]() mutable {
                 qt_signal_callback_clear(_qt_handle);
             });
         });
@@ -84,7 +159,10 @@ static inline std::shared_ptr<qt_signal_callback_t> qt_signal_callback_create(co
 
 static inline bool qt_signal_callback_invoke(const std::shared_ptr<qt_signal_callback_t> &callback, uint32_t param_count, zval *params)
 {
-    if (!callback || !qt_runtime_can_call_zend()) {
+    if (!callback || !qt_signal_callback_is_owner_thread(callback) || !qt_runtime_can_call_zend()) {
+        if (callback) {
+            qt_signal_debug_log("invoke-rejected", callback->owner_thread_id);
+        }
         return false;
     }
 
@@ -104,6 +182,7 @@ static inline bool qt_signal_callback_invoke(const std::shared_ptr<qt_signal_cal
     callback->fci.param_count = param_count;
 
     bool ok = zend_call_function(&callback->fci, &callback->fci_cache) == SUCCESS;
+    qt_signal_debug_log(ok ? "invoke-success" : "invoke-failure", callback->owner_thread_id);
     callback->fci.retval = previousRetval;
     callback->fci.params = previousParams;
     callback->fci.param_count = previousParamCount;

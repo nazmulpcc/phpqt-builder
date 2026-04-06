@@ -9,7 +9,68 @@
 /* {!! $method->name !!} */
 ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
 {
-@if($ctx->nativeCppType === 'QThread' && $method->name === 'start')
+@if($ctx->nativeCppType === 'QObject' && $method->name === 'moveToThread')
+    qt_runtime_owner_safe_point();
+
+    zval *thread_zv = NULL;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_OBJECT_OF_CLASS(thread_zv, qt_ce_qthread)
+    ZEND_PARSE_PARAMETERS_END();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (intern->native_ptr == NULL) {
+        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+    qt_qthread_object *target_intern = qt_qthread_from_obj(Z_OBJ_P(thread_zv));
+    if (target_intern->native_ptr == NULL) {
+        zend_throw_error(NULL, "QThread native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+    if (target_intern->extra_storage == NULL) {
+        zend_throw_error(NULL, "QThread move host is not initialized.");
+        RETURN_THROWS();
+    }
+
+    QObject *_qt_object = static_cast<QObject *>(intern->native_ptr);
+    QThread *_qt_source_thread = _qt_object->thread();
+    QThread *_qt_target_thread = target_intern->native_ptr;
+    if (_qt_target_thread == NULL) {
+        RETURN_FALSE;
+    }
+
+    if (!_qt_object->moveToThread(_qt_target_thread)) {
+        RETURN_FALSE;
+    }
+
+    std::string _qt_move_error;
+    if (!qt_qthread_task_host_register_moved_object(
+        static_cast<qt_qthread_task_host *>(target_intern->extra_storage),
+        _qt_target_thread,
+        _qt_object,
+        &intern->std,
+        intern->native_is_generated_subclass,
+        intern->native_is_virtual_trampoline,
+        true,
+        intern->native_rebind_php_object,
+        &_qt_move_error
+    )) {
+        if (_qt_source_thread != NULL) {
+            (void) _qt_object->moveToThread(_qt_source_thread);
+        }
+        zend_throw_error(NULL, "%s", _qt_move_error.c_str());
+        RETURN_THROWS();
+    }
+
+    intern->prevent_destroy = true;
+    if (intern->native_is_virtual_trampoline && intern->native_rebind_php_object != NULL) {
+        intern->native_rebind_php_object(intern->native_ptr, NULL, NULL);
+    }
+
+    RETURN_TRUE;
+@elseif($ctx->nativeCppType === 'QThread' && $method->name === 'start')
     qt_runtime_owner_safe_point();
 
     zval *_qt_arg0 = NULL;

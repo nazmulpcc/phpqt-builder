@@ -37,6 +37,7 @@ class qt_qthreadruntime_state;
 struct qt_qfuture_continuation_state;
 struct qt_qthread_task_host;
 class QThread;
+class QObject;
 
 typedef struct _qt_qthreadruntime_object {
     std::shared_ptr<qt_qthreadruntime_state> *state;
@@ -116,6 +117,20 @@ PHP_QT_API bool qt_qthread_task_host_send(qt_qthread_task_host *host, const std:
 PHP_QT_API bool qt_qthread_task_host_on_owner_interruption_request(qt_qthread_task_host *host);
 PHP_QT_API bool qt_qthread_task_host_is_task_running(qt_qthread_task_host *host);
 PHP_QT_API bool qt_qthread_task_host_execute_pending(qt_qthread_task_host *host, QThread *thread);
+PHP_QT_API bool qt_qthread_task_host_enter_moved_runtime(qt_qthread_task_host *host, QThread *thread);
+PHP_QT_API bool qt_qthread_task_host_is_moved_runtime_active(qt_qthread_task_host *host);
+PHP_QT_API void qt_qthread_task_host_leave_moved_runtime(qt_qthread_task_host *host);
+PHP_QT_API bool qt_qthread_task_host_register_moved_object(
+    qt_qthread_task_host *host,
+    QThread *thread,
+    QObject *native_object,
+    zend_object *source_object,
+    bool native_is_generated_subclass,
+    bool native_is_virtual_trampoline,
+    bool prevent_destroy,
+    void (*rebind_php_object)(void *native_ptr, zend_object *php_object, zend_class_entry *actual_ce),
+    std::string *error
+);
 PHP_QT_API bool qt_qthread_task_host_future_is_valid(qt_qthread_task_host *host, uint64_t task_token);
 PHP_QT_API bool qt_qthread_task_host_future_is_running(qt_qthread_task_host *host, uint64_t task_token);
 PHP_QT_API bool qt_qthread_task_host_future_is_finished(qt_qthread_task_host *host, uint64_t task_token);

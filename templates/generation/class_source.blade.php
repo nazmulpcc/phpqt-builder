@@ -60,6 +60,10 @@
 @if($ctx->nativeCppType === 'QThread')
 #include "qt_qthreadruntime.h"
 @endif
+@if($ctx->nativeCppType === 'QObject')
+#include "qt_qthread.h"
+#include "qt_qthreadruntime.h"
+@endif
 
 #include "qt_class_helpers.h"
 @if($ctx->hasQObjectPropertySupport())
@@ -258,9 +262,19 @@ public:
 
     void run() override
     {
-        if (qt_task_runtime_host_ != NULL
-            && qt_qthread_task_host_execute_pending(static_cast<qt_qthread_task_host *>(qt_task_runtime_host_), this)) {
-            return;
+        if (qt_task_runtime_host_ != NULL) {
+            auto *_qt_host = static_cast<qt_qthread_task_host *>(qt_task_runtime_host_);
+            if (qt_qthread_task_host_execute_pending(_qt_host, this)) {
+                return;
+            }
+
+            if (qt_qthread_task_host_enter_moved_runtime(_qt_host, this)) {
+                if (qt_qthread_task_host_is_moved_runtime_active(_qt_host)) {
+                    this->QThread::run();
+                    qt_qthread_task_host_leave_moved_runtime(_qt_host);
+                }
+                return;
+            }
         }
 
         this->QThread::run();
@@ -510,6 +524,24 @@ public:
 @endforeach
 };
 
+static void {!! $ctx->filePrefix !!}_rebind_php_object(void *native_ptr, zend_object *php_object, zend_class_entry *actual_ce)
+{
+    if (native_ptr == NULL) {
+        return;
+    }
+
+    auto *_qt_trampoline = static_cast<{!! $ctx->trampolineTypeName !!} *>(native_ptr);
+    _qt_trampoline->php_object = php_object;
+    _qt_trampoline->qt_override_cache_initialized = false;
+@foreach($ctx->virtualDispatchCacheEntries() as $entry)
+    _qt_trampoline->{!! $entry['field'] !!} = false;
+@endforeach
+
+    if (php_object != NULL) {
+        _qt_trampoline->qt_cache_virtual_overrides(actual_ce != NULL ? actual_ce : php_object->ce, {!! $ctx->ceVarName !!});
+    }
+}
+
 @endif
 
 /* ------------------------------------------------------------------ */
@@ -538,6 +570,7 @@ static zend_object *{!! $ctx->filePrefix !!}_create_object(zend_class_entry *ce)
 @if($ctx->nativeCppType === 'QThread')
     intern->extra_storage = qt_qthread_task_host_create();
 @endif
+    intern->native_rebind_php_object = NULL;
 
     zend_object_std_init(&intern->std, ce);
     object_properties_init(&intern->std, ce);
@@ -693,6 +726,7 @@ PHP_QT_API void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativ
     qt_runtime_try_hook_about_to_quit();
 @endif
     intern->prevent_destroy = prevent_destroy;
+    intern->native_rebind_php_object = NULL;
 @if($ctx->tracksGeneratedNativeSubclass)
     intern->native_is_generated_subclass = false;
 @if($ctx->requiresVirtualTrampoline)
@@ -887,7 +921,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connectPropertyNotify)
         void operator()() const
         {
             auto _qt_callback_copy = callback;
-            qt_signal_dispatch([_qt_callback_copy]() mutable {
+            qt_signal_dispatch(_qt_callback_copy, [_qt_callback_copy]() mutable {
                 qt_signal_callback_invoke(_qt_callback_copy, 0, nullptr);
             });
         }

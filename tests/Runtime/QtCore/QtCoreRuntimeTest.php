@@ -123,6 +123,20 @@ it('dispatches qthread virtual overrides back to owner thread', function (): voi
         ->and($payload['timed_out'])->toBeFalse();
 });
 
+it('moves a php qobject subclass to a qthread and restores its live state there', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_move_to_thread_php_subclass.php');
+
+    expect($payload['move_ok'])->toBeTrue()
+        ->and($payload['posted'])->toBeTrue()
+        ->and($payload['started_hits'])->toBe(1)
+        ->and($payload['wait_ok'])->toBeTrue()
+        ->and($payload['finished_hits'])->toBe(1)
+        ->and($payload['callback_on_main_thread'])->toBeTrue()
+        ->and($payload['worker_thread_differs'])->toBeTrue()
+        ->and($payload['received_name'])->toBeString()
+        ->and($payload['received_name'])->toStartWith('phase1:moved:7:');
+});
+
 it('handles burst cross-thread signal dispatch without timing out', function (): void {
     $payload = qt_runtime_thread_payload('QtCore/thread_signal_burst_stress.php');
 

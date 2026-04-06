@@ -73,6 +73,7 @@ typedef struct _{!! $ctx->objectStructName !!} {
     bool prevent_destroy;
     void *extra_storage;
 @endif
+    void (*native_rebind_php_object)(void *native_ptr, zend_object *php_object, zend_class_entry *actual_ce);
     zend_object std; /* MUST be last */
 } {!! $ctx->objectStructName !!};
 

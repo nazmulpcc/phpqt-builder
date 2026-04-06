@@ -63,7 +63,7 @@ foreach ($signal->params as $index => $param) {
 @foreach($snapshotSetupLines as $line)
             {!! $line !!}
 @endforeach
-            qt_signal_dispatch([{!! implode(', ', $dispatchCaptureArgs) !!}]() mutable {
+            qt_signal_dispatch(_qt_callback, [{!! implode(', ', $dispatchCaptureArgs) !!}]() mutable {
 @if($paramCount > 0)
                 zval _qt_params[{!! $paramCount !!}];
 @foreach($setupLines as $line)

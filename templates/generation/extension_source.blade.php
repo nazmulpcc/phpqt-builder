@@ -39,6 +39,7 @@ extern "C" {
 
 static std::atomic_bool qt_shutdown_in_progress{false};
 static std::atomic_bool qt_about_to_quit_hooked{false};
+static std::atomic<zend_ulong> qt_primary_owner_thread_id{0};
 static constexpr size_t QT_OWNER_TASK_QUEUE_MAX_DEPTH = 4096;
 static std::mutex qt_owner_task_mutex;
 static std::deque<std::function<void()>> qt_owner_task_queue;
@@ -75,6 +76,24 @@ bool qt_runtime_is_owner_thread(void)
     }
 
     return true;
+#endif
+}
+
+static inline bool qt_runtime_is_primary_owner_thread(void)
+{
+#if defined(ZTS)
+    if (!tsrm_is_managed_thread()) {
+        return false;
+    }
+
+    zend_ulong primary_owner_thread_id = qt_primary_owner_thread_id.load(std::memory_order_acquire);
+    if (primary_owner_thread_id == 0) {
+        return false;
+    }
+
+    return (zend_ulong) (uintptr_t) tsrm_thread_id() == primary_owner_thread_id;
+#else
+    return QT_RUNTIME_G(request_active);
 #endif
 }
 
@@ -188,7 +207,7 @@ void qt_runtime_schedule_owner_drain(void)
 
 void qt_runtime_drain_owner_tasks(zend_long max_items)
 {
-    if (!qt_runtime_is_owner_thread()) {
+    if (!qt_runtime_is_primary_owner_thread()) {
         return;
     }
 
@@ -247,7 +266,7 @@ void qt_runtime_drain_owner_tasks(zend_long max_items)
 
 void qt_runtime_owner_safe_point(void)
 {
-    if (!qt_runtime_can_call_zend()) {
+    if (!qt_runtime_can_call_zend() || !qt_runtime_is_primary_owner_thread()) {
         return;
     }
 
@@ -388,6 +407,11 @@ PHP_RINIT_FUNCTION({!! $ctx->extensionName !!})
     QT_RUNTIME_G(request_active) = true;
 
     if (!_qt_is_worker_request) {
+#if defined(ZTS)
+        qt_primary_owner_thread_id.store(QT_RUNTIME_G(owner_thread_id), std::memory_order_release);
+#else
+        qt_primary_owner_thread_id.store(0, std::memory_order_release);
+#endif
         qt_shutdown_in_progress.store(false, std::memory_order_release);
         qt_about_to_quit_hooked.store(false, std::memory_order_release);
         qt_runtime_drop_owner_tasks();
@@ -408,6 +432,7 @@ PHP_RSHUTDOWN_FUNCTION({!! $ctx->extensionName !!})
     qt_runtime_mark_shutdown_in_progress();
     qt_runtime_drain_owner_tasks(256);
     qt_runtime_drop_owner_tasks(true);
+    qt_primary_owner_thread_id.store(0, std::memory_order_release);
 @if($ctx->includeThreadRuntimeSupport)
     qt_qthreadruntime_shutdown_all(2000);
     qt_runtime_shutdown_qcoreapplication();

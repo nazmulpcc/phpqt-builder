@@ -60,6 +60,7 @@
                 _qt_trampoline->qt_cache_virtual_overrides(_qt_actual_ce, {!! $ctx->ceVarName !!});
                 intern->native_is_generated_subclass = true;
                 intern->native_is_virtual_trampoline = true;
+                intern->native_rebind_php_object = {!! $ctx->filePrefix !!}_rebind_php_object;
             } else {
 @if($ctx->isAbstract)
                 zend_throw_error(NULL, "Abstract class {!! addslashes($ctx->phpClassName) !!} cannot be instantiated directly.");
@@ -76,6 +77,7 @@
                 }
                 intern->native_is_generated_subclass = {!! $ctx->plainInstantiationUsesGeneratedType() ? 'true' : 'false' !!};
                 intern->native_is_virtual_trampoline = false;
+                intern->native_rebind_php_object = NULL;
 @endif
             }
 @else
