@@ -72,6 +72,7 @@ static std::atomic_uint64_t qt_qthreadruntime_total_events_in_drained{0};
 static std::atomic_uint64_t qt_qthreadruntime_total_events_in_dropped_full{0};
 static std::atomic_uint64_t qt_qthreadruntime_total_events_in_dropped_shutdown{0};
 static std::atomic_uint64_t qt_qthreadruntime_total_listener_dispatch_errors{0};
+static std::atomic_uint64_t qt_qthreadruntime_next_moved_object_token{1};
 typedef int (*qt_qthreadruntime_sapi_deactivate_t)(void);
 
 struct qt_qthreadruntime_request_snapshot {
@@ -215,6 +216,66 @@ static int qt_qthreadruntime_guarded_cli_deactivate(void)
     }
 
     return SUCCESS;
+}
+
+struct qt_qthreadruntime_moved_object_record {
+    QPointer<QObject> native_object;
+    QPointer<QThread> owner_thread;
+    bool alive{false};
+};
+
+static std::mutex qt_qthreadruntime_moved_object_registry_mutex;
+static std::unordered_map<uint64_t, qt_qthreadruntime_moved_object_record> qt_qthreadruntime_moved_object_registry;
+
+static uint64_t qt_qthreadruntime_register_moved_object_record(QObject *native_object, QThread *owner_thread)
+{
+    if (native_object == nullptr) {
+        return 0;
+    }
+
+    const uint64_t token = qt_qthreadruntime_next_moved_object_token.fetch_add(1, std::memory_order_acq_rel);
+    {
+        std::lock_guard<std::mutex> lock(qt_qthreadruntime_moved_object_registry_mutex);
+        qt_qthreadruntime_moved_object_registry[token] = qt_qthreadruntime_moved_object_record{
+            QPointer<QObject>(native_object),
+            QPointer<QThread>(owner_thread),
+            true,
+        };
+    }
+
+    QObject::connect(native_object, &QObject::destroyed, [token](QObject *) {
+        std::lock_guard<std::mutex> lock(qt_qthreadruntime_moved_object_registry_mutex);
+        auto it = qt_qthreadruntime_moved_object_registry.find(token);
+        if (it != qt_qthreadruntime_moved_object_registry.end()) {
+            it->second.alive = false;
+            it->second.native_object = nullptr;
+        }
+    });
+
+    return token;
+}
+
+static void qt_qthreadruntime_release_moved_object_record(uint64_t token)
+{
+    if (token == 0) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(qt_qthreadruntime_moved_object_registry_mutex);
+    qt_qthreadruntime_moved_object_registry.erase(token);
+}
+
+static bool qt_qthreadruntime_moved_object_record_is_alive(uint64_t token)
+{
+    if (token == 0) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(qt_qthreadruntime_moved_object_registry_mutex);
+    auto it = qt_qthreadruntime_moved_object_registry.find(token);
+    return it != qt_qthreadruntime_moved_object_registry.end()
+        && it->second.alive
+        && !it->second.native_object.isNull();
 }
 
 static void qt_qthreadruntime_install_cli_deactivate_guard(void)
@@ -1624,7 +1685,6 @@ struct qt_qthread_task_host {
     std::unordered_set<uint64_t> canceled_future_tokens_;
     uint64_t next_listener_id_{1};
     uint64_t next_task_token_{1};
-    uint64_t next_moved_object_token_{1};
     size_t max_event_out_queue_depth_{qt_qthreadruntime_env_event_out_queue_depth()};
     size_t max_event_in_queue_depth_{qt_qthreadruntime_env_event_in_queue_depth()};
     std::string bootstrap_script_;
@@ -1667,10 +1727,11 @@ struct qt_qthread_task_host {
         bool native_is_virtual_trampoline,
         bool prevent_destroy,
         void (*rebind_php_object)(void *native_ptr, zend_object *php_object, zend_class_entry *actual_ce),
+        uint64_t *token_out,
         std::string *error
     )
     {
-        if (thread == nullptr || native_object == nullptr || source_object == nullptr) {
+        if (thread == nullptr || native_object == nullptr || source_object == nullptr || token_out == nullptr) {
             if (error != nullptr) {
                 *error = "Invalid moveToThread registration state.";
             }
@@ -1692,7 +1753,6 @@ struct qt_qthread_task_host {
         }
 
         qt_qthreadruntime_moved_object moved;
-        moved.token = next_moved_object_token_++;
         moved.native_object = native_object;
         moved.native_is_generated_subclass = native_is_generated_subclass;
         moved.native_is_virtual_trampoline = native_is_virtual_trampoline;
@@ -1735,7 +1795,15 @@ struct qt_qthread_task_host {
 
         bound_thread_ = thread;
         qt_qthreadruntime_capture_request_snapshot(&owner_request_snapshot_);
+        moved.token = qt_qthreadruntime_register_moved_object_record(native_object, thread);
+        if (moved.token == 0) {
+            if (error != nullptr) {
+                *error = "Failed to create moved QObject registry entry.";
+            }
+            return false;
+        }
         pending_moved_objects_.push_back(std::move(moved));
+        *token_out = pending_moved_objects_.back().token;
         return true;
     }
 
@@ -3098,6 +3166,16 @@ PHP_QT_API bool qt_qthreadruntime_worker_publish_progress(zend_long value, zend_
     return ok;
 }
 
+PHP_QT_API bool qt_qthreadruntime_moved_object_is_alive(uint64_t token)
+{
+    return qt_qthreadruntime_moved_object_record_is_alive(token);
+}
+
+PHP_QT_API void qt_qthreadruntime_moved_object_release(uint64_t token)
+{
+    qt_qthreadruntime_release_moved_object_record(token);
+}
+
 PHP_QT_API qt_qthread_task_host *qt_qthread_task_host_create(void)
 {
     return new qt_qthread_task_host();
@@ -3214,6 +3292,7 @@ PHP_QT_API bool qt_qthread_task_host_register_moved_object(
     bool native_is_virtual_trampoline,
     bool prevent_destroy,
     void (*rebind_php_object)(void *native_ptr, zend_object *php_object, zend_class_entry *actual_ce),
+    uint64_t *token_out,
     std::string *error
 )
 {
@@ -3226,6 +3305,7 @@ PHP_QT_API bool qt_qthread_task_host_register_moved_object(
             native_is_virtual_trampoline,
             prevent_destroy,
             rebind_php_object,
+            token_out,
             error
         );
 }

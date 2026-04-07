@@ -18,6 +18,9 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
     ZEND_PARSE_PARAMETERS_END();
 
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "moveToThread", false)) {
+        RETURN_THROWS();
+    }
     if (intern->native_ptr == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
         RETURN_THROWS();
@@ -46,6 +49,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
     }
 
     std::string _qt_move_error;
+    uint64_t _qt_moved_token = 0;
     if (!qt_qthread_task_host_register_moved_object(
         static_cast<qt_qthread_task_host *>(target_intern->extra_storage),
         _qt_target_thread,
@@ -55,6 +59,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
         intern->native_is_virtual_trampoline,
         true,
         intern->native_rebind_php_object,
+        &_qt_moved_token,
         &_qt_move_error
     )) {
         if (_qt_source_thread != NULL) {
@@ -65,6 +70,8 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
     }
 
     intern->prevent_destroy = true;
+    intern->moved_source = true;
+    intern->moved_token = _qt_moved_token;
     if (intern->native_is_virtual_trampoline && intern->native_rebind_php_object != NULL) {
         intern->native_rebind_php_object(intern->native_ptr, NULL, NULL);
     }
@@ -204,6 +211,18 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
 
 @if(!$method->isConstructor)
+@if($ctx->isQObjectDerived)
+@php
+    $qtMovedSourceAllowedMethods = ['thread', 'objectName', 'signalsBlocked', 'dynamicPropertyNames', 'inherits'];
+@endphp
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(
+        intern,
+        "{!! $method->name !!}",
+        {!! in_array($method->name, $qtMovedSourceAllowedMethods, true) ? 'true' : 'false' !!}
+    )) {
+        RETURN_THROWS();
+    }
+@endif
     if (intern->native_ptr == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
         RETURN_THROWS();

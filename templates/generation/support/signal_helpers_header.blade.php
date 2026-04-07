@@ -122,7 +122,11 @@ static inline void qt_signal_callback_clear(const std::shared_ptr<qt_signal_call
     }
 }
 
-static inline std::shared_ptr<qt_signal_callback_t> qt_signal_callback_create(const QObject *sender, zval *callback)
+static inline std::shared_ptr<qt_signal_callback_t> qt_signal_callback_create(
+    const QObject *sender,
+    zval *callback,
+    bool clear_on_sender_destroy = true
+)
 {
     auto handle = std::make_shared<qt_signal_callback_t>();
     memset(&handle->fci, 0, sizeof(handle->fci));
@@ -145,7 +149,7 @@ static inline std::shared_ptr<qt_signal_callback_t> qt_signal_callback_create(co
 
     Z_TRY_ADDREF(handle->fci.function_name);
 
-    if (sender != NULL) {
+    if (sender != NULL && clear_on_sender_destroy) {
         QObject::connect(sender, &QObject::destroyed, [handle]() {
             auto _qt_handle = handle;
             qt_signal_dispatch(_qt_handle, [_qt_handle]() mutable {

@@ -101,6 +101,8 @@ PHP_QT_API bool qt_qthreadruntime_current_task_context(qt_qthread_task_host **ho
 PHP_QT_API bool qt_qthreadruntime_worker_is_canceled(void);
 PHP_QT_API bool qt_qthreadruntime_worker_publish_progress(zend_long value, zend_long minimum, zend_long maximum, zend_string *text, std::string *error);
 PHP_QT_API void qt_qfuture_wrap(zval *return_value, qt_qthread_task_host *host, uint64_t task_token);
+PHP_QT_API bool qt_qthreadruntime_moved_object_is_alive(uint64_t token);
+PHP_QT_API void qt_qthreadruntime_moved_object_release(uint64_t token);
 
 PHP_QT_API qt_qthread_task_host *qt_qthread_task_host_create(void);
 PHP_QT_API void qt_qthread_task_host_destroy(qt_qthread_task_host *host);
@@ -129,6 +131,7 @@ PHP_QT_API bool qt_qthread_task_host_register_moved_object(
     bool native_is_virtual_trampoline,
     bool prevent_destroy,
     void (*rebind_php_object)(void *native_ptr, zend_object *php_object, zend_class_entry *actual_ce),
+    uint64_t *token_out,
     std::string *error
 );
 PHP_QT_API bool qt_qthread_task_host_future_is_valid(qt_qthread_task_host *host, uint64_t task_token);

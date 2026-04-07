@@ -137,6 +137,66 @@ it('moves a php qobject subclass to a qthread and restores its live state there'
         ->and($payload['received_name'])->toStartWith('phase1:moved:7:');
 });
 
+it('allows the phase 2 moved-source whitelist on the original wrapper', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_move_to_thread_source_handle_whitelist.php');
+
+    expect($payload['move_ok'])->toBeTrue()
+        ->and($payload['wait_ok'])->toBeTrue()
+        ->and($payload['thread_is_qthread'])->toBeTrue()
+        ->and($payload['object_name'])->toBeString()
+        ->and($payload['object_name'])->toStartWith('phase2:')
+        ->and($payload['property_value'])->toBe('worker-native')
+        ->and($payload['signals_blocked'])->toBeFalse()
+        ->and($payload['has_dynamic_data'])->toBeTrue()
+        ->and($payload['inherits_qobject'])->toBeTrue()
+        ->and($payload['worker_thread_id'])->not->toBe($payload['main_thread_id']);
+});
+
+it('rejects stale source-handle property and mutation access after move', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_move_to_thread_source_handle_rejection.php');
+
+    expect($payload['move_ok'])->toBeTrue()
+        ->and($payload['property_read']['threw'])->toBeTrue()
+        ->and($payload['property_write']['threw'])->toBeTrue()
+        ->and($payload['set_object_name']['threw'])->toBeTrue()
+        ->and($payload['set_property']['threw'])->toBeTrue()
+        ->and($payload['block_signals']['threw'])->toBeTrue();
+});
+
+it('keeps moved-source observer registration working on the callback owner thread', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_move_to_thread_source_handle_observers.php');
+
+    expect($payload['move_ok'])->toBeTrue()
+        ->and($payload['wait_ok'])->toBeTrue()
+        ->and($payload['notify_hits'])->toBe(1)
+        ->and($payload['signal_hits'])->toBe(1)
+        ->and($payload['notify_on_main_thread'])->toBeTrue()
+        ->and($payload['signal_on_main_thread'])->toBeTrue()
+        ->and($payload['connections_are_objects'])->toBeTrue();
+});
+
+it('hardens moved-source lifetime behavior for destruction and invalidation', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_move_to_thread_source_handle_lifetime.php');
+
+    expect($payload['move_alive_ok'])->toBeTrue()
+        ->and($payload['move_dead_ok'])->toBeTrue()
+        ->and($payload['alive_signal_hits'])->toBe(1)
+        ->and($payload['wait_alive_ok'])->toBeTrue()
+        ->and($payload['wait_dead_ok'])->toBeTrue()
+        ->and($payload['thread_probe']['threw'])->toBeTrue()
+        ->and($payload['property_probe']['threw'])->toBeTrue();
+});
+
+it('hides stale php state from debug output and rejects clone on moved source handles', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_move_to_thread_source_handle_debug_clone.php');
+
+    expect($payload['move_ok'])->toBeTrue()
+        ->and($payload['clone_probe']['threw'])->toBeTrue()
+        ->and($payload['dump_has_state'])->toBeFalse()
+        ->and($payload['dump_has_meta'])->toBeFalse()
+        ->and($payload['dump_has_source_custom'])->toBeFalse();
+});
+
 it('handles burst cross-thread signal dispatch without timing out', function (): void {
     $payload = qt_runtime_thread_payload('QtCore/thread_signal_burst_stress.php');
 

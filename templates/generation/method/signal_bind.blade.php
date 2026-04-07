@@ -51,7 +51,11 @@ foreach ($signal->params as $index => $param) {
     $teardownLines[] = sprintf('zval_ptr_dtor(&_qt_params[%d]);', $index);
 }
 @endphp
-    auto _qt_callback = qt_signal_callback_create(static_cast<QObject *>(intern->native_ptr), callback);
+    auto _qt_callback = qt_signal_callback_create(
+        static_cast<QObject *>(intern->native_ptr),
+        callback,
+        {!! $signal->name === 'destroyed' ? 'false' : 'true' !!}
+    );
     if (_qt_callback == nullptr) {
         RETURN_THROWS();
     }

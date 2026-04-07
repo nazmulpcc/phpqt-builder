@@ -57,12 +57,11 @@
 @foreach($ctx->requiredIncludes as $include)
 #include "{!! $include !!}"
 @endforeach
-@if($ctx->nativeCppType === 'QThread')
+@if($ctx->nativeCppType === 'QThread' || $ctx->isQObjectDerived)
 #include "qt_qthreadruntime.h"
 @endif
 @if($ctx->nativeCppType === 'QObject')
 #include "qt_qthread.h"
-#include "qt_qthreadruntime.h"
 @endif
 
 #include "qt_class_helpers.h"
@@ -82,14 +81,112 @@
 
 zend_class_entry *{!! $ctx->ceVarName !!} = NULL;
 zend_object_handlers {!! $ctx->handlersVarName !!};
+@if($ctx->isQObjectDerived)
+static zend_always_inline bool {!! $ctx->filePrefix !!}_is_moved_source_handle({!! $ctx->objectStructName !!} *intern)
+{
+    return intern != NULL && intern->moved_source && intern->moved_token != 0;
+}
+
+static zend_always_inline bool {!! $ctx->filePrefix !!}_moved_source_handle_is_alive({!! $ctx->objectStructName !!} *intern)
+{
+    return !{!! $ctx->filePrefix !!}_is_moved_source_handle(intern)
+        || qt_qthreadruntime_moved_object_is_alive(intern->moved_token);
+}
+
+static void {!! $ctx->filePrefix !!}_throw_moved_source_unavailable(void)
+{
+    zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} moved object is no longer available.");
+}
+
+static void {!! $ctx->filePrefix !!}_throw_moved_source_method_error(const char *method_name)
+{
+    zend_throw_error(
+        NULL,
+        "{!! addslashes($ctx->phpClassName) !!}::%s() is unavailable on a moved source handle.",
+        method_name != NULL ? method_name : "unknown"
+    );
+}
+
+static void {!! $ctx->filePrefix !!}_throw_moved_source_property_error(zend_string *member, const char *operation)
+{
+    zend_throw_error(
+        NULL,
+        "{!! addslashes($ctx->phpClassName) !!}::$%s is unavailable on a moved source handle during %s.",
+        member != NULL ? ZSTR_VAL(member) : "<unknown>",
+        operation != NULL ? operation : "property access"
+    );
+}
+
+static zend_always_inline bool {!! $ctx->filePrefix !!}_moved_source_method_allowed(const char *method_name)
+{
+    if (method_name == NULL) {
+        return false;
+    }
+
+    return strcmp(method_name, "thread") == 0
+        || strcmp(method_name, "objectName") == 0
+        || strcmp(method_name, "property") == 0
+        || strcmp(method_name, "signalsBlocked") == 0
+        || strcmp(method_name, "dynamicPropertyNames") == 0
+        || strcmp(method_name, "inherits") == 0
+        || strcmp(method_name, "connectPropertyNotify") == 0;
+}
+
+static zend_always_inline bool {!! $ctx->filePrefix !!}_guard_moved_source_method(
+    {!! $ctx->objectStructName !!} *intern,
+    const char *method_name,
+    bool allow_on_moved_source
+)
+{
+    if (!{!! $ctx->filePrefix !!}_is_moved_source_handle(intern)) {
+        return true;
+    }
+
+    if (!{!! $ctx->filePrefix !!}_moved_source_handle_is_alive(intern)) {
+        {!! $ctx->filePrefix !!}_throw_moved_source_unavailable();
+        return false;
+    }
+
+    if (allow_on_moved_source || {!! $ctx->filePrefix !!}_moved_source_method_allowed(method_name)) {
+        return true;
+    }
+
+    {!! $ctx->filePrefix !!}_throw_moved_source_method_error(method_name);
+    return false;
+}
+
+static zend_always_inline bool {!! $ctx->filePrefix !!}_guard_moved_source_property(
+    {!! $ctx->objectStructName !!} *intern,
+    zend_string *member,
+    const char *operation
+)
+{
+    if (!{!! $ctx->filePrefix !!}_is_moved_source_handle(intern)) {
+        return true;
+    }
+
+    if (!{!! $ctx->filePrefix !!}_moved_source_handle_is_alive(intern)) {
+        {!! $ctx->filePrefix !!}_throw_moved_source_unavailable();
+        return false;
+    }
+
+    {!! $ctx->filePrefix !!}_throw_moved_source_property_error(member, operation);
+    return false;
+}
+@endif
 @if($ctx->hasQObjectPropertySupport())
 static zval *{!! $ctx->filePrefix !!}_read_property(zend_object *object, zend_string *member, int type, void **cache_slot, zval *rv)
 {
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
+@if($ctx->isQObjectDerived)
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_property(intern, member, "read")) {
+        return &EG(uninitialized_zval);
+    }
+@endif
     if (qt_qobject_should_delegate_to_std_property(object, member)) {
         return zend_std_read_property(object, member, type, cache_slot, rv);
     }
 
-    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
     QObject *_qt_obj = intern->native_ptr != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
     if (_qt_obj == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
@@ -105,11 +202,16 @@ static zval *{!! $ctx->filePrefix !!}_read_property(zend_object *object, zend_st
 
 static zval *{!! $ctx->filePrefix !!}_write_property(zend_object *object, zend_string *member, zval *value, void **cache_slot)
 {
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
+@if($ctx->isQObjectDerived)
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_property(intern, member, "write")) {
+        return &EG(uninitialized_zval);
+    }
+@endif
     if (qt_qobject_should_delegate_to_std_property(object, member)) {
         return zend_std_write_property(object, member, value, cache_slot);
     }
 
-    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
     QObject *_qt_obj = intern->native_ptr != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
     if (_qt_obj == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
@@ -125,11 +227,16 @@ static zval *{!! $ctx->filePrefix !!}_write_property(zend_object *object, zend_s
 
 static zval *{!! $ctx->filePrefix !!}_get_property_ptr_ptr(zend_object *object, zend_string *member, int type, void **cache_slot)
 {
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
+@if($ctx->isQObjectDerived)
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_property(intern, member, "indirect access")) {
+        return NULL;
+    }
+@endif
     if (qt_qobject_should_delegate_to_std_property(object, member)) {
         return zend_std_get_property_ptr_ptr(object, member, type, cache_slot);
     }
 
-    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
     QObject *_qt_obj = intern->native_ptr != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
     if (_qt_obj != NULL && qt_qobject_has_property_name(_qt_obj, member)) {
         return NULL;
@@ -140,11 +247,16 @@ static zval *{!! $ctx->filePrefix !!}_get_property_ptr_ptr(zend_object *object, 
 
 static int {!! $ctx->filePrefix !!}_has_property(zend_object *object, zend_string *member, int has_set_exists, void **cache_slot)
 {
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
+@if($ctx->isQObjectDerived)
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_property(intern, member, has_set_exists == ZEND_PROPERTY_EXISTS ? "isset" : "empty")) {
+        return 0;
+    }
+@endif
     if (qt_qobject_should_delegate_to_std_property(object, member)) {
         return zend_std_has_property(object, member, has_set_exists, cache_slot);
     }
 
-    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
     QObject *_qt_obj = intern->native_ptr != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
     if (_qt_obj == NULL) {
         return zend_std_has_property(object, member, has_set_exists, cache_slot);
@@ -175,6 +287,11 @@ static int {!! $ctx->filePrefix !!}_has_property(zend_object *object, zend_strin
 static zend_array *{!! $ctx->filePrefix !!}_get_properties_for(zend_object *object, zend_prop_purpose purpose)
 {
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
+@if($ctx->isQObjectDerived)
+    if ({!! $ctx->filePrefix !!}_is_moved_source_handle(intern)) {
+        return zend_new_array(0);
+    }
+@endif
     QObject *_qt_obj = intern->native_ptr != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
     zend_array *_qt_props = zend_std_get_properties_for(object, purpose);
     if (_qt_obj == NULL) {
@@ -564,6 +681,10 @@ static zend_object *{!! $ctx->filePrefix !!}_create_object(zend_class_entry *ce)
     intern->prevent_destroy = false;
     intern->extra_storage = NULL;
 @endif
+@if($ctx->isQObjectDerived)
+    intern->moved_source = false;
+    intern->moved_token = 0;
+@endif
 @if($ctx->needsArgvStorage)
     intern->extra_storage = new {!! $ctx->argvStorageStructName !!}();
 @endif
@@ -585,6 +706,13 @@ static zend_object *{!! $ctx->filePrefix !!}_create_object(zend_class_entry *ce)
 static void {!! $ctx->filePrefix !!}_free_object(zend_object *object)
 {
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
+@if($ctx->isQObjectDerived)
+    if (intern->moved_token != 0) {
+        qt_qthreadruntime_moved_object_release(intern->moved_token);
+        intern->moved_token = 0;
+    }
+    intern->moved_source = false;
+@endif
 
 @if($ctx->nativeCppType === 'QThread')
     if (intern->extra_storage != NULL) {
@@ -671,6 +799,16 @@ static void {!! $ctx->filePrefix !!}_free_object(zend_object *object)
 static zend_object *{!! $ctx->filePrefix !!}_clone_object(zend_object *old_object)
 {
     {!! $ctx->objectStructName !!} *old_intern = {!! $ctx->fromObjFunc !!}(old_object);
+@if($ctx->isQObjectDerived)
+    if ({!! $ctx->filePrefix !!}_is_moved_source_handle(old_intern)) {
+        if (!{!! $ctx->filePrefix !!}_moved_source_handle_is_alive(old_intern)) {
+            {!! $ctx->filePrefix !!}_throw_moved_source_unavailable();
+        } else {
+            zend_throw_error(NULL, "Cannot clone a moved source handle of {!! addslashes($ctx->phpClassName) !!}.");
+        }
+        return NULL;
+    }
+@endif
     zend_object *new_obj = {!! $ctx->filePrefix !!}_create_object(old_object->ce);
     {!! $ctx->objectStructName !!} *new_intern = {!! $ctx->fromObjFunc !!}(new_obj);
 
@@ -727,6 +865,10 @@ PHP_QT_API void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativ
 @endif
     intern->prevent_destroy = prevent_destroy;
     intern->native_rebind_php_object = NULL;
+@if($ctx->isQObjectDerived)
+    intern->moved_source = false;
+    intern->moved_token = 0;
+@endif
 @if($ctx->tracksGeneratedNativeSubclass)
     intern->native_is_generated_subclass = false;
 @if($ctx->requiresVirtualTrampoline)
@@ -782,6 +924,9 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, property)
     ZEND_PARSE_PARAMETERS_END();
 
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "property", true)) {
+        RETURN_THROWS();
+    }
     QObject *_qt_obj = intern->native_ptr != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
     if (_qt_obj == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
@@ -806,6 +951,9 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, setProperty)
     ZEND_PARSE_PARAMETERS_END();
 
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "setProperty", false)) {
+        RETURN_THROWS();
+    }
     QObject *_qt_obj = intern->native_ptr != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
     if (_qt_obj == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
@@ -829,6 +977,9 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, hasProperty)
     ZEND_PARSE_PARAMETERS_END();
 
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "hasProperty", false)) {
+        RETURN_THROWS();
+    }
     QObject *_qt_obj = intern->native_ptr != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
     if (_qt_obj == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
@@ -844,6 +995,9 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, propertyNames)
     ZEND_PARSE_PARAMETERS_NONE();
 
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "propertyNames", false)) {
+        RETURN_THROWS();
+    }
     QObject *_qt_obj = intern->native_ptr != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
     if (_qt_obj == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
@@ -863,6 +1017,9 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, propertyInfo)
     ZEND_PARSE_PARAMETERS_END();
 
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "propertyInfo", false)) {
+        RETURN_THROWS();
+    }
     QObject *_qt_obj = intern->native_ptr != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
     if (_qt_obj == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
@@ -887,6 +1044,9 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connectPropertyNotify)
     ZEND_PARSE_PARAMETERS_END();
 
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "connectPropertyNotify", true)) {
+        RETURN_THROWS();
+    }
     QObject *_qt_obj = intern->native_ptr != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
     if (_qt_obj == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
@@ -999,6 +1159,9 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connect)
     ZEND_PARSE_PARAMETERS_END();
 
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "connect", false)) {
+        RETURN_THROWS();
+    }
     if (intern->native_ptr == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
         RETURN_THROWS();
@@ -1024,6 +1187,9 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, disconnect)
     ZEND_PARSE_PARAMETERS_END();
 
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "disconnect", false)) {
+        RETURN_THROWS();
+    }
     if (intern->native_ptr == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
         RETURN_THROWS();
@@ -1048,6 +1214,9 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $signal->phpMethodName !!})
     ZEND_PARSE_PARAMETERS_END();
 
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "{!! $signal->phpMethodName !!}", true)) {
+        RETURN_THROWS();
+    }
     if (intern->native_ptr == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
         RETURN_THROWS();
