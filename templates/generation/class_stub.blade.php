@@ -82,11 +82,12 @@ namespace {!! $ctx->phpNamespace !!};
     public function propertyNames(): array {}
     public function propertyInfo(string $name): array {}
     public function connectPropertyNotify(string $name, callable $callback): \Qt\Core\QMetaObjectConnection {}
+@if($ctx->nativeCppType === 'QObject')
+    public static function connect(\Qt\Core\QObject $sender, string $signalSignature, \Qt\Core\QObject $receiver, string $methodSignature, int $type = \Qt\ConnectionType::AutoConnection): \Qt\Core\QMetaObjectConnection {}
+    public static function disconnect(\Qt\Core\QMetaObjectConnection $connection): bool {}
+@endif
 @endif
 @if($ctx->hasSignals())
-
-    public function connect(string $signalSignature, callable $callback): \Qt\Core\QMetaObjectConnection {}
-    public function disconnect(\Qt\Core\QMetaObjectConnection $connection): bool {}
 @foreach($ctx->signalOverloads as $signal)
 
     public function {!! $signal->phpMethodName !!}(callable $callback): \Qt\Core\QMetaObjectConnection {}

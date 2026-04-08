@@ -112,8 +112,8 @@ $thread->drainEvents(-1);
 $run2FinishedAfterWait = $thread->isFinished();
 $run2RunningAfterWait = $thread->isRunning();
 
-$disconnectStarted = $thread->disconnect($startedConn);
-$disconnectFinished = $thread->disconnect($finishedConn);
+$disconnectStarted = \Qt\Core\QObject::disconnect($startedConn);
+$disconnectFinished = \Qt\Core\QObject::disconnect($finishedConn);
 $offResult = $thread->off($resultConn);
 
 @unlink($bootstrapFile);

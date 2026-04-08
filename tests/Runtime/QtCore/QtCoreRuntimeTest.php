@@ -197,6 +197,56 @@ it('hides stale php state from debug output and rejects clone on moved source ha
         ->and($payload['dump_has_source_custom'])->toBeFalse();
 });
 
+it('connects static sender/receiver signatures to a moved php receiver method', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_static_connect_receiver_dispatch.php');
+
+    expect($payload['move_ok'])->toBeTrue()
+        ->and($payload['wait_ok'])->toBeTrue()
+        ->and($payload['signal_hits'])->toBe(1)
+        ->and($payload['finished_hits'])->toBe(1)
+        ->and($payload['callback_on_main_thread'])->toBeTrue()
+        ->and($payload['worker_thread_differs'])->toBeTrue()
+        ->and($payload['sender_class'])->toBe('Qt\\Core\\QThread')
+        ->and($payload['sender_signal'])->toBeGreaterThanOrEqual(0)
+        ->and($payload['hits'])->toBe(1)
+        ->and($payload['received_name'])->toBeString()
+        ->and($payload['received_name'])->toStartWith('phase3:')
+        ->and($payload['connections_are_objects'])->toBeTrue();
+});
+
+it('connects static sender/receiver signatures to native receiver methods', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_static_connect_native_receiver.php');
+
+    expect($payload['wait_ok'])->toBeTrue()
+        ->and($payload['started_hits'])->toBe(1)
+        ->and($payload['finished_hits'])->toBe(1)
+        ->and($payload['connection_is_object'])->toBeTrue();
+});
+
+it('validates static QObject::connect signatures deterministically', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_static_connect_validation.php');
+
+    expect($payload['bare_signal']['threw'])->toBeTrue()
+        ->and($payload['macro_signal']['threw'])->toBeTrue()
+        ->and($payload['bare_method']['threw'])->toBeTrue()
+        ->and($payload['macro_method']['threw'])->toBeTrue()
+        ->and($payload['unknown_signal']['threw'])->toBeTrue()
+        ->and($payload['unknown_method']['threw'])->toBeTrue()
+        ->and($payload['explicit_overload']['threw'])->toBeFalse()
+        ->and($payload['explicit_overload']['is_connection'])->toBeTrue();
+});
+
+it('disconnects static QObject::connect connections before delivery', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_static_connect_disconnect.php');
+
+    expect($payload['move_ok'])->toBeTrue()
+        ->and($payload['disconnect_ok'])->toBeTrue()
+        ->and($payload['wait_ok'])->toBeTrue()
+        ->and($payload['fallback_connection_is_object'])->toBeTrue()
+        ->and($payload['hits_is_null'])->toBeTrue()
+        ->and($payload['received_name'])->toBe('');
+});
+
 it('handles burst cross-thread signal dispatch without timing out', function (): void {
     $payload = qt_runtime_thread_payload('QtCore/thread_signal_burst_stress.php');
 

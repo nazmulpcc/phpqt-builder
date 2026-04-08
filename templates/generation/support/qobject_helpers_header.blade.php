@@ -11,8 +11,152 @@
 #include <QMetaMethod>
 #include <QMetaProperty>
 #include <QObject>
+#include <QMetaObject>
+#include <QMetaType>
+#include <QVariant>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
+
+typedef void (*qt_qobject_runtime_wrap_adapter_t)(zval *return_value, QObject *native, bool prevent_destroy);
+
+inline std::unordered_map<std::string, qt_qobject_runtime_wrap_adapter_t> &qt_qobject_runtime_wrapper_registry()
+{
+    static std::unordered_map<std::string, qt_qobject_runtime_wrap_adapter_t> registry;
+    return registry;
+}
+
+inline std::mutex &qt_qobject_runtime_wrapper_registry_mutex()
+{
+    static std::mutex registry_mutex;
+    return registry_mutex;
+}
+
+static inline void qt_qobject_register_runtime_wrapper(
+    const QMetaObject *meta_object,
+    qt_qobject_runtime_wrap_adapter_t wrap_adapter
+)
+{
+    if (meta_object == NULL || wrap_adapter == NULL) {
+        return;
+    }
+
+    const char *class_name = meta_object->className();
+    if (class_name == NULL || *class_name == '\0') {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(qt_qobject_runtime_wrapper_registry_mutex());
+    qt_qobject_runtime_wrapper_registry()[std::string(class_name)] = wrap_adapter;
+}
+
+static inline bool qt_qobject_wrap_runtime_instance(zval *return_value, QObject *native, bool prevent_destroy)
+{
+    if (return_value == NULL) {
+        return false;
+    }
+
+    if (native == NULL) {
+        ZVAL_NULL(return_value);
+        return true;
+    }
+
+    std::lock_guard<std::mutex> lock(qt_qobject_runtime_wrapper_registry_mutex());
+    for (const QMetaObject *meta = native->metaObject(); meta != NULL; meta = meta->superClass()) {
+        const char *class_name = meta->className();
+        if (class_name == NULL || *class_name == '\0') {
+            continue;
+        }
+
+        auto it = qt_qobject_runtime_wrapper_registry().find(std::string(class_name));
+        if (it == qt_qobject_runtime_wrapper_registry().end() || it->second == NULL) {
+            continue;
+        }
+
+        it->second(return_value, native, prevent_destroy);
+        return true;
+    }
+
+    return false;
+}
+
+static inline bool qt_qobject_signal_arg_to_zval(zval *target, const QMetaType &meta_type, void *arg_data)
+{
+    if (target == NULL) {
+        return false;
+    }
+
+    if (!meta_type.isValid()) {
+        ZVAL_NULL(target);
+        return true;
+    }
+
+    if (meta_type.flags().testFlag(QMetaType::PointerToQObject)) {
+        QObject *native = arg_data != NULL ? *reinterpret_cast<QObject **>(arg_data) : NULL;
+        return qt_qobject_wrap_runtime_instance(target, native, true);
+    }
+
+    if (arg_data == NULL) {
+        ZVAL_NULL(target);
+        return true;
+    }
+
+    QVariant value(meta_type, arg_data);
+    qt_variant_to_zval(target, value);
+    return true;
+}
+
+static inline bool qt_qobject_normalize_signature(
+    zend_string *signature,
+    QByteArray *normalized,
+    std::string *error,
+    const char *kind
+)
+{
+    const char *label = (kind != NULL && *kind != '\0') ? kind : "signature";
+    if (signature == NULL || ZSTR_LEN(signature) == 0) {
+        if (error != NULL) {
+            *error = std::string(label) + " must be a non-empty normalized signature like started().";
+        }
+        return false;
+    }
+
+    QByteArray candidate(ZSTR_VAL(signature), (int) ZSTR_LEN(signature));
+    if (candidate.startsWith("SIGNAL(") || candidate.startsWith("SLOT(")) {
+        if (error != NULL) {
+            *error = std::string(label) + " must use normalized syntax like started(), not SIGNAL()/SLOT() macros.";
+        }
+        return false;
+    }
+
+    if (!candidate.contains('(') || !candidate.endsWith(')')) {
+        if (error != NULL) {
+            *error = std::string(label) + " must be a normalized signature like started().";
+        }
+        return false;
+    }
+
+    QByteArray normalized_signature = QMetaObject::normalizedSignature(candidate.constData());
+    if (normalized_signature.isEmpty()) {
+        if (error != NULL) {
+            *error = std::string("Invalid ") + label + ".";
+        }
+        return false;
+    }
+
+    if (normalized_signature != candidate) {
+        if (error != NULL) {
+            *error = std::string(label) + " must already be normalized as " + normalized_signature.constData() + ".";
+        }
+        return false;
+    }
+
+    if (normalized != NULL) {
+        *normalized = normalized_signature;
+    }
+    return true;
+}
 
 static zend_always_inline int qt_qobject_meta_property_index(QObject *obj, zend_string *name)
 {

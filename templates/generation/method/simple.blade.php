@@ -185,6 +185,60 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
 #endif
 
     return;
+@elseif($ctx->nativeCppType === 'QObject' && $method->name === 'sender')
+    ZEND_PARSE_PARAMETERS_NONE();
+
+    if (qt_qobject_current_sender_override.active) {
+        if (!qt_qobject_wrap_runtime_instance(return_value, qt_qobject_current_sender_override.sender, true)) {
+            RETURN_NULL();
+        }
+        return;
+    }
+
+    qt_runtime_owner_safe_point();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "sender", false)) {
+        RETURN_THROWS();
+    }
+    if (intern->native_ptr == NULL) {
+        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+    if (!intern->native_is_generated_subclass) {
+        zend_throw_error(NULL, "Protected method {!! addslashes($ctx->phpClassName) !!}::sender() requires a PHP-created native instance.");
+        RETURN_THROWS();
+    }
+
+    auto _result = static_cast<{!! $ctx->protectedCallReceiverType !!} *>(intern->native_ptr)->{!! $method->accessShimHelperName(0) !!}();
+    if (!qt_qobject_wrap_runtime_instance(return_value, static_cast<QObject *>(_result), true)) {
+        RETURN_NULL();
+    }
+    return;
+@elseif($ctx->nativeCppType === 'QObject' && $method->name === 'senderSignalIndex')
+    ZEND_PARSE_PARAMETERS_NONE();
+
+    if (qt_qobject_current_sender_override.active) {
+        RETURN_LONG((zend_long) qt_qobject_current_sender_override.signal_index);
+    }
+
+    qt_runtime_owner_safe_point();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "senderSignalIndex", false)) {
+        RETURN_THROWS();
+    }
+    if (intern->native_ptr == NULL) {
+        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+    if (!intern->native_is_generated_subclass) {
+        zend_throw_error(NULL, "Protected method {!! addslashes($ctx->phpClassName) !!}::senderSignalIndex() requires a PHP-created native instance.");
+        RETURN_THROWS();
+    }
+
+    auto _result = static_cast<{!! $ctx->protectedCallReceiverType !!} *>(intern->native_ptr)->{!! $method->accessShimHelperName(0) !!}();
+    RETURN_LONG((zend_long) _result);
 @else
     qt_runtime_owner_safe_point();
 

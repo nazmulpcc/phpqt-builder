@@ -222,10 +222,12 @@ struct qt_qthreadruntime_moved_object_record {
     QPointer<QObject> native_object;
     QPointer<QThread> owner_thread;
     bool alive{false};
+    zend_object *active_php_object{nullptr};
 };
 
 static std::mutex qt_qthreadruntime_moved_object_registry_mutex;
 static std::unordered_map<uint64_t, qt_qthreadruntime_moved_object_record> qt_qthreadruntime_moved_object_registry;
+static std::unordered_map<QObject *, uint64_t> qt_qthreadruntime_moved_object_native_index;
 
 static uint64_t qt_qthreadruntime_register_moved_object_record(QObject *native_object, QThread *owner_thread)
 {
@@ -240,15 +242,21 @@ static uint64_t qt_qthreadruntime_register_moved_object_record(QObject *native_o
             QPointer<QObject>(native_object),
             QPointer<QThread>(owner_thread),
             true,
+            nullptr,
         };
+        qt_qthreadruntime_moved_object_native_index[native_object] = token;
     }
 
     QObject::connect(native_object, &QObject::destroyed, [token](QObject *) {
         std::lock_guard<std::mutex> lock(qt_qthreadruntime_moved_object_registry_mutex);
         auto it = qt_qthreadruntime_moved_object_registry.find(token);
         if (it != qt_qthreadruntime_moved_object_registry.end()) {
+            if (!it->second.native_object.isNull()) {
+                qt_qthreadruntime_moved_object_native_index.erase(it->second.native_object.data());
+            }
             it->second.alive = false;
             it->second.native_object = nullptr;
+            it->second.active_php_object = nullptr;
         }
     });
 
@@ -262,7 +270,13 @@ static void qt_qthreadruntime_release_moved_object_record(uint64_t token)
     }
 
     std::lock_guard<std::mutex> lock(qt_qthreadruntime_moved_object_registry_mutex);
-    qt_qthreadruntime_moved_object_registry.erase(token);
+    auto it = qt_qthreadruntime_moved_object_registry.find(token);
+    if (it != qt_qthreadruntime_moved_object_registry.end()) {
+        if (!it->second.native_object.isNull()) {
+            qt_qthreadruntime_moved_object_native_index.erase(it->second.native_object.data());
+        }
+        qt_qthreadruntime_moved_object_registry.erase(it);
+    }
 }
 
 static bool qt_qthreadruntime_moved_object_record_is_alive(uint64_t token)
@@ -276,6 +290,55 @@ static bool qt_qthreadruntime_moved_object_record_is_alive(uint64_t token)
     return it != qt_qthreadruntime_moved_object_registry.end()
         && it->second.alive
         && !it->second.native_object.isNull();
+}
+
+static void qt_qthreadruntime_set_moved_object_active_wrapper(uint64_t token, zend_object *wrapper)
+{
+    if (token == 0) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(qt_qthreadruntime_moved_object_registry_mutex);
+    auto it = qt_qthreadruntime_moved_object_registry.find(token);
+    if (it == qt_qthreadruntime_moved_object_registry.end()) {
+        return;
+    }
+
+    it->second.active_php_object = wrapper;
+}
+
+static zend_object *qt_qthreadruntime_resolve_live_php_object_record(QObject *native_object)
+{
+    if (native_object == nullptr) {
+        return nullptr;
+    }
+
+    std::lock_guard<std::mutex> lock(qt_qthreadruntime_moved_object_registry_mutex);
+    auto token_it = qt_qthreadruntime_moved_object_native_index.find(native_object);
+    if (token_it == qt_qthreadruntime_moved_object_native_index.end()) {
+        return nullptr;
+    }
+
+    auto record_it = qt_qthreadruntime_moved_object_registry.find(token_it->second);
+    if (record_it == qt_qthreadruntime_moved_object_registry.end()) {
+        return nullptr;
+    }
+
+    if (!record_it->second.alive || record_it->second.native_object.isNull()) {
+        return nullptr;
+    }
+
+    return record_it->second.active_php_object;
+}
+
+static bool qt_qthreadruntime_has_moved_object_record(QObject *native_object)
+{
+    if (native_object == nullptr) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(qt_qthreadruntime_moved_object_registry_mutex);
+    return qt_qthreadruntime_moved_object_native_index.find(native_object) != qt_qthreadruntime_moved_object_native_index.end();
 }
 
 static void qt_qthreadruntime_install_cli_deactivate_guard(void)
@@ -1704,6 +1767,7 @@ struct qt_qthread_task_host {
     QMetaObject::Connection finished_connection_;
     std::vector<qt_qthreadruntime_moved_object> pending_moved_objects_;
     std::vector<zval> active_moved_wrappers_;
+    std::vector<uint64_t> active_moved_tokens_;
 
     bool setBootstrapScript(const std::string &path, std::string *error)
     {
@@ -2322,6 +2386,7 @@ struct qt_qthread_task_host {
         qt_qthreadruntime_debug_log("enterMovedRuntime: bootstrap_ok=%d", bootstrap_ok ? 1 : 0);
 
         std::vector<zval> wrappers;
+        std::vector<uint64_t> active_tokens;
         std::string materialize_error;
         bool materialized = startup_ok && bootstrap_ok;
         if (materialized) {
@@ -2377,7 +2442,9 @@ struct qt_qthread_task_host {
                     qt_qthreadruntime_debug_log("enterMovedRuntime: rebound trampoline class=%s", moved.class_name.c_str());
                 }
 
+                qt_qthreadruntime_set_moved_object_active_wrapper(moved.token, Z_OBJ(wrapper));
                 wrappers.push_back(wrapper);
+                active_tokens.push_back(moved.token);
             }
         }
 
@@ -2388,6 +2455,9 @@ struct qt_qthread_task_host {
             }
             if (!materialize_error.empty()) {
                 php_error_docref(NULL, E_WARNING, "Moved QObject activation failed: %s", materialize_error.c_str());
+            }
+            for (uint64_t token : active_tokens) {
+                qt_qthreadruntime_set_moved_object_active_wrapper(token, NULL);
             }
             for (zval &wrapper : wrappers) {
                 zval_ptr_dtor(&wrapper);
@@ -2405,6 +2475,7 @@ struct qt_qthread_task_host {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             active_moved_wrappers_ = std::move(wrappers);
+            active_moved_tokens_ = std::move(active_tokens);
         }
         qt_qthreadruntime_debug_log("enterMovedRuntime: materialized=1 wrappers=%zu", active_wrapper_count);
 
@@ -2421,13 +2492,18 @@ struct qt_qthread_task_host {
     void leaveMovedRuntimeOnCurrentThread()
     {
         std::vector<zval> wrappers;
+        std::vector<uint64_t> tokens;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             wrappers.swap(active_moved_wrappers_);
+            tokens.swap(active_moved_tokens_);
             moved_runtime_active_ = false;
             bound_thread_.clear();
         }
 
+        for (uint64_t token : tokens) {
+            qt_qthreadruntime_set_moved_object_active_wrapper(token, NULL);
+        }
         for (zval &wrapper : wrappers) {
             zval_ptr_dtor(&wrapper);
         }
@@ -2495,6 +2571,7 @@ struct qt_qthread_task_host {
     {
         QPointer<QThread> thread;
         std::vector<zval> moved_wrappers;
+        std::vector<uint64_t> moved_tokens;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             stopping_ = true;
@@ -2507,6 +2584,7 @@ struct qt_qthread_task_host {
             outbound_events_.clear();
             pending_moved_objects_.clear();
             moved_wrappers.swap(active_moved_wrappers_);
+            moved_tokens.swap(active_moved_tokens_);
             for (auto &entry : future_results_) {
                 if (!entry.second.ready) {
                     entry.second.ready = true;
@@ -2518,6 +2596,10 @@ struct qt_qthread_task_host {
             future_cv_.notify_all();
             thread = bound_thread_;
             bound_thread_.clear();
+        }
+
+        for (uint64_t token : moved_tokens) {
+            qt_qthreadruntime_set_moved_object_active_wrapper(token, NULL);
         }
 
         QObject::disconnect(started_connection_);
@@ -3174,6 +3256,16 @@ PHP_QT_API bool qt_qthreadruntime_moved_object_is_alive(uint64_t token)
 PHP_QT_API void qt_qthreadruntime_moved_object_release(uint64_t token)
 {
     qt_qthreadruntime_release_moved_object_record(token);
+}
+
+PHP_QT_API zend_object *qt_qthreadruntime_resolve_live_php_object(QObject *native_object)
+{
+    return qt_qthreadruntime_resolve_live_php_object_record(native_object);
+}
+
+PHP_QT_API bool qt_qthreadruntime_has_moved_object(QObject *native_object)
+{
+    return qt_qthreadruntime_has_moved_object_record(native_object);
 }
 
 PHP_QT_API qt_qthread_task_host *qt_qthread_task_host_create(void)

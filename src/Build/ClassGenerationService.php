@@ -2582,38 +2582,6 @@ class ClassGenerationService
             ];
         }
 
-        if ($phpClass->signals !== []) {
-            $contracts['connect'] = new PhpMethod(
-                name: 'connect',
-                access: 'public',
-                isStatic: false,
-                isSignal: false,
-                isSlot: false,
-                isAbstractMethod: false,
-                returnType: '\\Qt\\Core\\QMetaObjectConnection',
-                parameters: [
-                    new PhpParameter(name: 'signalSignature', phpType: 'string', hasDefault: false, position: 0),
-                    new PhpParameter(name: 'callback', phpType: 'callable', hasDefault: false, position: 1),
-                ],
-                overloads: [],
-                cppName: 'connect',
-            );
-            $contracts['disconnect'] = new PhpMethod(
-                name: 'disconnect',
-                access: 'public',
-                isStatic: false,
-                isSignal: false,
-                isSlot: false,
-                isAbstractMethod: false,
-                returnType: 'bool',
-                parameters: [
-                    new PhpParameter(name: 'connection', phpType: '\\Qt\\Core\\QMetaObjectConnection', hasDefault: false, position: 0),
-                ],
-                overloads: [],
-                cppName: 'disconnect',
-            );
-        }
-
         return $contracts;
     }
 

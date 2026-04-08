@@ -219,7 +219,7 @@ function calculator_bind_shortcut(array &$shortcuts, QWidget $window, string $se
 {
     $shortcut = new QShortcut($window);
     $shortcut->setKey(new QKeySequence($sequence));
-    $shortcut->connect('activated()', static function () use ($handler): void {
+    $shortcut->onActivated(static function () use ($handler): void {
         $handler();
     });
     $shortcuts[] = $shortcut;
