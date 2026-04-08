@@ -106,6 +106,7 @@ PHP_QT_API void qt_qthreadruntime_moved_object_release(uint64_t token);
 PHP_QT_API zend_object *qt_qthreadruntime_resolve_live_php_object(QObject *native_object);
 PHP_QT_API zend_object *qt_qthreadruntime_resolve_current_thread_live_php_object(QObject *native_object);
 PHP_QT_API bool qt_qthreadruntime_has_moved_object(QObject *native_object);
+PHP_QT_API QThread *qt_qthreadruntime_current_bound_thread(void);
 
 PHP_QT_API qt_qthread_task_host *qt_qthread_task_host_create(void);
 PHP_QT_API void qt_qthread_task_host_destroy(qt_qthread_task_host *host);

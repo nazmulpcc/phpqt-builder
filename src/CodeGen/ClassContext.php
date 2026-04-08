@@ -202,6 +202,12 @@ class ClassContext
     public readonly string $signalConnectArginfoName;
     /** Arginfo symbol for generated signal disconnect() */
     public readonly string $signalDisconnectArginfoName;
+    /** Arginfo symbol for generated PHP signal on() */
+    public readonly string $phpSignalOnArginfoName;
+    /** Arginfo symbol for generated PHP signal off() */
+    public readonly string $phpSignalOffArginfoName;
+    /** Arginfo symbol for generated PHP signal emit() */
+    public readonly string $phpSignalEmitArginfoName;
     /** Arginfo symbol for generated QObject::property() */
     public readonly string $propertyArginfoName;
     /** Arginfo symbol for generated QObject::setProperty() */
@@ -332,6 +338,21 @@ class ClassContext
             $this->phpNamespace,
             $this->phpClassName,
             'disconnect',
+        );
+        $this->phpSignalOnArginfoName = $typeBridge->arginfoName(
+            $this->phpNamespace,
+            $this->phpClassName,
+            'on',
+        );
+        $this->phpSignalOffArginfoName = $typeBridge->arginfoName(
+            $this->phpNamespace,
+            $this->phpClassName,
+            'off',
+        );
+        $this->phpSignalEmitArginfoName = $typeBridge->arginfoName(
+            $this->phpNamespace,
+            $this->phpClassName,
+            'emit',
         );
         $this->propertyArginfoName = $typeBridge->arginfoName(
             $this->phpNamespace,

@@ -61,8 +61,6 @@ namespace {!! $ctx->phpNamespace !!};
 @endforeach
 @if($ctx->nativeCppType === 'QThread')
 
-    public function on(string $event, callable $listener): int {}
-    public function off(int $listenerId): bool {}
     public function drainEvents(int $maxItems = -1): int {}
     public function send(string $event, array $payload = []): bool {}
     public function startFuture(string $callable, array $args = [], ?int $priority = null): \Qt\Core\QFuture {}
@@ -76,6 +74,9 @@ namespace {!! $ctx->phpNamespace !!};
 @endif
 @if($ctx->isQObjectClass)
 
+    public function on(string $signalName, callable|\Qt\Core\QObject $listener, ?string $method = null): int|\Qt\Core\QPhpSignalConnection {}
+    public function off(int|\Qt\Core\QPhpSignalConnection $connection): bool {}
+    public function emit(string $signalName, array $args = []): void {}
     public function property(string $name): mixed {}
     public function setProperty(string $name, mixed $value): bool {}
     public function hasProperty(string $name): bool {}

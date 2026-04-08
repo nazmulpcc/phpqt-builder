@@ -70,6 +70,8 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
     }
 
     intern->prevent_destroy = true;
+    qt_php_signal_unregister_live_wrapper(_qt_object, &intern->std);
+    qt_php_signal_on_object_moved(_qt_object, _qt_target_thread);
     intern->moved_source = true;
     intern->moved_token = _qt_moved_token;
     if (intern->native_is_virtual_trampoline && intern->native_rebind_php_object != NULL) {
@@ -189,7 +191,10 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
     ZEND_PARSE_PARAMETERS_NONE();
 
     if (qt_qobject_current_sender_override().active) {
-        zend_object *_qt_live_sender = qt_qthreadruntime_resolve_current_thread_live_php_object(qt_qobject_current_sender_override().sender);
+        zend_object *_qt_live_sender = qt_php_signal_resolve_current_thread_live_wrapper(qt_qobject_current_sender_override().sender);
+        if (_qt_live_sender == NULL) {
+            _qt_live_sender = qt_qthreadruntime_resolve_current_thread_live_php_object(qt_qobject_current_sender_override().sender);
+        }
         if (_qt_live_sender != NULL) {
             ZVAL_OBJ_COPY(return_value, _qt_live_sender);
             return;

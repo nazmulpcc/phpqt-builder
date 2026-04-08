@@ -11,6 +11,7 @@
 #include "qt_qpromise.h"
 #include "qt_qpromise_arginfo.h"
 #include "qt_qobject.h"
+#include "qt_php_signal_helpers.h"
 #include "php_qt.h"
 
 #include <QtCore/QMetaObject>
@@ -53,6 +54,7 @@ static thread_local qt_qthreadruntime_state *qt_qthreadruntime_tls_current_state
 static thread_local uint64_t qt_qthreadruntime_tls_current_job_id = 0;
 static thread_local qt_qthread_task_host *qt_qthreadruntime_tls_current_task_host = nullptr;
 static thread_local uint64_t qt_qthreadruntime_tls_current_task_token = 0;
+static thread_local QThread *qt_qthreadruntime_tls_bound_thread = nullptr;
 static thread_local bool qt_qthreadruntime_tls_interrupted = false;
 static constexpr size_t QT_QTHREADRUNTIME_MAX_QUEUE_DEPTH_DEFAULT = 4096;
 static constexpr size_t QT_QTHREADRUNTIME_EVENT_QUEUE_DEPTH_DEFAULT = 4096;
@@ -146,6 +148,7 @@ static void qt_qthreadruntime_clear_worker_tls(void)
     qt_qthreadruntime_tls_current_job_id = 0;
     qt_qthreadruntime_tls_current_task_host = nullptr;
     qt_qthreadruntime_tls_current_task_token = 0;
+    qt_qthreadruntime_tls_bound_thread = nullptr;
     qt_qthreadruntime_tls_worker_request = false;
     qt_qthreadruntime_tls_interrupted = false;
 }
@@ -185,6 +188,13 @@ static bool qt_qthreadruntime_prepare_worker_request(const qt_qthreadruntime_req
     SG(sapi_started) = 0;
     SG(headers_sent) = 1;
     SG(request_info).no_headers = 1;
+
+    if (qt_php_signal_ensure_current_thread_dispatcher() == NULL) {
+        php_request_shutdown(NULL);
+        ts_free_thread();
+        qt_qthreadruntime_clear_worker_tls();
+        return false;
+    }
 
     return true;
 #endif
@@ -2397,6 +2407,7 @@ struct qt_qthread_task_host {
         return false;
 #else
         qt_qthreadruntime_tls_worker_request = true;
+        qt_qthreadruntime_tls_bound_thread = thread;
         qt_qthreadruntime_tls_interrupted = false;
 
         bool startup_ok = qt_qthreadruntime_prepare_worker_request(owner_request_snapshot_);
@@ -2452,6 +2463,7 @@ struct qt_qthread_task_host {
                 intern->native_is_virtual_trampoline = moved.native_is_virtual_trampoline;
                 intern->prevent_destroy = moved.prevent_destroy;
                 intern->native_rebind_php_object = moved.rebind_php_object;
+                qt_php_signal_register_live_wrapper(static_cast<QObject *>(intern->native_ptr), &intern->std);
 
                 if (!qt_qthreadruntime_restore_object_properties(&intern->std, moved.properties, &class_error)) {
                     zval_ptr_dtor(&wrapper);
@@ -2694,6 +2706,7 @@ private:
         qt_qthreadruntime_tls_worker_request = true;
         qt_qthreadruntime_tls_current_task_host = this;
         qt_qthreadruntime_tls_current_task_token = task_token;
+        qt_qthreadruntime_tls_bound_thread = thread;
         qt_qthreadruntime_tls_interrupted = false;
 
         bool startup_ok = qt_qthreadruntime_prepare_worker_request(owner_request_snapshot_);
@@ -2966,6 +2979,11 @@ PHP_QT_API void qt_qthreadruntime_shutdown_all(zend_long timeout_ms)
 PHP_QT_API bool qt_qthreadruntime_is_worker_request_context(void)
 {
     return qt_qthreadruntime_tls_worker_request;
+}
+
+PHP_QT_API QThread *qt_qthreadruntime_current_bound_thread(void)
+{
+    return qt_qthreadruntime_tls_bound_thread;
 }
 
 PHP_QT_API void qt_qthreadruntime_phpinfo_rows(void)

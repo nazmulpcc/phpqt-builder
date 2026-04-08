@@ -246,6 +246,68 @@ it('connects parameterized static sender/receiver signatures to a main-thread ph
         ->and($payload['connections_are_objects'])->toBeTrue();
 });
 
+it('validates attribute-declared php signals deterministically', function (): void {
+    $payload = qt_runtime_payload('QtCore/php_signal_validation.php');
+
+    expect($payload['connection_is_object'])->toBeTrue()
+        ->and($payload['unknown_on']['threw'])->toBeTrue()
+        ->and($payload['unknown_emit']['threw'])->toBeTrue()
+        ->and($payload['wrong_count']['threw'])->toBeTrue()
+        ->and($payload['wrong_type']['threw'])->toBeTrue()
+        ->and($payload['public_signal']['threw'])->toBeTrue()
+        ->and($payload['invalid_type']['threw'])->toBeTrue();
+});
+
+it('rejects direct calls to php signal declaration methods and queues same-thread emit delivery', function (): void {
+    $payload = qt_runtime_payload('QtCore/php_signal_direct_call_and_same_thread.php');
+
+    expect($payload['direct_call_threw'])->toBeTrue()
+        ->and($payload['queued_not_inline'])->toBeTrue()
+        ->and($payload['hits'])->toBe(1)
+        ->and($payload['received'])->toBe('alpha')
+        ->and($payload['timed_out'])->toBeFalse()
+        ->and($payload['callback_on_main_thread'])->toBeTrue()
+        ->and($payload['connection_is_object'])->toBeTrue();
+});
+
+it('delivers php signals from a moved sender back to main-thread callbacks', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_php_signal_moved_sender_callback.php');
+
+    expect($payload['move_ok'])->toBeTrue()
+        ->and($payload['wait_ok'])->toBeTrue()
+        ->and($payload['data_hits'])->toBe(1)
+        ->and($payload['finished_hits'])->toBe(1)
+        ->and($payload['received'])->toStartWith('php-signal:')
+        ->and($payload['callback_on_main_thread'])->toBeTrue()
+        ->and($payload['finished_on_main_thread'])->toBeTrue()
+        ->and($payload['worker_thread_differs'])->toBeTrue()
+        ->and($payload['connections_are_objects'])->toBeTrue();
+});
+
+it('retargets php receiver-method listeners across moveToThread and accepts stale receiver handles', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_php_signal_moved_receiver_routing.php');
+
+    expect($payload['move_ok'])->toBeTrue()
+        ->and($payload['wait_ok'])->toBeTrue()
+        ->and($payload['before_hits'])->toBe(1)
+        ->and($payload['after_hits'])->toBe(1)
+        ->and($payload['before_message'])->toBe('phase4-route')
+        ->and($payload['after_message'])->toBe('phase4-route')
+        ->and($payload['both_on_worker_thread'])->toBeTrue()
+        ->and($payload['sender_class'])->toBe('RuntimePhpSignalRoutingEmitter')
+        ->and($payload['sender_signal'])->toBe(-1)
+        ->and($payload['connections_are_objects'])->toBeTrue();
+});
+
+it('disconnects php signal listeners before queued delivery', function (): void {
+    $payload = qt_runtime_payload('QtCore/php_signal_off.php');
+
+    expect($payload['connection_is_object'])->toBeTrue()
+        ->and($payload['off_ok'])->toBeTrue()
+        ->and($payload['off_again'])->toBeFalse()
+        ->and($payload['hits'])->toBe(0);
+});
+
 it('connects static sender/receiver signatures to native receiver methods', function (): void {
     $payload = qt_runtime_thread_payload('QtCore/thread_static_connect_native_receiver.php');
 

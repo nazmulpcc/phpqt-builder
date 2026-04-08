@@ -8,6 +8,17 @@
 #define QT_QOBJECT_HELPERS_H
 
 #include "qt_class_helpers.h"
+
+#ifndef PHP_QT_API
+# if defined(PHP_WIN32)
+#  define PHP_QT_API __declspec(dllexport)
+# elif defined(__GNUC__) && __GNUC__ >= 4
+#  define PHP_QT_API __attribute__ ((visibility("default")))
+# else
+#  define PHP_QT_API
+# endif
+#endif
+
 #include <QMetaMethod>
 #include <QMetaProperty>
 #include <QObject>
@@ -23,6 +34,7 @@
 #include <utility>
 
 typedef void (*qt_qobject_runtime_wrap_adapter_t)(zval *return_value, QObject *native, bool prevent_destroy);
+typedef QObject *(*qt_qobject_native_extract_adapter_t)(zend_object *object);
 typedef QMetaObject::Connection (*qt_qobject_php_receiver_connect_bridge_t)(
     QObject *sender_object,
     QObject *receiver_object,
@@ -69,7 +81,19 @@ inline std::unordered_map<std::string, qt_qobject_runtime_wrap_adapter_t> &qt_qo
     return registry;
 }
 
+inline std::unordered_map<std::string, qt_qobject_native_extract_adapter_t> &qt_qobject_native_extract_registry()
+{
+    static std::unordered_map<std::string, qt_qobject_native_extract_adapter_t> registry;
+    return registry;
+}
+
 inline std::mutex &qt_qobject_runtime_wrapper_registry_mutex()
+{
+    static std::mutex registry_mutex;
+    return registry_mutex;
+}
+
+inline std::mutex &qt_qobject_native_extract_registry_mutex()
 {
     static std::mutex registry_mutex;
     return registry_mutex;
@@ -103,6 +127,24 @@ static inline void qt_qobject_register_runtime_wrapper(
 
     std::lock_guard<std::mutex> lock(qt_qobject_runtime_wrapper_registry_mutex());
     qt_qobject_runtime_wrapper_registry()[std::string(class_name)] = wrap_adapter;
+}
+
+static inline void qt_qobject_register_native_extract_adapter(
+    const QMetaObject *meta_object,
+    qt_qobject_native_extract_adapter_t extract_adapter
+)
+{
+    if (meta_object == NULL || extract_adapter == NULL) {
+        return;
+    }
+
+    const char *class_name = meta_object->className();
+    if (class_name == NULL || *class_name == '\0') {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(qt_qobject_native_extract_registry_mutex());
+    qt_qobject_native_extract_registry()[std::string(class_name)] = extract_adapter;
 }
 
 static inline void qt_qobject_register_php_receiver_connect_bridge(
@@ -185,6 +227,39 @@ static inline bool qt_qobject_wrap_runtime_instance(zval *return_value, QObject 
     }
 
     return false;
+}
+
+static inline QObject *qt_qobject_extract_native_from_object(zend_object *object)
+{
+    if (object == NULL || object->ce == NULL) {
+        return NULL;
+    }
+
+    std::lock_guard<std::mutex> lock(qt_qobject_native_extract_registry_mutex());
+    for (zend_class_entry *ce = object->ce; ce != NULL; ce = ce->parent) {
+        const zend_string *ce_name = ce->name;
+        if (ce_name == NULL || ZSTR_LEN(ce_name) == 0) {
+            continue;
+        }
+
+        auto it = qt_qobject_native_extract_registry().find(std::string(ZSTR_VAL(ce_name), ZSTR_LEN(ce_name)));
+        if (it == qt_qobject_native_extract_registry().end() || it->second == NULL) {
+            continue;
+        }
+
+        return it->second(object);
+    }
+
+    return NULL;
+}
+
+static inline QObject *qt_qobject_extract_native_from_zval(zval *value)
+{
+    if (value == NULL || Z_TYPE_P(value) != IS_OBJECT) {
+        return NULL;
+    }
+
+    return qt_qobject_extract_native_from_object(Z_OBJ_P(value));
 }
 
 PHP_QT_API zend_object *qt_qthreadruntime_resolve_live_php_object(QObject *native_object);

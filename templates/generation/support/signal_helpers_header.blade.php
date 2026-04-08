@@ -131,6 +131,7 @@ static inline std::shared_ptr<qt_signal_callback_t> qt_signal_callback_create(
     auto handle = std::make_shared<qt_signal_callback_t>();
     memset(&handle->fci, 0, sizeof(handle->fci));
     memset(&handle->fci_cache, 0, sizeof(handle->fci_cache));
+    handle->fci.size = sizeof(zend_fcall_info);
     ZVAL_UNDEF(&handle->fci.function_name);
     handle->owner_thread_id = qt_signal_current_thread_id();
     handle->owner_owner_queue_supported = qt_runtime_is_owner_thread();
@@ -180,6 +181,7 @@ static inline bool qt_signal_callback_invoke(const std::shared_ptr<qt_signal_cal
     zval *previousRetval = callback->fci.retval;
     zval *previousParams = callback->fci.params;
     uint32_t previousParamCount = callback->fci.param_count;
+    callback->fci.size = sizeof(zend_fcall_info);
 
     callback->fci.retval = &retval;
     callback->fci.params = params;

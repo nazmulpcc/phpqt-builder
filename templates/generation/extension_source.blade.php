@@ -36,6 +36,9 @@ extern "C" {
 @if($ctx->requiresBuildInfoRegistration())
 #include "qt_buildinfo.h"
 @endif
+@if($ctx->includeSignalConnectionSupport)
+#include "classes/qt_php_signal_helpers.h"
+@endif
 
 static std::atomic_bool qt_shutdown_in_progress{false};
 static std::atomic_bool qt_about_to_quit_hooked{false};
@@ -51,6 +54,9 @@ static std::atomic_uint64_t qt_owner_task_dropped_full{0};
 static std::atomic_uint64_t qt_owner_task_dropped_shutdown{0};
 static std::atomic_uint64_t qt_owner_virtual_timeouts{0};
 static thread_local bool qt_owner_drain_active = false;
+@if($ctx->includeSignalConnectionSupport)
+static void (*qt_saved_execute_ex)(zend_execute_data *execute_data) = nullptr;
+@endif
 ZEND_DECLARE_MODULE_GLOBALS({!! $ctx->extensionName !!})
 
 static void php_{!! $ctx->extensionName !!}_init_globals(zend_{!! $ctx->extensionName !!}_globals *globals)
@@ -120,6 +126,34 @@ bool qt_runtime_is_shutdown_in_progress(void)
 {
     return qt_shutdown_in_progress.load(std::memory_order_acquire);
 }
+
+@if($ctx->includeSignalConnectionSupport)
+static void qt_execute_signal_guard(zend_execute_data *execute_data)
+{
+    zend_function *func = execute_data != NULL ? execute_data->func : NULL;
+    if (func != NULL
+        && func->type == ZEND_USER_FUNCTION
+        && qt_php_signal_function_is_declaration(func)) {
+        const char *method_name = (func->common.function_name != NULL)
+            ? ZSTR_VAL(func->common.function_name)
+            : "<unknown>";
+        zend_throw_error(
+            NULL,
+            "Signal \"%s\" cannot be invoked directly; use emit('%s', ...).",
+            method_name,
+            method_name
+        );
+        return;
+    }
+
+    if (qt_saved_execute_ex != nullptr) {
+        qt_saved_execute_ex(execute_data);
+        return;
+    }
+
+    execute_ex(execute_data);
+}
+@endif
 
 zend_class_entry *qt_runtime_exception_ce(void)
 {
@@ -363,6 +397,13 @@ PHP_MINIT_FUNCTION({!! $ctx->extensionName !!})
 {
     ZEND_INIT_MODULE_GLOBALS({!! $ctx->extensionName !!}, php_{!! $ctx->extensionName !!}_init_globals, NULL);
 
+@if($ctx->includeSignalConnectionSupport)
+    if (qt_saved_execute_ex == nullptr) {
+        qt_saved_execute_ex = zend_execute_ex;
+        zend_execute_ex = qt_execute_signal_guard;
+    }
+@endif
+
 @foreach($ctx->classMinits() as $minit)
     if (PHP_MINIT({!! $minit !!})(INIT_FUNC_ARGS_PASSTHRU) != SUCCESS) {
         return FAILURE;
@@ -382,6 +423,12 @@ PHP_MINIT_FUNCTION({!! $ctx->extensionName !!})
 PHP_MSHUTDOWN_FUNCTION({!! $ctx->extensionName !!})
 {
     qt_qthreadruntime_restore_sapi_deactivate();
+@if($ctx->includeSignalConnectionSupport)
+    if (qt_saved_execute_ex != nullptr) {
+        zend_execute_ex = qt_saved_execute_ex;
+        qt_saved_execute_ex = nullptr;
+    }
+@endif
 
     return SUCCESS;
 }
@@ -416,6 +463,14 @@ PHP_RINIT_FUNCTION({!! $ctx->extensionName !!})
         qt_about_to_quit_hooked.store(false, std::memory_order_release);
         qt_runtime_drop_owner_tasks();
     }
+@if($ctx->includeSignalConnectionSupport)
+
+    if (qt_php_signal_ensure_current_thread_dispatcher() == NULL) {
+        QT_RUNTIME_G(request_active) = false;
+        zend_throw_error(NULL, "Failed to initialize the PHP signal dispatcher for the current thread.");
+        return FAILURE;
+    }
+@endif
 
     return SUCCESS;
 }

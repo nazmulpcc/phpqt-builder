@@ -111,6 +111,12 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
             }
         }
 
+@if($ctx->isQObjectDerived)
+        if (intern->native_ptr != NULL) {
+            qt_php_signal_register_live_wrapper(static_cast<QObject *>(intern->native_ptr), &intern->std);
+        }
+@endif
+
         return;
     }
 @endif
@@ -269,5 +275,11 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
 @endif
 @endif
 @endif
+@endif
+
+@if($ctx->isQObjectDerived && $ctx->nativeCppType !== 'QThread')
+    if (intern->native_ptr != NULL) {
+        qt_php_signal_register_live_wrapper(static_cast<QObject *>(intern->native_ptr), &intern->std);
+    }
 @endif
 }
