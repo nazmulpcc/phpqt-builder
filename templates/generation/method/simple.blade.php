@@ -188,8 +188,13 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
 @elseif($ctx->nativeCppType === 'QObject' && $method->name === 'sender')
     ZEND_PARSE_PARAMETERS_NONE();
 
-    if (qt_qobject_current_sender_override.active) {
-        if (!qt_qobject_wrap_runtime_instance(return_value, qt_qobject_current_sender_override.sender, true)) {
+    if (qt_qobject_current_sender_override().active) {
+        zend_object *_qt_live_sender = qt_qthreadruntime_resolve_current_thread_live_php_object(qt_qobject_current_sender_override().sender);
+        if (_qt_live_sender != NULL) {
+            ZVAL_OBJ_COPY(return_value, _qt_live_sender);
+            return;
+        }
+        if (!qt_qobject_wrap_runtime_instance(return_value, qt_qobject_current_sender_override().sender, true)) {
             RETURN_NULL();
         }
         return;
@@ -218,8 +223,8 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
 @elseif($ctx->nativeCppType === 'QObject' && $method->name === 'senderSignalIndex')
     ZEND_PARSE_PARAMETERS_NONE();
 
-    if (qt_qobject_current_sender_override.active) {
-        RETURN_LONG((zend_long) qt_qobject_current_sender_override.signal_index);
+    if (qt_qobject_current_sender_override().active) {
+        RETURN_LONG((zend_long) qt_qobject_current_sender_override().signal_index);
     }
 
     qt_runtime_owner_safe_point();

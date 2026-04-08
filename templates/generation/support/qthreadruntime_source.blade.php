@@ -331,6 +331,35 @@ static zend_object *qt_qthreadruntime_resolve_live_php_object_record(QObject *na
     return record_it->second.active_php_object;
 }
 
+static zend_object *qt_qthreadruntime_resolve_current_thread_live_php_object_record(QObject *native_object)
+{
+    if (native_object == nullptr) {
+        return nullptr;
+    }
+
+    std::lock_guard<std::mutex> lock(qt_qthreadruntime_moved_object_registry_mutex);
+    auto token_it = qt_qthreadruntime_moved_object_native_index.find(native_object);
+    if (token_it == qt_qthreadruntime_moved_object_native_index.end()) {
+        return nullptr;
+    }
+
+    auto record_it = qt_qthreadruntime_moved_object_registry.find(token_it->second);
+    if (record_it == qt_qthreadruntime_moved_object_registry.end()) {
+        return nullptr;
+    }
+
+    if (!record_it->second.alive || record_it->second.native_object.isNull()) {
+        return nullptr;
+    }
+
+    QThread *owner_thread = record_it->second.owner_thread.data();
+    if (owner_thread == nullptr || owner_thread != QThread::currentThread()) {
+        return nullptr;
+    }
+
+    return record_it->second.active_php_object;
+}
+
 static bool qt_qthreadruntime_has_moved_object_record(QObject *native_object)
 {
     if (native_object == nullptr) {
@@ -3261,6 +3290,11 @@ PHP_QT_API void qt_qthreadruntime_moved_object_release(uint64_t token)
 PHP_QT_API zend_object *qt_qthreadruntime_resolve_live_php_object(QObject *native_object)
 {
     return qt_qthreadruntime_resolve_live_php_object_record(native_object);
+}
+
+PHP_QT_API zend_object *qt_qthreadruntime_resolve_current_thread_live_php_object(QObject *native_object)
+{
+    return qt_qthreadruntime_resolve_current_thread_live_php_object_record(native_object);
 }
 
 PHP_QT_API bool qt_qthreadruntime_has_moved_object(QObject *native_object)

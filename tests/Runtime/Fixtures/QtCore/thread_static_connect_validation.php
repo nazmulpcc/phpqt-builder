@@ -46,5 +46,7 @@ qt_runtime_result([
     'macro_method' => $probe(static fn() => \Qt\Core\QObject::connect($thread, 'started()', $worker, 'SLOT(doWork())')),
     'unknown_signal' => $probe(static fn() => \Qt\Core\QObject::connect($thread, 'missingSignal()', $worker, 'doWork()')),
     'unknown_method' => $probe(static fn() => \Qt\Core\QObject::connect($thread, 'started()', $worker, 'missingMethod()')),
+    'required_mismatch' => $probe(static fn() => \Qt\Core\QObject::connect($worker, 'objectNameChanged(QString)', $worker, 'needsTwoStrings(QString,QString)')),
+    'overdeclared_optional' => $probe(static fn() => \Qt\Core\QObject::connect($worker, 'objectNameChanged(QString)', $worker, 'captureOptional(QString,QString)')),
     'explicit_overload' => $explicitOverload,
 ]);

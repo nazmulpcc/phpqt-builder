@@ -389,7 +389,7 @@ PHP_MSHUTDOWN_FUNCTION({!! $ctx->extensionName !!})
 @endif
 PHP_RINIT_FUNCTION({!! $ctx->extensionName !!})
 {
-#if defined(ZTS) && defined(COMPILE_DL_{!! strtoupper($ctx->extensionName) !!})
+#if defined(ZTS) && (defined(COMPILE_DL_{!! strtoupper($ctx->extensionName) !!}) || defined(ZEND_COMPILE_DL_EXT))
     ZEND_TSRMLS_CACHE_UPDATE();
 #endif
 
@@ -461,7 +461,7 @@ extern "C" zend_module_entry {!! $ctx->extensionName !!}_module_entry = {
     STANDARD_MODULE_PROPERTIES
 };
 
-#ifdef COMPILE_DL_{!! strtoupper($ctx->extensionName) !!}
+#if defined(COMPILE_DL_{!! strtoupper($ctx->extensionName) !!}) || defined(ZEND_COMPILE_DL_EXT)
 # ifdef ZTS
 ZEND_TSRMLS_CACHE_DEFINE()
 # endif

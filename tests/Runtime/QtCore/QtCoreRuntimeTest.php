@@ -214,6 +214,38 @@ it('connects static sender/receiver signatures to a moved php receiver method', 
         ->and($payload['connections_are_objects'])->toBeTrue();
 });
 
+it('connects parameterized static sender/receiver signatures to a moved php receiver method', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_static_connect_parameterized_receiver_dispatch.php');
+
+    expect($payload['move_ok'])->toBeTrue()
+        ->and($payload['wait_ok'])->toBeTrue()
+        ->and($payload['signal_hits'])->toBe(1)
+        ->and($payload['finished_hits'])->toBe(1)
+        ->and($payload['callback_on_main_thread'])->toBeTrue()
+        ->and($payload['worker_thread_differs'])->toBeTrue()
+        ->and($payload['capture_hits'])->toBe(1)
+        ->and($payload['captured_name'])->toBe($payload['received_name'])
+        ->and($payload['capture_on_worker_thread'])->toBeTrue()
+        ->and($payload['capture_sender_class'])->toBe('RuntimeStaticConnectPhase3Worker')
+        ->and($payload['capture_sender_signal'])->toBeGreaterThanOrEqual(0)
+        ->and($payload['connections_are_objects'])->toBeTrue();
+});
+
+it('connects parameterized static sender/receiver signatures to a main-thread php receiver method', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_static_connect_parameterized_main_thread_receiver.php');
+
+    expect($payload['move_ok'])->toBeTrue()
+        ->and($payload['wait_ok'])->toBeTrue()
+        ->and($payload['finished_hits'])->toBe(1)
+        ->and($payload['logger_hits'])->toBe(1)
+        ->and($payload['logger_message'])->toBeString()
+        ->and($payload['logger_message'])->toStartWith('phase31-main:')
+        ->and($payload['logger_on_main_thread'])->toBeTrue()
+        ->and($payload['logger_sender_class'])->toBe('Qt\\Core\\QObject')
+        ->and($payload['logger_sender_signal'])->toBeGreaterThanOrEqual(0)
+        ->and($payload['connections_are_objects'])->toBeTrue();
+});
+
 it('connects static sender/receiver signatures to native receiver methods', function (): void {
     $payload = qt_runtime_thread_payload('QtCore/thread_static_connect_native_receiver.php');
 
@@ -221,6 +253,19 @@ it('connects static sender/receiver signatures to native receiver methods', func
         ->and($payload['started_hits'])->toBe(1)
         ->and($payload['finished_hits'])->toBe(1)
         ->and($payload['connection_is_object'])->toBeTrue();
+});
+
+it('marshals parameterized php receiver arguments for scalar and qobject payloads', function (): void {
+    $payload = qt_runtime_payload('QtCore/static_connect_parameterized_php_receivers.php');
+
+    expect($payload['wait_ok'])->toBeTrue()
+        ->and($payload['optional_value'])->toBe('alpha|tail')
+        ->and($payload['exit_code_only'])->toBe(7)
+        ->and($payload['finished_exit_code'])->toBe(7)
+        ->and($payload['finished_exit_status'])->toBe(0)
+        ->and($payload['destroyed_wrapped'])->toBeTrue()
+        ->and($payload['destroyed_class'])->toBe('Qt\\Core\\QObject')
+        ->and($payload['connections_are_objects'])->toBeTrue();
 });
 
 it('validates static QObject::connect signatures deterministically', function (): void {
@@ -232,8 +277,10 @@ it('validates static QObject::connect signatures deterministically', function ()
         ->and($payload['macro_method']['threw'])->toBeTrue()
         ->and($payload['unknown_signal']['threw'])->toBeTrue()
         ->and($payload['unknown_method']['threw'])->toBeTrue()
-        ->and($payload['explicit_overload']['threw'])->toBeFalse()
-        ->and($payload['explicit_overload']['is_connection'])->toBeTrue();
+        ->and($payload['required_mismatch']['threw'])->toBeTrue()
+        ->and($payload['overdeclared_optional']['threw'])->toBeTrue()
+        ->and($payload['explicit_overload']['threw'])->toBeTrue()
+        ->and($payload['explicit_overload']['is_connection'])->toBeFalse();
 });
 
 it('disconnects static QObject::connect connections before delivery', function (): void {

@@ -23,14 +23,6 @@ if (!method_exists(\Qt\Core\QCoreApplication::class, 'postEvent')) {
 $argc = 0;
 $app = new \Qt\Core\QCoreApplication($argc, ['qt-runtime']);
 
-$finishedThreads = 0;
-$quitWhenFinished = static function () use (&$finishedThreads): void {
-    $finishedThreads++;
-    if ($finishedThreads === 2) {
-        \Qt\Core\QCoreApplication::quit();
-    }
-};
-
 $threadAlive = new \Qt\Core\QThread();
 $workerAlive = new RuntimeMoveToThreadPhase2Worker();
 $aliveSignalHits = 0;
@@ -41,13 +33,17 @@ $moveAliveOk = $workerAlive->moveToThread($threadAlive);
 \Qt\Core\QCoreApplication::postEvent($workerAlive, new \Qt\Core\QEvent(1001));
 unset($workerAlive);
 gc_collect_cycles();
-$threadAlive->onFinished($quitWhenFinished);
 
 $threadDead = new \Qt\Core\QThread();
 $workerDead = new RuntimeMoveToThreadPhase2Worker();
 $moveDeadOk = $workerDead->moveToThread($threadDead);
-\Qt\Core\QCoreApplication::postEvent($workerDead, new \Qt\Core\QEvent(1002));
-$threadDead->onFinished($quitWhenFinished);
+$threadDead->onFinished(static function (): void {
+    \Qt\Core\QCoreApplication::quit();
+});
+
+$threadAlive->onFinished(static function () use ($workerDead): void {
+    \Qt\Core\QCoreApplication::postEvent($workerDead, new \Qt\Core\QEvent(1002));
+});
 
 $threadAlive->start();
 $threadDead->start();
