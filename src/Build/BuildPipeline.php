@@ -1817,7 +1817,7 @@ class BuildPipeline
         OutputInterface $output,
     ): array {
         $generator = new ExtensionGenerator();
-        $supportsRuntimeNotifyFunctorConnect = $context->installation->osFamily !== 'Windows';
+        $supportsRuntimeNotifyFunctorConnect = $context->installation->supportsRuntimeNotifyFunctorConnect();
         $fileWriteStats = new FileWriteStats();
         $classmap = [];
         $outputDir = $context->outputDir . '/classes';

@@ -35,4 +35,17 @@ readonly class QtInstallation
     {
         return $this->osFamily === 'Darwin';
     }
+
+    public function supportsRuntimeNotifyFunctorConnect(): bool
+    {
+        if ($this->qtVersionMajor === 0) {
+            return false;
+        }
+
+        if ($this->qtVersionMajor > 6) {
+            return true;
+        }
+
+        return $this->qtVersionMajor === 6 && $this->qtVersionMinor >= 10;
+    }
 }

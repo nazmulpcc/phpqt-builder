@@ -7,6 +7,10 @@
 #ifndef QT_PHP_COMPAT_H
 #define QT_PHP_COMPAT_H
 
+#if defined(__APPLE__) && defined(__aarch64__)
+# include <arm_acle.h>
+#endif
+
 #ifdef PHP_WIN32
 # ifdef mkdir
 #  undef mkdir

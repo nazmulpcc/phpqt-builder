@@ -108,7 +108,7 @@ class GenerateCommand extends Command
         $output->writeln(sprintf('<info>Generating extension code to %s...</info>', $outputDir));
 
         $generator = new ExtensionGenerator();
-        $supportsRuntimeNotifyFunctorConnect = $this->supportsRuntimeNotifyFunctorConnect();
+        $supportsRuntimeNotifyFunctorConnect = $this->supportsRuntimeNotifyFunctorConnect($input, $module, false);
         $files = $generator->generate($phpClass, $namespace, $outputDir, supportsRuntimeNotifyFunctorConnect: $supportsRuntimeNotifyFunctorConnect);
 
         foreach ($files as $file) {
@@ -299,7 +299,7 @@ class GenerateCommand extends Command
                 [],
                 $classMetadata,
                 true,
-                $this->supportsRuntimeNotifyFunctorConnect(),
+                $this->supportsRuntimeNotifyFunctorConnect($input, $module, true),
             );
             $result = $result->withGeneratedFiles($files);
         }
@@ -589,8 +589,18 @@ class GenerateCommand extends Command
         return self::FAILURE;
     }
 
-    private function supportsRuntimeNotifyFunctorConnect(): bool
+    private function supportsRuntimeNotifyFunctorConnect(InputInterface $input, string $module, bool $buildMode): bool
     {
-        return $this->systemInformation->getOsFamily() !== 'Windows';
+        $qtPath = $input->getOption('qt-path');
+        $includePaths = $input->getOption('include');
+
+        if (!$buildMode && $qtPath === null && $includePaths === []) {
+            return false;
+        }
+
+        $resolver = new QtInstallationResolver($this->systemInformation);
+        $installation = $resolver->resolve($qtPath !== null ? (string) $qtPath : null, [$module]);
+
+        return $installation->supportsRuntimeNotifyFunctorConnect();
     }
 }
