@@ -6,6 +6,13 @@
 
 #include "qt_php_signal_helpers.h"
 
+static thread_local qt_qobject_sender_override_state qt_qobject_sender_override_tls;
+
+qt_qobject_sender_override_state &qt_qobject_current_sender_override()
+{
+    return qt_qobject_sender_override_tls;
+}
+
 std::unordered_map<zend_class_entry *, std::shared_ptr<qt_php_signal_class_metadata>> &qt_php_signal_class_metadata_registry()
 {
     static std::unordered_map<zend_class_entry *, std::shared_ptr<qt_php_signal_class_metadata>> registry;

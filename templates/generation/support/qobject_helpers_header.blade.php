@@ -51,29 +51,22 @@ struct qt_qobject_sender_override_state
     bool active{false};
 };
 
-static inline qt_qobject_sender_override_state &qt_qobject_current_sender_override()
+PHP_QT_API qt_qobject_sender_override_state &qt_qobject_current_sender_override();
+
+static inline qt_qobject_sender_override_state qt_qobject_push_sender_override(QObject *sender, int signal_index)
 {
-    static thread_local qt_qobject_sender_override_state state;
-    return state;
+    qt_qobject_sender_override_state &state = qt_qobject_current_sender_override();
+    qt_qobject_sender_override_state previous = state;
+    state.sender = sender;
+    state.signal_index = signal_index;
+    state.active = true;
+    return previous;
 }
 
-struct qt_qobject_sender_override_scope
+static inline void qt_qobject_pop_sender_override(const qt_qobject_sender_override_state &previous)
 {
-    explicit qt_qobject_sender_override_scope(QObject *sender, int signal_index)
-        : previous(qt_qobject_current_sender_override())
-    {
-        qt_qobject_current_sender_override().sender = sender;
-        qt_qobject_current_sender_override().signal_index = signal_index;
-        qt_qobject_current_sender_override().active = true;
-    }
-
-    ~qt_qobject_sender_override_scope()
-    {
-        qt_qobject_current_sender_override() = previous;
-    }
-
-    qt_qobject_sender_override_state previous;
-};
+    qt_qobject_current_sender_override() = previous;
+}
 
 inline std::unordered_map<std::string, qt_qobject_runtime_wrap_adapter_t> &qt_qobject_runtime_wrapper_registry()
 {
@@ -319,7 +312,7 @@ struct qt_qobject_php_receiver_invocation_state
             return false;
         }
 
-        qt_qobject_sender_override_scope sender_scope(sender_native.data(), signal_index);
+        qt_qobject_sender_override_state previous_sender_state = qt_qobject_push_sender_override(sender_native.data(), signal_index);
 
         zval retval;
         ZVAL_NULL(&retval);
@@ -330,6 +323,7 @@ struct qt_qobject_php_receiver_invocation_state
             param_count,
             param_count > 0 ? params : NULL
         );
+        qt_qobject_pop_sender_override(previous_sender_state);
         zval_ptr_dtor(&retval);
 
         return ok;

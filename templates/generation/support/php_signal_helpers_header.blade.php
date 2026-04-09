@@ -702,7 +702,7 @@ public:
         std::vector<qt_php_signal_value> args;
     };
 
-    explicit qt_php_signal_dispatch_event(delivery_record record_value)
+    explicit qt_php_signal_dispatch_event(delivery_record *record_value)
         : QEvent((QEvent::Type) qt_php_signal_dispatch_event::event_type())
         , event_kind(kind::delivery)
         , delivery(std::move(record_value))
@@ -716,18 +716,38 @@ public:
     {
     }
 
+    ~qt_php_signal_dispatch_event() override
+    {
+        if (event_kind == kind::delivery && delivery != NULL) {
+            delete delivery;
+            delivery = NULL;
+        }
+    }
+
     static int event_type()
     {
         return qt_php_signal_dispatch_event_type();
     }
 
     kind event_kind{kind::delivery};
-    delivery_record delivery;
+    delivery_record *delivery{nullptr};
     std::shared_ptr<qt_php_signal_listener> cleanup_target;
 };
 
+class qt_php_signal_dispatcher;
+
 static inline void qt_php_signal_cleanup_listener(const std::shared_ptr<qt_php_signal_listener> &listener);
 static inline void qt_php_signal_dispatch_delivery(const qt_php_signal_dispatch_event::delivery_record &delivery);
+
+static inline bool qt_php_signal_schedule_delivery_on_dispatcher(
+    qt_php_signal_dispatcher *dispatcher,
+    const std::shared_ptr<qt_php_signal_dispatch_event::delivery_record> &delivery
+);
+
+static inline bool qt_php_signal_schedule_cleanup_on_dispatcher(
+    qt_php_signal_dispatcher *dispatcher,
+    const std::shared_ptr<qt_php_signal_listener> &listener
+);
 
 class qt_php_signal_dispatcher final : public QObject
 {
@@ -744,7 +764,11 @@ public:
             return true;
         }
 
-        qt_php_signal_dispatch_delivery(dispatch_event->delivery);
+        if (!dispatch_event->delivery) {
+            return true;
+        }
+
+        qt_php_signal_dispatch_delivery(*dispatch_event->delivery);
         return true;
     }
 };
@@ -769,6 +793,59 @@ static inline qt_php_signal_dispatcher *qt_php_signal_dispatcher_for_thread(QThr
     return it->second.data();
 }
 
+static inline void qt_php_signal_flush_pending_for_dispatcher(
+    qt_php_signal_dispatcher *dispatcher,
+    QThread *thread,
+    QThread *bound_thread
+)
+{
+    if (dispatcher == NULL || thread == NULL) {
+        return;
+    }
+
+    std::vector<qt_php_signal_dispatch_event::delivery_record> pending;
+    {
+        std::lock_guard<std::mutex> lock(qt_php_signal_pending_delivery_registry_mutex());
+        for (auto registry_it = qt_php_signal_pending_delivery_registry().begin();
+             registry_it != qt_php_signal_pending_delivery_registry().end();) {
+            auto &bucket = registry_it->second;
+            auto bucket_it = bucket.begin();
+            while (bucket_it != bucket.end()) {
+                QThread *listener_thread = NULL;
+                {
+                    std::lock_guard<std::mutex> listener_lock(qt_php_signal_registry_mutex());
+                    auto listener_it = qt_php_signal_listener_registry().find(bucket_it->listener_id);
+                    if (listener_it != qt_php_signal_listener_registry().end()) {
+                        auto listener = listener_it->second;
+                        if (listener && listener->target_type == qt_php_signal_listener_target_type::receiver_method_target) {
+                            listener_thread = listener->receiver.owner_thread.data();
+                        }
+                    }
+                }
+
+                if (listener_thread == thread || (bound_thread != NULL && listener_thread == bound_thread)) {
+                    pending.push_back(std::move(*bucket_it));
+                    bucket_it = bucket.erase(bucket_it);
+                    continue;
+                }
+
+                ++bucket_it;
+            }
+
+            if (bucket.empty()) {
+                registry_it = qt_php_signal_pending_delivery_registry().erase(registry_it);
+            } else {
+                ++registry_it;
+            }
+        }
+    }
+
+    for (auto &delivery : pending) {
+        auto delivery_ptr = std::make_shared<qt_php_signal_dispatch_event::delivery_record>(std::move(delivery));
+        (void) qt_php_signal_schedule_delivery_on_dispatcher(dispatcher, delivery_ptr);
+    }
+}
+
 static inline qt_php_signal_dispatcher *qt_php_signal_ensure_current_thread_dispatcher(void)
 {
     QThread *thread = QThread::currentThread();
@@ -781,13 +858,17 @@ static inline qt_php_signal_dispatcher *qt_php_signal_ensure_current_thread_disp
         std::lock_guard<std::mutex> lock(qt_php_signal_dispatcher_registry_mutex());
         auto it = qt_php_signal_dispatcher_registry().find(thread);
         if (it != qt_php_signal_dispatcher_registry().end() && !it->second.isNull()) {
-            return it->second.data();
+            qt_php_signal_dispatcher *dispatcher = it->second.data();
+            qt_php_signal_flush_pending_for_dispatcher(dispatcher, thread, bound_thread);
+            return dispatcher;
         }
         if (bound_thread != NULL && bound_thread != thread) {
             auto bound_it = qt_php_signal_dispatcher_registry().find(bound_thread);
             if (bound_it != qt_php_signal_dispatcher_registry().end() && !bound_it->second.isNull()) {
                 qt_php_signal_dispatcher_registry()[thread] = bound_it->second;
-                return bound_it->second.data();
+                qt_php_signal_dispatcher *dispatcher = bound_it->second.data();
+                qt_php_signal_flush_pending_for_dispatcher(dispatcher, thread, bound_thread);
+                return dispatcher;
             }
         }
     }
@@ -800,50 +881,7 @@ static inline qt_php_signal_dispatcher *qt_php_signal_ensure_current_thread_disp
             qt_php_signal_dispatcher_registry()[bound_thread] = dispatcher;
         }
     }
-
-    {
-        std::vector<qt_php_signal_dispatch_event::delivery_record> pending;
-        {
-            std::lock_guard<std::mutex> lock(qt_php_signal_pending_delivery_registry_mutex());
-            for (auto registry_it = qt_php_signal_pending_delivery_registry().begin();
-                 registry_it != qt_php_signal_pending_delivery_registry().end();) {
-                auto &bucket = registry_it->second;
-                auto bucket_it = bucket.begin();
-                while (bucket_it != bucket.end()) {
-                    QThread *listener_thread = NULL;
-                    {
-                        std::lock_guard<std::mutex> listener_lock(qt_php_signal_registry_mutex());
-                        auto listener_it = qt_php_signal_listener_registry().find(bucket_it->listener_id);
-                        if (listener_it != qt_php_signal_listener_registry().end()) {
-                            auto listener = listener_it->second;
-                            if (listener && listener->target_type == qt_php_signal_listener_target_type::receiver_method_target) {
-                                listener_thread = listener->receiver.owner_thread.data();
-                            }
-                        }
-                    }
-
-                    if (listener_thread == thread || (bound_thread != NULL && listener_thread == bound_thread)) {
-                        pending.push_back(std::move(*bucket_it));
-                        bucket_it = bucket.erase(bucket_it);
-                        continue;
-                    }
-
-                    ++bucket_it;
-                }
-
-                if (bucket.empty()) {
-                    registry_it = qt_php_signal_pending_delivery_registry().erase(registry_it);
-                } else {
-                    ++registry_it;
-                }
-            }
-        }
-
-        for (auto &delivery : pending) {
-            qt_php_signal_debug_log("flush-pending-delivery");
-            QCoreApplication::postEvent(dispatcher, new qt_php_signal_dispatch_event(std::move(delivery)));
-        }
-    }
+    qt_php_signal_flush_pending_for_dispatcher(dispatcher, thread, bound_thread);
 
     QObject::connect(thread, &QObject::destroyed, [thread]() {
         std::lock_guard<std::mutex> lock(qt_php_signal_dispatcher_registry_mutex());
@@ -874,6 +912,42 @@ static inline void qt_php_signal_cleanup_listener(const std::shared_ptr<qt_php_s
     }
 }
 
+static inline bool qt_php_signal_schedule_delivery_on_dispatcher(
+    qt_php_signal_dispatcher *dispatcher,
+    const std::shared_ptr<qt_php_signal_dispatch_event::delivery_record> &delivery
+)
+{
+    if (dispatcher == NULL || delivery == NULL) {
+        return false;
+    }
+
+    return QMetaObject::invokeMethod(
+        dispatcher,
+        [delivery]() {
+            qt_php_signal_dispatch_delivery(*delivery);
+        },
+        Qt::QueuedConnection
+    );
+}
+
+static inline bool qt_php_signal_schedule_cleanup_on_dispatcher(
+    qt_php_signal_dispatcher *dispatcher,
+    const std::shared_ptr<qt_php_signal_listener> &listener
+)
+{
+    if (dispatcher == NULL || !listener) {
+        return false;
+    }
+
+    return QMetaObject::invokeMethod(
+        dispatcher,
+        [listener]() {
+            qt_php_signal_cleanup_listener(listener);
+        },
+        Qt::QueuedConnection
+    );
+}
+
 static inline void qt_php_signal_schedule_listener_cleanup(const std::shared_ptr<qt_php_signal_listener> &listener)
 {
     if (!listener || listener->target_type != qt_php_signal_listener_target_type::callable_target) {
@@ -892,7 +966,7 @@ static inline void qt_php_signal_schedule_listener_cleanup(const std::shared_ptr
         return;
     }
 
-    QCoreApplication::postEvent(dispatcher, new qt_php_signal_dispatch_event(listener));
+    (void) qt_php_signal_schedule_cleanup_on_dispatcher(dispatcher, listener);
 }
 
 static inline uint64_t qt_php_signal_ensure_sender_token(QObject *native)
@@ -1210,7 +1284,7 @@ static inline qt_php_signal_receiver_invoke_result qt_php_signal_invoke_receiver
         params.push_back(param);
     }
 
-    qt_qobject_sender_override_scope sender_scope(sender_native, -1);
+    qt_qobject_sender_override_state previous_sender_state = qt_qobject_push_sender_override(sender_native, -1);
     zval retval;
     ZVAL_NULL(&retval);
     const bool ok = qt_call_php_method(
@@ -1220,9 +1294,7 @@ static inline qt_php_signal_receiver_invoke_result qt_php_signal_invoke_receiver
         (uint32_t) params.size(),
         params.empty() ? NULL : params.data()
     );
-    if (!ok) {
-        qt_php_signal_debug_log("receiver-method-call-failed");
-    }
+    qt_qobject_pop_sender_override(previous_sender_state);
     zval_ptr_dtor(&retval);
     for (zval &cleanup : params) {
         zval_ptr_dtor(&cleanup);
@@ -1269,10 +1341,10 @@ static inline void qt_php_signal_dispatch_delivery(const qt_php_signal_dispatch_
     if (receiver_result == qt_php_signal_receiver_invoke_result::unavailable && delivery.retry_count < 8) {
         qt_php_signal_dispatcher *dispatcher = qt_php_signal_ensure_current_thread_dispatcher();
         if (dispatcher != NULL) {
-            qt_php_signal_dispatch_event::delivery_record retry = delivery;
-            retry.retry_count++;
-            qt_php_signal_debug_log("receiver-delivery-retry");
-            QCoreApplication::postEvent(dispatcher, new qt_php_signal_dispatch_event(std::move(retry)));
+            auto *retry = new qt_php_signal_dispatch_event::delivery_record(delivery);
+            retry->retry_count++;
+            auto retry_ptr = std::shared_ptr<qt_php_signal_dispatch_event::delivery_record>(retry);
+            (void) qt_php_signal_schedule_delivery_on_dispatcher(dispatcher, retry_ptr);
         }
     }
 }
@@ -1306,12 +1378,17 @@ static inline bool qt_php_signal_enqueue_delivery(
     delivery.listener_id = listener->id;
     delivery.generation = listener->generation.load(std::memory_order_acquire);
     delivery.args = std::move(args);
-
     if (dispatcher == NULL) {
         if (target_thread != QThread::currentThread()) {
             qt_php_signal_debug_log("queue-pending-delivery");
-            std::lock_guard<std::mutex> lock(qt_php_signal_pending_delivery_registry_mutex());
-            qt_php_signal_pending_delivery_registry()[target_thread].push_back(std::move(delivery));
+            {
+                std::lock_guard<std::mutex> lock(qt_php_signal_pending_delivery_registry_mutex());
+                qt_php_signal_pending_delivery_registry()[target_thread].push_back(std::move(delivery));
+            }
+            qt_php_signal_dispatcher *pending_dispatcher = qt_php_signal_dispatcher_for_thread(target_thread);
+            if (pending_dispatcher != NULL) {
+                qt_php_signal_flush_pending_for_dispatcher(pending_dispatcher, target_thread, NULL);
+            }
             return true;
         }
 
@@ -1320,8 +1397,8 @@ static inline bool qt_php_signal_enqueue_delivery(
         }
         return false;
     }
-    QCoreApplication::postEvent(dispatcher, new qt_php_signal_dispatch_event(std::move(delivery)));
-    return true;
+    auto delivery_ptr = std::make_shared<qt_php_signal_dispatch_event::delivery_record>(std::move(delivery));
+    return qt_php_signal_schedule_delivery_on_dispatcher(dispatcher, delivery_ptr);
 }
 
 static inline bool qt_php_signal_register_callable_listener(
