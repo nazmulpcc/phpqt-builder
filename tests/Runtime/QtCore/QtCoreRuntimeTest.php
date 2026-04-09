@@ -294,7 +294,7 @@ it('retargets php receiver-method listeners across moveToThread and accepts stal
         ->and($payload['before_message'])->toBe('phase4-route')
         ->and($payload['after_message'])->toBe('phase4-route')
         ->and($payload['both_on_worker_thread'])->toBeTrue()
-        ->and($payload['sender_class'])->toBe('RuntimePhpSignalRoutingEmitter')
+        ->and($payload['sender_class'])->toBe(\Qt\Core\QObject::class)
         ->and($payload['sender_signal'])->toBe(-1)
         ->and($payload['connections_are_objects'])->toBeTrue();
 });
