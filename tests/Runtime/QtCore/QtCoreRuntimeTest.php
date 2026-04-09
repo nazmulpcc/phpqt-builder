@@ -299,6 +299,107 @@ it('retargets php receiver-method listeners across moveToThread and accepts stal
         ->and($payload['connections_are_objects'])->toBeTrue();
 });
 
+it('delivers burst php signals to a moved receiver without dropping sender context', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_php_signal_burst_moved_receiver_stress.php');
+
+    expect($payload['move_ok'])->toBeTrue()
+        ->and($payload['wait_ok'])->toBeTrue()
+        ->and($payload['timed_out'])->toBeFalse()
+        ->and($payload['hits'])->toBe($payload['message_count'])
+        ->and($payload['messages_csv'])->toBe($payload['expected_csv'])
+        ->and($payload['callback_on_worker_thread'])->toBeTrue()
+        ->and($payload['thread_mismatch_hits'])->toBe(0)
+        ->and($payload['sender_null_hits'])->toBe(0)
+        ->and($payload['sender_class'])->toBe(\Qt\Core\QObject::class)
+        ->and($payload['sender_class_mismatch_hits'])->toBe(0)
+        ->and($payload['sender_signal'])->toBe(-1)
+        ->and($payload['sender_signal_mismatch_hits'])->toBe(0)
+        ->and($payload['connection_is_object'])->toBeTrue();
+});
+
+it('reliably flushes pending php signal deliveries across dispatcher startup races', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_php_signal_dispatcher_race_loop.php');
+
+    expect($payload['all_move_ok'])->toBeTrue()
+        ->and($payload['all_connections_are_objects'])->toBeTrue()
+        ->and($payload['prestart_iterations'])->toBeGreaterThan(0)
+        ->and($payload['poststart_iterations'])->toBeGreaterThan(0)
+        ->and($payload['timeout_iterations'])->toBe(0)
+        ->and($payload['failed_iterations'])->toBe(0)
+        ->and($payload['total_hits'])->toBe($payload['iterations']);
+});
+
+it('repeats stale-handle php signal retargeting across move and emit churn', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_php_signal_move_emit_churn.php');
+
+    expect($payload['all_move_ok'])->toBeTrue()
+        ->and($payload['all_connections_are_objects'])->toBeTrue()
+        ->and($payload['timeout_phases'])->toBe(0)
+        ->and($payload['phase_failures'])->toBe(0)
+        ->and($payload['total_hits'])->toBe($payload['expected_total_hits']);
+});
+
+it('fans out php signals to multiple moved receivers across worker threads', function (): void {
+    $payload = qt_runtime_thread_payload('QtCore/thread_php_signal_multithread_fanout.php', [], 10);
+
+    expect($payload['all_move_ok'])->toBeTrue()
+        ->and($payload['all_connections_are_objects'])->toBeTrue()
+        ->and($payload['timed_out'])->toBeFalse()
+        ->and($payload['started_threads'])->toBe($payload['thread_count'])
+        ->and($payload['finished_threads'])->toBe($payload['thread_count'])
+        ->and($payload['wait_all_ok'])->toBeTrue()
+        ->and($payload['bad_receivers'])->toBe(0)
+        ->and($payload['total_hits'])->toBe($payload['expected_total_hits']);
+});
+
+it('guards heavy php signal stress behind an opt-in flag', function (): void {
+    if (!defined('PHP_ZTS') || (int) PHP_ZTS !== 1) {
+        test()->markTestSkipped('QThread runtime tests require a ZTS PHP build.');
+    }
+
+    if (($enabled = getenv('PHPQT_ENABLE_HEAVY_STRESS')) !== false && $enabled !== '' && $enabled !== '0') {
+        $threadCount = max(1, (int) (getenv('PHPQT_HEAVY_STRESS_THREADS') ?: 8));
+        $messageCount = max(1, (int) (getenv('PHPQT_HEAVY_STRESS_MESSAGES') ?: 48));
+        $roundCount = max(1, (int) (getenv('PHPQT_HEAVY_STRESS_ROUNDS') ?: 4));
+        $expectedTotalHits = $threadCount * (1 + ($messageCount * $roundCount));
+        $timeoutMs = max(
+            20000,
+            min(
+                300000,
+                (int) (getenv('PHPQT_HEAVY_STRESS_TIMEOUT_MS') ?: (15000 + ((int) ceil($expectedTotalHits / 75000)) * 1000))
+            )
+        );
+        $payload = qt_runtime_thread_payload(
+            'QtCore/thread_php_signal_stress_heavy.php',
+            [
+                'PHPQT_ENABLE_HEAVY_STRESS' => '1',
+                'PHPQT_HEAVY_STRESS_THREADS' => (string) $threadCount,
+                'PHPQT_HEAVY_STRESS_MESSAGES' => (string) $messageCount,
+                'PHPQT_HEAVY_STRESS_ROUNDS' => (string) $roundCount,
+                'PHPQT_HEAVY_STRESS_TIMEOUT_MS' => (string) $timeoutMs,
+            ],
+            ((int) ceil($timeoutMs / 1000)) + 5,
+        );
+
+        expect($payload['all_move_ok'])->toBeTrue()
+            ->and($payload['all_connections_are_objects'])->toBeTrue()
+            ->and($payload['timed_out'])->toBeFalse()
+            ->and($payload['timeout_ms'])->toBe($timeoutMs)
+            ->and($payload['started_threads'])->toBe($payload['thread_count'])
+            ->and($payload['finished_threads'])->toBe($payload['thread_count'])
+            ->and($payload['wait_all_ok'])->toBeTrue()
+            ->and($payload['bad_receivers'])->toBe(0)
+            ->and($payload['total_hits'])->toBe($payload['expected_total_hits']);
+
+        return;
+    }
+
+    $result = qt_runtime_fixture('QtCore/thread_php_signal_stress_heavy.php');
+
+    expect($result->isSkipped())->toBeTrue()
+        ->and($result->skipReason())->toContain('opt-in');
+});
+
 it('disconnects php signal listeners before queued delivery', function (): void {
     $payload = qt_runtime_payload('QtCore/php_signal_off.php');
 
