@@ -13,6 +13,7 @@ use QtBuilder\Parsing\QtClassInspector;
 use QtBuilder\Qt\QtInstallationResolver;
 use QtBuilder\Support\CppClassTypeResolver;
 use QtBuilder\UnixSystemInformation;
+use RuntimeException;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
@@ -598,9 +599,13 @@ class GenerateCommand extends Command
             return false;
         }
 
-        $resolver = new QtInstallationResolver($this->systemInformation);
-        $installation = $resolver->resolve($qtPath !== null ? (string) $qtPath : null, [$module]);
+        try {
+            $resolver = new QtInstallationResolver($this->systemInformation);
+            $installation = $resolver->resolve($qtPath !== null ? (string) $qtPath : null, [$module]);
 
-        return $installation->supportsRuntimeNotifyFunctorConnect();
+            return $installation->supportsRuntimeNotifyFunctorConnect();
+        } catch (RuntimeException) {
+            return false;
+        }
     }
 }

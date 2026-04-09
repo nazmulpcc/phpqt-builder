@@ -58,8 +58,8 @@ $process->onFinished(static function () use ($app, &$finished): void {
 
 $nameSender->setObjectName('alpha');
 $doomed->deleteLater();
-$process->setProgram('/bin/sh');
-$process->setArguments(['-c', 'sleep 0.05; exit 7']);
+$process->setProgram(PHP_BINARY);
+$process->setArguments(['-r', 'usleep(50000); exit(7);']);
 $process->start();
 \Qt\Core\QCoreApplication::exec();
 

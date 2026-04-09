@@ -106,6 +106,7 @@ inline std::mutex &qt_qobject_php_receiver_connect_bridge_registry_mutex()
 
 static inline void qt_qobject_register_runtime_wrapper(
     const QMetaObject *meta_object,
+    const char *expected_class_name,
     qt_qobject_runtime_wrap_adapter_t wrap_adapter
 )
 {
@@ -117,13 +118,25 @@ static inline void qt_qobject_register_runtime_wrapper(
     if (class_name == NULL || *class_name == '\0') {
         return;
     }
+    if (expected_class_name != NULL && *expected_class_name != '\0' && strcmp(class_name, expected_class_name) != 0) {
+        return;
+    }
 
     std::lock_guard<std::mutex> lock(qt_qobject_runtime_wrapper_registry_mutex());
-    qt_qobject_runtime_wrapper_registry()[std::string(class_name)] = wrap_adapter;
+    qt_qobject_runtime_wrapper_registry().try_emplace(std::string(class_name), wrap_adapter);
+}
+
+static inline void qt_qobject_register_runtime_wrapper(
+    const QMetaObject *meta_object,
+    qt_qobject_runtime_wrap_adapter_t wrap_adapter
+)
+{
+    qt_qobject_register_runtime_wrapper(meta_object, NULL, wrap_adapter);
 }
 
 static inline void qt_qobject_register_native_extract_adapter(
     const QMetaObject *meta_object,
+    const char *expected_class_name,
     qt_qobject_native_extract_adapter_t extract_adapter
 )
 {
@@ -135,13 +148,25 @@ static inline void qt_qobject_register_native_extract_adapter(
     if (class_name == NULL || *class_name == '\0') {
         return;
     }
+    if (expected_class_name != NULL && *expected_class_name != '\0' && strcmp(class_name, expected_class_name) != 0) {
+        return;
+    }
 
     std::lock_guard<std::mutex> lock(qt_qobject_native_extract_registry_mutex());
-    qt_qobject_native_extract_registry()[std::string(class_name)] = extract_adapter;
+    qt_qobject_native_extract_registry().try_emplace(std::string(class_name), extract_adapter);
+}
+
+static inline void qt_qobject_register_native_extract_adapter(
+    const QMetaObject *meta_object,
+    qt_qobject_native_extract_adapter_t extract_adapter
+)
+{
+    qt_qobject_register_native_extract_adapter(meta_object, NULL, extract_adapter);
 }
 
 static inline void qt_qobject_register_php_receiver_connect_bridge(
     const QMetaObject *meta_object,
+    const char *expected_class_name,
     const char *signal_signature,
     qt_qobject_php_receiver_connect_bridge_t connect_bridge
 )
@@ -154,10 +179,22 @@ static inline void qt_qobject_register_php_receiver_connect_bridge(
     if (class_name == NULL || *class_name == '\0') {
         return;
     }
+    if (expected_class_name != NULL && *expected_class_name != '\0' && strcmp(class_name, expected_class_name) != 0) {
+        return;
+    }
 
     std::lock_guard<std::mutex> lock(qt_qobject_php_receiver_connect_bridge_registry_mutex());
     auto &class_registry = qt_qobject_php_receiver_connect_bridge_registry()[std::string(class_name)];
     class_registry.emplace(std::string(signal_signature), connect_bridge);
+}
+
+static inline void qt_qobject_register_php_receiver_connect_bridge(
+    const QMetaObject *meta_object,
+    const char *signal_signature,
+    qt_qobject_php_receiver_connect_bridge_t connect_bridge
+)
+{
+    qt_qobject_register_php_receiver_connect_bridge(meta_object, NULL, signal_signature, connect_bridge);
 }
 
 static inline qt_qobject_php_receiver_connect_bridge_t qt_qobject_lookup_php_receiver_connect_bridge(

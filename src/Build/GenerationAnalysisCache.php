@@ -6,6 +6,7 @@ namespace QtBuilder\Build;
 
 use QtBuilder\Definition\PhpClass;
 use QtBuilder\Scanning\HeaderCandidate;
+use QtBuilder\Support\GeneratedTypeIdentity;
 
 final class GenerationAnalysisCache
 {
@@ -194,14 +195,19 @@ final class GenerationAnalysisCache
     private function serializeCandidates(array $candidates): array
     {
         $serialized = array_values(array_map(
-            static fn(HeaderCandidate $candidate): array => [
-                'module' => $candidate->module,
-                'class' => $candidate->className,
-                'qualified_name' => $candidate->qualifiedClassName,
-                'generation_id' => $candidate->resolvedGenerationId(),
-                'public_header' => $candidate->publicHeader,
-                'parse_header' => $candidate->parseHeader,
-            ],
+            function (HeaderCandidate $candidate): array {
+                $publicHeader = $this->normalizeStringValue($candidate->publicHeader);
+                $parseHeader = $this->normalizeStringValue($candidate->parseHeader);
+
+                return [
+                    'module' => $candidate->module,
+                    'class' => $candidate->className,
+                    'qualified_name' => $candidate->qualifiedClassName,
+                    'generation_id' => $this->normalizedCandidateGenerationId($candidate, $parseHeader),
+                    'public_header' => $publicHeader,
+                    'parse_header' => $parseHeader,
+                ];
+            },
             $candidates,
         ));
 
@@ -213,6 +219,24 @@ final class GenerationAnalysisCache
         });
 
         return $serialized;
+    }
+
+    private function normalizedCandidateGenerationId(HeaderCandidate $candidate, string $normalizedParseHeader): string
+    {
+        $qualifiedName = $candidate->qualifiedClassName;
+        if (is_string($qualifiedName) && trim($qualifiedName) !== '') {
+            return GeneratedTypeIdentity::fromNames(
+                $candidate->className,
+                $qualifiedName,
+                $candidate->module,
+            )->generationId;
+        }
+
+        return GeneratedTypeIdentity::provisional(
+            $candidate->module,
+            $candidate->className,
+            $normalizedParseHeader,
+        )->generationId;
     }
 
     /**
@@ -437,6 +461,10 @@ final class GenerationAnalysisCache
 
     private function normalizeValue(mixed $value): mixed
     {
+        if (is_string($value)) {
+            return $this->normalizeStringValue($value);
+        }
+
         if (!is_array($value)) {
             return $value;
         }
@@ -457,6 +485,40 @@ final class GenerationAnalysisCache
         }
 
         return $normalized;
+    }
+
+    private function normalizeStringValue(string $value): string
+    {
+        if ($value === '') {
+            return $value;
+        }
+
+        if (!$this->looksLikePath($value)) {
+            return $value;
+        }
+
+        $normalized = str_replace('\\', '/', $value);
+        $normalized = preg_replace('#(?<!:)/{2,}#', '/', $normalized) ?? $normalized;
+
+        if ($this->isWindowsAbsolutePath($normalized) || str_starts_with($normalized, '//')) {
+            return strtolower($normalized);
+        }
+
+        return $normalized;
+    }
+
+    private function looksLikePath(string $value): bool
+    {
+        if ($this->isWindowsAbsolutePath($value) || str_starts_with($value, '\\\\') || str_starts_with($value, '//')) {
+            return true;
+        }
+
+        return str_contains($value, '/');
+    }
+
+    private function isWindowsAbsolutePath(string $value): bool
+    {
+        return preg_match('/^[A-Za-z]:[\\\\\\/]/', $value) === 1;
     }
 
     /**

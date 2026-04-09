@@ -1295,7 +1295,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connectPropertyNotify)
     QMetaObject::Connection _qt_bridge_connection = QObject::connect(
         _qt_mapper,
         qOverload<QObject *>(&QSignalMapper::mappedObject),
-        _qt_obj,
+        _qt_mapper,
         [_qt_handler = _qt_property_notify_handler_t{_qt_callback}](QObject *) {
             _qt_handler();
         }
@@ -2144,18 +2144,19 @@ PHP_MINIT_FUNCTION({!! $ctx->minitName !!})
     }
 @endif
 @if($ctx->nativeCppType === 'QObject')
-    qt_qobject_register_runtime_wrapper(&QObject::staticMetaObject, qt_qobject_wrap_runtime_adapter);
-    qt_qobject_register_native_extract_adapter(&QObject::staticMetaObject, {!! $ctx->filePrefix !!}_extract_native_adapter);
+    qt_qobject_register_runtime_wrapper(&QObject::staticMetaObject, "QObject", qt_qobject_wrap_runtime_adapter);
+    qt_qobject_register_native_extract_adapter(&QObject::staticMetaObject, "QObject", {!! $ctx->filePrefix !!}_extract_native_adapter);
 @elseif($ctx->isQObjectDerived && $ctx->wrapNativeFunc)
-    qt_qobject_register_runtime_wrapper(&{!! $ctx->nativeCppType !!}::staticMetaObject, {!! $ctx->filePrefix !!}_wrap_runtime_adapter);
-    qt_qobject_register_native_extract_adapter(&{!! $ctx->nativeCppType !!}::staticMetaObject, {!! $ctx->filePrefix !!}_extract_native_adapter);
+    qt_qobject_register_runtime_wrapper(&{!! $ctx->nativeCppType !!}::staticMetaObject, "{!! $ctx->phpClassName !!}", {!! $ctx->filePrefix !!}_wrap_runtime_adapter);
+    qt_qobject_register_native_extract_adapter(&{!! $ctx->nativeCppType !!}::staticMetaObject, "{!! $ctx->phpClassName !!}", {!! $ctx->filePrefix !!}_extract_native_adapter);
 @elseif($ctx->isQObjectDerived)
-    qt_qobject_register_native_extract_adapter(&{!! $ctx->nativeCppType !!}::staticMetaObject, {!! $ctx->filePrefix !!}_extract_native_adapter);
+    qt_qobject_register_native_extract_adapter(&{!! $ctx->nativeCppType !!}::staticMetaObject, "{!! $ctx->phpClassName !!}", {!! $ctx->filePrefix !!}_extract_native_adapter);
 @endif
 @if($ctx->hasSignals() && $ctx->isQObjectDerived)
 @foreach($ctx->signalOverloads as $signal)
     qt_qobject_register_php_receiver_connect_bridge(
         &{!! $ctx->nativeCppType !!}::staticMetaObject,
+        "{!! $ctx->phpClassName !!}",
         "{!! $signal->signatureLiteral() !!}",
         {!! sprintf('%s_php_receiver_bridge_%d', $ctx->filePrefix, $loop->index) !!}
     );
