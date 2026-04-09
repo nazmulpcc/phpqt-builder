@@ -1267,7 +1267,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connectPropertyNotify)
 
     qt_qmetaobjectconnection_wrap(return_value, _qt_connection);
 @else
-    QSignalMapper *_qt_mapper = new QSignalMapper(_qt_obj);
+    QSignalMapper *_qt_mapper = new QSignalMapper();
     _qt_mapper->setMapping(_qt_obj, _qt_obj);
 
     const QMetaObject &_qt_mapper_meta = QSignalMapper::staticMetaObject;
