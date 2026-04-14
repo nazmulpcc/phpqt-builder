@@ -198,14 +198,31 @@ function qt_normalize_equivalence_value(mixed $value, string $buildRoot): mixed
                 continue;
             }
 
-            $normalized[(string) $key] = qt_normalize_equivalence_value($value[$key], $buildRoot);
+            $normalizedKey = is_string($key)
+                ? qt_normalize_equivalence_string($key, $buildRoot)
+                : (string) $key;
+
+            $normalized[$normalizedKey] = qt_normalize_equivalence_value($value[$key], $buildRoot);
         }
 
         return $normalized;
     }
 
     if (is_string($value)) {
-        return str_replace($buildRoot, '__BUILD_ROOT__', $value);
+        return qt_normalize_equivalence_string($value, $buildRoot);
+    }
+
+    return $value;
+}
+
+function qt_normalize_equivalence_string(string $value, string $buildRoot): string
+{
+    $normalizedBuildRoot = str_replace('\\', '/', $buildRoot);
+    $value = str_replace('\\', '/', $value);
+    $value = str_replace($normalizedBuildRoot, '__BUILD_ROOT__', $value);
+
+    if (preg_match('/^[A-Za-z]:\\//', $value) === 1 || str_starts_with($value, '//')) {
+        return strtolower($value);
     }
 
     return $value;

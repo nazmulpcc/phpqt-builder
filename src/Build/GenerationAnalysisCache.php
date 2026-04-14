@@ -151,7 +151,25 @@ final class GenerationAnalysisCache
         array $classNamespaces,
         EnumHolderRegistry $enumRegistry,
     ): string {
-        return hash('sha256', json_encode($this->normalizeValue([
+        return hash('sha256', json_encode($this->cacheKeyPayload(
+            $request,
+            $acceptedCandidates,
+            $initialSkippedClasses,
+            $preparedClassDataByClass,
+            $classNamespaces,
+            $enumRegistry,
+        ), JSON_UNESCAPED_SLASHES) ?: '');
+    }
+
+    private function cacheKeyPayload(
+        BuildExecutionRequest $request,
+        array $acceptedCandidates,
+        array $initialSkippedClasses,
+        array $preparedClassDataByClass,
+        array $classNamespaces,
+        EnumHolderRegistry $enumRegistry,
+    ): array {
+        return $this->normalizeValue([
             'schema' => self::SCHEMA_VERSION,
             'request' => [
                 'modules' => array_values($request->modules),
@@ -169,7 +187,7 @@ final class GenerationAnalysisCache
                 static fn(EnumHolderDefinition $holder): array => $holder->toArray(),
                 $enumRegistry->holders(),
             ),
-        ]), JSON_UNESCAPED_SLASHES) ?: '');
+        ]);
     }
 
     /**
@@ -481,7 +499,11 @@ final class GenerationAnalysisCache
                 continue;
             }
 
-            $normalized[(string) $key] = $this->normalizeValue($value[$key]);
+            $normalizedKey = is_string($key)
+                ? $this->normalizeStringValue($key)
+                : (string) $key;
+
+            $normalized[$normalizedKey] = $this->normalizeValue($value[$key]);
         }
 
         return $normalized;
@@ -492,6 +514,8 @@ final class GenerationAnalysisCache
         if ($value === '') {
             return $value;
         }
+
+        $value = $this->normalizeEmbeddedWindowsPaths($value);
 
         if (!$this->looksLikePath($value)) {
             return $value;
@@ -505,6 +529,21 @@ final class GenerationAnalysisCache
         }
 
         return $normalized;
+    }
+
+    private function normalizeEmbeddedWindowsPaths(string $value): string
+    {
+        return preg_replace_callback(
+            '/[A-Za-z]:[\\\\\\/][^\s,)]+/',
+            function (array $matches): string {
+                $path = (string) ($matches[0] ?? '');
+                $normalized = str_replace('\\', '/', $path);
+                $normalized = preg_replace('#(?<!:)/{2,}#', '/', $normalized) ?? $normalized;
+
+                return strtolower($normalized);
+            },
+            $value,
+        ) ?? $value;
     }
 
     private function looksLikePath(string $value): bool
@@ -527,7 +566,10 @@ final class GenerationAnalysisCache
      */
     private function normalizeSkippedClasses(array $skippedClasses): array
     {
-        $normalized = array_values(array_filter($skippedClasses, 'is_array'));
+        $normalized = array_values(array_map(
+            fn(array $entry): array => $this->normalizeValue($entry),
+            array_filter($skippedClasses, 'is_array'),
+        ));
         usort($normalized, static function (array $left, array $right): int {
             return strcmp(
                 json_encode($left, JSON_UNESCAPED_SLASHES) ?: '',

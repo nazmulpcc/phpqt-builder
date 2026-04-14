@@ -59,10 +59,11 @@ it('builds split module trees with auto-added static manifest dependencies', fun
     expect(array_map(static fn($context): string => $context->extensionName, $bootstrapper->contexts))
         ->toBe(['qtcore', 'qtgui', 'qtwidgets']);
 
-    $qtWidgetsConfig = (string) file_get_contents($qtWidgetsRoot . '/ext/config.m4');
+    $normalizePath = static fn(string $path): string => str_replace('\\', '/', $path);
+    $qtWidgetsConfig = str_replace('\\', '/', (string) file_get_contents($qtWidgetsRoot . '/ext/config.m4'));
     expect($qtWidgetsConfig)->toContain(
-        'PHP_ADD_INCLUDE([' . $sharedRoot . '])',
-        'PHP_ADD_INCLUDE([' . $sharedClassesDir . '])',
+        'PHP_ADD_INCLUDE([' . $normalizePath($sharedRoot) . '])',
+        'PHP_ADD_INCLUDE([' . $normalizePath($sharedClassesDir) . '])',
     );
 
     $qtWidgetsManifest = qt_decode_json((string) file_get_contents($qtWidgetsRoot . '/generated/module_abi.json'));
@@ -181,11 +182,12 @@ it('supports sibling inheritance and method wrappers during split builds', funct
     expect(array_map(static fn($context): string => $context->extensionName, $bootstrapper->contexts))
         ->toBe(['qtcore', 'qtgui', 'qtwidgets']);
 
-    $qtWidgetsConfig = (string) file_get_contents($qtWidgetsRoot . '/ext/config.m4');
+    $normalizePath = static fn(string $path): string => str_replace('\\', '/', $path);
+    $qtWidgetsConfig = str_replace('\\', '/', (string) file_get_contents($qtWidgetsRoot . '/ext/config.m4'));
     expect($qtWidgetsConfig)->toContain(
-        'PHP_ADD_INCLUDE([' . $sharedRoot . '])',
-        'PHP_ADD_INCLUDE([' . $sharedClassesDir . '])',
-        'PHP_ADD_INCLUDE([' . $fixtureRoot . '/include/QtGui])',
+        'PHP_ADD_INCLUDE([' . $normalizePath($sharedRoot) . '])',
+        'PHP_ADD_INCLUDE([' . $normalizePath($sharedClassesDir) . '])',
+        'PHP_ADD_INCLUDE([' . $normalizePath($fixtureRoot . '/include/QtGui') . '])',
     );
 
     $externalSource = (string) file_get_contents($qtWidgetsRoot . '/ext/classes/qt_qexternalwidget.cpp');
@@ -260,10 +262,11 @@ it('normalizes relative split build roots to absolute shared include paths', fun
             ->and(is_file($qtCoreRoot . '/generated/module_abi.json'))->toBeTrue()
             ->and(is_file($qtWidgetsRoot . '/generated/module_abi.json'))->toBeTrue();
 
-        $qtWidgetsConfig = (string) file_get_contents($qtWidgetsRoot . '/ext/config.m4');
+        $normalizePath = static fn(string $path): string => str_replace('\\', '/', $path);
+        $qtWidgetsConfig = str_replace('\\', '/', (string) file_get_contents($qtWidgetsRoot . '/ext/config.m4'));
         expect($qtWidgetsConfig)->toContain(
-            'PHP_ADD_INCLUDE([' . $sharedRoot . '])',
-            'PHP_ADD_INCLUDE([' . $sharedClassesDir . '])',
+            'PHP_ADD_INCLUDE([' . $normalizePath($sharedRoot) . '])',
+            'PHP_ADD_INCLUDE([' . $normalizePath($sharedClassesDir) . '])',
         );
 
         $qtCoreManifest = qt_decode_json((string) file_get_contents($qtCoreRoot . '/generated/module_abi.json'));
@@ -370,9 +373,19 @@ it('generates enum holder classes into their owning split modules', function ():
         ->and($qtSqlManifest['dependency_modules'])->toBe(['QtCore'])
         ->and($qtSqlManifest['classes'])->toBe(['QSqlQueryLike']);
 
-    $enumCandidateHeaders = qt_decode_json((string) file_get_contents($buildRoot . '/generated/enum_candidate_headers.json'));
+    $normalizePath = static fn(string $path): string => str_replace('\\', '/', $path);
+    $enumCandidateHeaders = array_map(
+        static function (array $entry) use ($normalizePath): array {
+            if (is_string($entry['header'] ?? null)) {
+                $entry['header'] = $normalizePath($entry['header']);
+            }
+
+            return $entry;
+        },
+        qt_decode_json((string) file_get_contents($buildRoot . '/generated/enum_candidate_headers.json')),
+    );
     expect($enumCandidateHeaders)->toContainEqual([
-        'header' => $fixtureRoot . '/include/QtCore/qnamespace.h',
+        'header' => $normalizePath($fixtureRoot . '/include/QtCore/qnamespace.h'),
         'module' => 'QtCore',
         'types' => ['Qt::ConnectionType', 'Qt::ConnectionTypes'],
     ]);

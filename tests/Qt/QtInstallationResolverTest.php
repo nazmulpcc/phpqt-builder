@@ -32,12 +32,14 @@ H,
 
     $resolver = new QtInstallationResolver($system);
     $installation = $resolver->resolve($qtRoot, ['QtCore']);
+    $normalizePath = static fn(string $path): string => str_replace('\\', '/', $path);
+    $includeRoots = array_map($normalizePath, $installation->includeRoots);
 
     expect($installation->qtVersion)->toBe('6.10.2')
-        ->and($installation->includeRoots)->toContain(
-            $includeRoot,
-            $qtCoreRoot,
-            $qtCoreRoot . '/6.10.2',
-            $qtCoreRoot . '/6.10.2/QtCore',
+        ->and($includeRoots)->toContain(
+            $normalizePath($includeRoot),
+            $normalizePath($qtCoreRoot),
+            $normalizePath($qtCoreRoot . '/6.10.2'),
+            $normalizePath($qtCoreRoot . '/6.10.2/QtCore'),
         );
 });

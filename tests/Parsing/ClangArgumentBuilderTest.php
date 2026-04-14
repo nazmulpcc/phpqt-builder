@@ -6,11 +6,12 @@ use QtBuilder\Parsing\ClangArgumentBuilder;
 
 it('includes the qt feature override header', function (): void {
     $builder = new ClangArgumentBuilder();
-    $args = $builder->build();
+    $normalizePath = static fn(string $path): string => str_replace('\\', '/', $path);
+    $args = array_map($normalizePath, $builder->build());
 
     $overrideHeader = realpath(dirname(__DIR__, 2) . '/templates/clang/qt_feature_overrides.h');
     expect($overrideHeader)->not->toBeFalse();
-    expect($args)->toContain('-include', $overrideHeader);
+    expect($args)->toContain('-include', $normalizePath($overrideHeader));
 });
 
 it('places explicit include paths before injected override headers', function (): void {
@@ -18,9 +19,10 @@ it('places explicit include paths before injected override headers', function ()
     mkdir($includeDir, 0755, true);
 
     $builder = new ClangArgumentBuilder([$includeDir]);
-    $args = $builder->build();
+    $normalizePath = static fn(string $path): string => str_replace('\\', '/', $path);
+    $args = array_map($normalizePath, $builder->build());
 
-    $includeIndex = array_search('-I' . $includeDir, $args, true);
+    $includeIndex = array_search('-I' . $normalizePath($includeDir), $args, true);
     $overrideIndex = array_search('-include', $args, true);
 
     expect($includeIndex)->not->toBeFalse();

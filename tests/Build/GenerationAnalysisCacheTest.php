@@ -301,6 +301,90 @@ it('treats equivalent windows path variants as the same generation cache key', f
         ->and($loaded['generated_classes'])->toBe(['QPoint', 'QPointList']);
 });
 
+it('treats equivalent windows skipped-class path variants as the same generation cache key', function (): void {
+    $cache = new GenerationAnalysisCache();
+    $metadataDir = qt_temp_dir('qtbuilder-generation-cache-');
+    $request = qt_generation_cache_windows_request();
+    $acceptedCandidates = qt_generation_cache_windows_candidates();
+    $preparedClassData = qt_generation_cache_windows_prepared_class_data();
+    $classNamespaces = ['QPoint' => 'Qt\\Core'];
+    $enumRegistry = qt_generation_cache_windows_enum_registry();
+    $generation = qt_generation_cache_generation($acceptedCandidates);
+    $skippedClasses = [[
+        'module' => 'QtCore',
+        'class' => 'QSkippedThing',
+        'header' => 'C:\\Users\\Admin\\qt\\include\\QtCore\\QSkippedThing',
+        'reason_code' => 'unsupported_parent_class',
+        'reason_message' => 'Parent class QUnsupportedThing is not currently supported (declared in C:\\Users\\Admin\\qt\\include\\QtCore\\QSkippedThing).',
+    ]];
+
+    $cache->write(
+        $metadataDir,
+        $request,
+        $acceptedCandidates,
+        $skippedClasses,
+        $preparedClassData,
+        $classNamespaces,
+        $enumRegistry,
+        $generation,
+    );
+
+    $loaded = $cache->load(
+        $metadataDir,
+        qt_generation_cache_windows_request(
+            rootPath: 'c:/users/admin/qt',
+            includeRoot: 'c:/users/admin/qt/include',
+        ),
+        [
+            new HeaderCandidate(
+                'QtCore',
+                'QPoint',
+                'c:/users/admin/qt/include/QtCore/QPoint',
+                'c:/users/admin/qt/include/QtCore/QPoint',
+            ),
+        ],
+        [[
+            'module' => 'QtCore',
+            'class' => 'QSkippedThing',
+            'header' => 'c:/users/admin/qt/include/QtCore/QSkippedThing',
+            'reason_code' => 'unsupported_parent_class',
+            'reason_message' => 'Parent class QUnsupportedThing is not currently supported (declared in c:/users/admin/qt/include/QtCore/QSkippedThing).',
+        ]],
+        [
+            'QPoint' => [
+                'name' => 'QPoint',
+                'qualified_name' => 'QPoint',
+                'module' => 'QtCore',
+                'header' => 'c:/users/admin/qt/include/QtCore/QPoint',
+                'declared_in' => 'c:/users/admin/qt/include/QtCore/QPoint',
+                'bases' => [],
+                'methods' => [[
+                    'name' => 'x',
+                    'return_type' => 'int',
+                    'parameters' => [],
+                ]],
+                'properties' => [],
+                'enum_names' => [],
+                'flag_aliases' => [],
+            ],
+        ],
+        $classNamespaces,
+        new EnumHolderRegistry([
+            'Qt::Orientation' => new EnumHolderDefinition(
+                module: 'QtCore',
+                cppType: 'Qt::Orientation',
+                phpNamespace: 'Qt\\Core',
+                phpClassName: 'Orientation',
+                constants: [new EnumHolderConstant('Horizontal', 1)],
+                headerPath: 'c:/users/admin/qt/include/QtCore/qnamespace.h',
+            ),
+        ]),
+    );
+
+    expect($loaded)->not->toBeNull()
+        ->and($loaded['generated_classes'])->toBe(['QPoint', 'QPointList']);
+});
+
 function qt_generation_cache_request(?ImportedModuleAbi $importedAbi = null, array $modules = ['QtCore'], ?ResolvedModuleGraph $graph = null): BuildExecutionRequest
 {
     $installation = new QtInstallation(

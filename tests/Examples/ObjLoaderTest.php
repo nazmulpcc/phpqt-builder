@@ -66,8 +66,9 @@ MTL);
     file_put_contents($tempDir . '/tex.png', '');
 
     $result = ObjMaterialLibrary::loadLibraries([$mtlPath]);
+    $normalizePath = static fn(string $path): string => str_replace('\\', '/', $path);
 
     expect($result['materials']['Painted']['diffuse'])->toBe([0.25, 0.5, 0.75])
         ->and($result['materials']['Painted']['alpha'])->toBe(0.8)
-        ->and($result['materials']['Painted']['texture_path'])->toBe($tempDir . '/tex.png');
+        ->and($normalizePath($result['materials']['Painted']['texture_path']))->toBe($normalizePath($tempDir . '/tex.png'));
 });
