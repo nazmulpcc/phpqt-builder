@@ -481,7 +481,7 @@ it('runs qthread task mode with sequential reuse and event streaming', function 
 });
 
 it('keeps qthread task events flowing when one worker finishes earlier', function (): void {
-    $payload = qt_runtime_thread_payload('QtCore/thread_qthread_task_mode_shutdown_isolation.php');
+    $payload = qt_runtime_thread_payload('QtCore/thread_qthread_task_mode_shutdown_isolation.php', [], 8);
 
     expect($payload['timed_out'])->toBeFalse()
         ->and($payload['a_done'])->toBeTrue()

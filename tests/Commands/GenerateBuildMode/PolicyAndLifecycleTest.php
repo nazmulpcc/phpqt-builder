@@ -43,6 +43,21 @@ it('skips template classes', function (): void {
         ->and(is_file($result->path('QTemplateThing', 'cpp')))->toBeFalse();
 });
 
+it('skips template classes declared through forwarding headers', function (): void {
+    $result = GenerateBuildModeRunner::run('policy-qt', [
+        'header' => qt_fixture_path('policy-qt/include/QtCore/QForwardedTemplateThing'),
+        'class' => 'QForwardedTemplateThing',
+        '--qt-path' => qt_fixture_path('policy-qt'),
+        '--module' => 'QtCore',
+        '--allowed-classes' => 'QForwardedTemplateThing',
+    ]);
+
+    expect($result->exitCode)->toBe(Command::SUCCESS)
+        ->and($result->payload['status'])->toBe('skipped')
+        ->and($result->payload['reason_code'])->toBe('template_class')
+        ->and(is_file($result->path('QForwardedTemplateThing', 'cpp')))->toBeFalse();
+});
+
 it('skips classes with unsupported parents', function (): void {
     $result = GenerateBuildModeRunner::run('policy-qt', [
         'header' => qt_fixture_path('policy-qt/include/QtCore/qchildthing.h'),

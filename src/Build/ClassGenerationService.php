@@ -23,6 +23,12 @@ use QtBuilder\Support\TypeResolutionContext;
 
 class ClassGenerationService
 {
+    /** @var array<string, bool> */
+    private array $templateClassDeclarationCache = [];
+
+    /** @var array<string, string> */
+    private array $headerContentsCache = [];
+
     private const WIDGET_INHERITED_EVENT_METHODS = [
         'event',
         'mousePressEvent',
@@ -4387,8 +4393,22 @@ class ClassGenerationService
 
     private function isTemplateClassDeclaration(string $headerPath, string $className): bool
     {
-        $contents = @file_get_contents($headerPath);
-        if (!is_string($contents) || $contents === '') {
+        $realHeaderPath = realpath($headerPath) ?: $headerPath;
+        $cacheKey = $realHeaderPath . '|' . $className;
+        if (array_key_exists($cacheKey, $this->templateClassDeclarationCache)) {
+            return $this->templateClassDeclarationCache[$cacheKey];
+        }
+
+        $result = $this->isTemplateClassDeclarationInHeader($realHeaderPath, $className);
+        $this->templateClassDeclarationCache[$cacheKey] = $result;
+
+        return $result;
+    }
+
+    private function isTemplateClassDeclarationInHeader(string $headerPath, string $className): bool
+    {
+        $contents = $this->headerContents($headerPath);
+        if ($contents === '') {
             return false;
         }
 
@@ -4397,7 +4417,82 @@ class ClassGenerationService
             preg_quote($className, '/'),
         );
 
-        return preg_match($pattern, $contents) === 1;
+        if (preg_match($pattern, $contents) === 1) {
+            return true;
+        }
+
+        $forwardedHeader = $this->discoverForwardedHeaderCandidate($headerPath, $contents);
+        if ($forwardedHeader !== null) {
+            $cacheKey = $forwardedHeader . '|' . $className;
+            if (array_key_exists($cacheKey, $this->templateClassDeclarationCache)) {
+                return $this->templateClassDeclarationCache[$cacheKey];
+            }
+
+            $forwardedResult = $this->isTemplateClassDeclarationInHeader($forwardedHeader, $className);
+            $this->templateClassDeclarationCache[$cacheKey] = $forwardedResult;
+
+            return $forwardedResult;
+        }
+
+        return false;
+    }
+
+    /**
+     * Detect Qt-style forwarding headers like:
+     *   #include <QtCore/qtypeinfo.h> // IWYU pragma: export
+     */
+    private function discoverForwardedHeaderCandidate(string $headerPath, string $contents): ?string
+    {
+        $trimmed = trim($contents);
+        if ($trimmed === '') {
+            return null;
+        }
+
+        $lines = preg_split('/\R/', $trimmed) ?: [];
+        $significantLines = array_values(array_filter(array_map(
+            static fn(string $line): string => trim($line),
+            $lines,
+        ), static fn(string $line): bool => $line !== ''));
+
+        if (count($significantLines) !== 1) {
+            return null;
+        }
+
+        if (preg_match('/^#\s*include\s*[<"]([^>"]+)[>"](?:\s*\/\/.*)?$/', $significantLines[0], $match) !== 1) {
+            return null;
+        }
+
+        $includeTarget = trim((string) ($match[1] ?? ''));
+        if ($includeTarget === '') {
+            return null;
+        }
+
+        $headerDir = dirname($headerPath);
+        $paths = str_starts_with($includeTarget, '/')
+            ? [$includeTarget]
+            : [$headerDir . '/' . $includeTarget, $headerDir . '/' . basename($includeTarget)];
+
+        foreach ($paths as $candidatePath) {
+            $resolvedPath = realpath($candidatePath);
+            if (is_string($resolvedPath) && $resolvedPath !== '') {
+                return $resolvedPath;
+            }
+        }
+
+        return null;
+    }
+
+    private function headerContents(string $headerPath): string
+    {
+        $realHeaderPath = realpath($headerPath) ?: $headerPath;
+        if (array_key_exists($realHeaderPath, $this->headerContentsCache)) {
+            return $this->headerContentsCache[$realHeaderPath];
+        }
+
+        $contents = @file_get_contents($realHeaderPath);
+        $this->headerContentsCache[$realHeaderPath] = is_string($contents) ? $contents : '';
+
+        return $this->headerContentsCache[$realHeaderPath];
     }
 
     /**
