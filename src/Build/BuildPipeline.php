@@ -2174,6 +2174,7 @@ class BuildPipeline
         $bootstrapError = null;
         $bootstrapSkipped = false;
         $bootstrapDisabled = false;
+        $bootstrapContextChanged = $this->bootstrapContextChanged($context);
 
         if (!$bootstrapEnabled) {
             $bootstrapDisabled = true;
@@ -2187,7 +2188,12 @@ class BuildPipeline
             ];
         }
 
-        if ($totalWriteStats->written() === 0 && $this->moduleBinaryExists($context)) {
+        if ($bootstrapContextChanged) {
+            $output->writeln('<comment>Qt build context changed; cleaning stale bootstrap artifacts.</comment>');
+            $this->removeTransientBuildArtifacts($context);
+        }
+
+        if (!$bootstrapContextChanged && $totalWriteStats->written() === 0 && $this->moduleBinaryExists($context)) {
             $bootstrapSkipped = true;
             $output->writeln('<comment>No generated file changes detected; skipping bootstrap.</comment>');
         } else {
@@ -2197,10 +2203,15 @@ class BuildPipeline
                 $bootstrapResult = $this->bootstrapper->bootstrap($context, $jobs, $useCcache, function (array $event) use ($output): void {
                     $this->renderBootstrapEvent($output, $event);
                 });
+                $this->writeBootstrapContextMarker($context);
             } catch (\RuntimeException $e) {
                 $bootstrapError = $e->getMessage();
                 $output->writeln(sprintf('<error>%s</error>', $bootstrapError));
             }
+        }
+
+        if ($bootstrapSkipped) {
+            $this->writeBootstrapContextMarker($context);
         }
 
         return [
@@ -2209,6 +2220,90 @@ class BuildPipeline
             'skipped' => $bootstrapSkipped,
             'disabled' => $bootstrapDisabled,
         ];
+    }
+
+    private function bootstrapContextChanged(ExtensionBuildContext $context): bool
+    {
+        $markerPath = $this->bootstrapContextMarkerPath($context);
+        if (!is_file($markerPath)) {
+            return false;
+        }
+
+        $decoded = json_decode((string) file_get_contents($markerPath), true);
+        if (!is_array($decoded)) {
+            return true;
+        }
+
+        return $decoded !== $this->bootstrapContextMarkerPayload($context);
+    }
+
+    private function writeBootstrapContextMarker(ExtensionBuildContext $context): void
+    {
+        file_put_contents(
+            $this->bootstrapContextMarkerPath($context),
+            json_encode($this->bootstrapContextMarkerPayload($context), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n",
+        );
+    }
+
+    private function bootstrapContextMarkerPath(ExtensionBuildContext $context): string
+    {
+        return $context->metadataDir() . '/bootstrap_context.json';
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function bootstrapContextMarkerPayload(ExtensionBuildContext $context): array
+    {
+        return [
+            'extension_name' => $context->extensionName,
+            'qt_root_path' => $context->installation->rootPath,
+            'qt_version' => $context->installation->version,
+            'build_mode' => $context->buildMode,
+            'modules' => array_values($context->modules),
+        ];
+    }
+
+    private function removeTransientBuildArtifacts(ExtensionBuildContext $context): void
+    {
+        foreach ([
+            $context->outputDir . '/modules/' . $context->extensionName . '.so',
+            $context->outputDir . '/qt.dep',
+            $context->outputDir . '/qt.lo',
+        ] as $path) {
+            if (is_file($path) && !@unlink($path) && file_exists($path)) {
+                throw new \RuntimeException(sprintf('Could not remove stale bootstrap artifact: %s', $path));
+            }
+        }
+
+        foreach ([
+            $context->outputDir . '/classes',
+            $context->outputDir . '/classes/.libs',
+            $context->outputDir . '/.libs',
+        ] as $directory) {
+            if (!is_dir($directory)) {
+                continue;
+            }
+
+            foreach (scandir($directory) ?: [] as $entry) {
+                if ($entry === '.' || $entry === '..') {
+                    continue;
+                }
+
+                $path = $directory . '/' . $entry;
+                if (!is_file($path)) {
+                    continue;
+                }
+
+                if (!preg_match('/\.(?:dep|lo|o|obj|a|la|lai)$/', $entry)) {
+                    continue;
+                }
+
+                if (!@unlink($path) && file_exists($path)) {
+                    throw new \RuntimeException(sprintf('Could not remove stale bootstrap artifact: %s', $path));
+                }
+            }
+        }
     }
 
     /**
