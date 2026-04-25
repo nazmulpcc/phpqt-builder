@@ -9,7 +9,77 @@
 /* {!! $method->name !!} */
 ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
 {
-@if($ctx->nativeCppType === 'QThread' && $method->name === 'start')
+@if($ctx->nativeCppType === 'QObject' && $method->name === 'moveToThread')
+    qt_runtime_owner_safe_point();
+
+    zval *thread_zv = NULL;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_OBJECT_OF_CLASS(thread_zv, qt_ce_qthread)
+    ZEND_PARSE_PARAMETERS_END();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "moveToThread", false)) {
+        RETURN_THROWS();
+    }
+    if (intern->native_ptr == NULL) {
+        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+    qt_qthread_object *target_intern = qt_qthread_from_obj(Z_OBJ_P(thread_zv));
+    if (target_intern->native_ptr == NULL) {
+        zend_throw_error(NULL, "QThread native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+    if (target_intern->extra_storage == NULL) {
+        zend_throw_error(NULL, "QThread move host is not initialized.");
+        RETURN_THROWS();
+    }
+
+    QObject *_qt_object = static_cast<QObject *>(intern->native_ptr);
+    QThread *_qt_source_thread = _qt_object->thread();
+    QThread *_qt_target_thread = target_intern->native_ptr;
+    if (_qt_target_thread == NULL) {
+        RETURN_FALSE;
+    }
+
+    if (!_qt_object->moveToThread(_qt_target_thread)) {
+        RETURN_FALSE;
+    }
+
+    std::string _qt_move_error;
+    uint64_t _qt_moved_token = 0;
+    if (!qt_qthread_task_host_register_moved_object(
+        static_cast<qt_qthread_task_host *>(target_intern->extra_storage),
+        _qt_target_thread,
+        _qt_object,
+        &intern->std,
+        intern->native_is_generated_subclass,
+        intern->native_is_virtual_trampoline,
+        true,
+        intern->native_rebind_php_object,
+        &_qt_moved_token,
+        &_qt_move_error
+    )) {
+        if (_qt_source_thread != NULL) {
+            (void) _qt_object->moveToThread(_qt_source_thread);
+        }
+        zend_throw_error(NULL, "%s", _qt_move_error.c_str());
+        RETURN_THROWS();
+    }
+
+    intern->prevent_destroy = true;
+    qt_php_signal_unregister_live_wrapper(_qt_object, &intern->std);
+    qt_php_signal_on_object_moved(_qt_object, _qt_target_thread);
+    intern->moved_source = true;
+    intern->moved_token = _qt_moved_token;
+    if (intern->native_is_virtual_trampoline && intern->native_rebind_php_object != NULL) {
+        intern->native_rebind_php_object(intern->native_ptr, NULL, NULL);
+    }
+
+    RETURN_TRUE;
+@elseif($ctx->nativeCppType === 'QThread' && $method->name === 'start')
     qt_runtime_owner_safe_point();
 
     zval *_qt_arg0 = NULL;
@@ -117,6 +187,68 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
 #endif
 
     return;
+@elseif($ctx->nativeCppType === 'QObject' && $method->name === 'sender')
+    ZEND_PARSE_PARAMETERS_NONE();
+
+    if (qt_qobject_current_sender_override().active) {
+        zend_object *_qt_live_sender = qt_php_signal_resolve_current_thread_live_wrapper(qt_qobject_current_sender_override().sender);
+        if (_qt_live_sender == NULL) {
+            _qt_live_sender = qt_qthreadruntime_resolve_current_thread_live_php_object(qt_qobject_current_sender_override().sender);
+        }
+        if (_qt_live_sender != NULL) {
+            ZVAL_OBJ_COPY(return_value, _qt_live_sender);
+            return;
+        }
+        if (!qt_qobject_wrap_runtime_instance(return_value, qt_qobject_current_sender_override().sender, true)) {
+            RETURN_NULL();
+        }
+        return;
+    }
+
+    qt_runtime_owner_safe_point();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "sender", false)) {
+        RETURN_THROWS();
+    }
+    if (intern->native_ptr == NULL) {
+        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+    if (!intern->native_is_generated_subclass) {
+        zend_throw_error(NULL, "Protected method {!! addslashes($ctx->phpClassName) !!}::sender() requires a PHP-created native instance.");
+        RETURN_THROWS();
+    }
+
+    auto _result = static_cast<{!! $ctx->protectedCallReceiverType !!} *>(intern->native_ptr)->{!! $method->accessShimHelperName(0) !!}();
+    if (!qt_qobject_wrap_runtime_instance(return_value, static_cast<QObject *>(_result), true)) {
+        RETURN_NULL();
+    }
+    return;
+@elseif($ctx->nativeCppType === 'QObject' && $method->name === 'senderSignalIndex')
+    ZEND_PARSE_PARAMETERS_NONE();
+
+    if (qt_qobject_current_sender_override().active) {
+        RETURN_LONG((zend_long) qt_qobject_current_sender_override().signal_index);
+    }
+
+    qt_runtime_owner_safe_point();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "senderSignalIndex", false)) {
+        RETURN_THROWS();
+    }
+    if (intern->native_ptr == NULL) {
+        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
+        RETURN_THROWS();
+    }
+    if (!intern->native_is_generated_subclass) {
+        zend_throw_error(NULL, "Protected method {!! addslashes($ctx->phpClassName) !!}::senderSignalIndex() requires a PHP-created native instance.");
+        RETURN_THROWS();
+    }
+
+    auto _result = static_cast<{!! $ctx->protectedCallReceiverType !!} *>(intern->native_ptr)->{!! $method->accessShimHelperName(0) !!}();
+    RETURN_LONG((zend_long) _result);
 @else
     qt_runtime_owner_safe_point();
 
@@ -143,6 +275,18 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
 
 @if(!$method->isConstructor)
+@if($ctx->isQObjectDerived)
+@php
+    $qtMovedSourceAllowedMethods = ['thread', 'objectName', 'signalsBlocked', 'dynamicPropertyNames', 'inherits'];
+@endphp
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(
+        intern,
+        "{!! $method->name !!}",
+        {!! in_array($method->name, $qtMovedSourceAllowedMethods, true) ? 'true' : 'false' !!}
+    )) {
+        RETURN_THROWS();
+    }
+@endif
     if (intern->native_ptr == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
         RETURN_THROWS();

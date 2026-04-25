@@ -36,9 +36,13 @@ extern "C" {
 @if($ctx->requiresBuildInfoRegistration())
 #include "qt_buildinfo.h"
 @endif
+@if($ctx->includeSignalConnectionSupport)
+#include "classes/qt_php_signal_helpers.h"
+@endif
 
 static std::atomic_bool qt_shutdown_in_progress{false};
 static std::atomic_bool qt_about_to_quit_hooked{false};
+static std::atomic<zend_ulong> qt_primary_owner_thread_id{0};
 static constexpr size_t QT_OWNER_TASK_QUEUE_MAX_DEPTH = 4096;
 static std::mutex qt_owner_task_mutex;
 static std::deque<std::function<void()>> qt_owner_task_queue;
@@ -50,6 +54,9 @@ static std::atomic_uint64_t qt_owner_task_dropped_full{0};
 static std::atomic_uint64_t qt_owner_task_dropped_shutdown{0};
 static std::atomic_uint64_t qt_owner_virtual_timeouts{0};
 static thread_local bool qt_owner_drain_active = false;
+@if($ctx->includeSignalConnectionSupport)
+static void (*qt_saved_execute_ex)(zend_execute_data *execute_data) = nullptr;
+@endif
 ZEND_DECLARE_MODULE_GLOBALS({!! $ctx->extensionName !!})
 
 static void php_{!! $ctx->extensionName !!}_init_globals(zend_{!! $ctx->extensionName !!}_globals *globals)
@@ -78,6 +85,24 @@ bool qt_runtime_is_owner_thread(void)
 #endif
 }
 
+static inline bool qt_runtime_is_primary_owner_thread(void)
+{
+#if defined(ZTS)
+    if (!tsrm_is_managed_thread()) {
+        return false;
+    }
+
+    zend_ulong primary_owner_thread_id = qt_primary_owner_thread_id.load(std::memory_order_acquire);
+    if (primary_owner_thread_id == 0) {
+        return false;
+    }
+
+    return (zend_ulong) (uintptr_t) tsrm_thread_id() == primary_owner_thread_id;
+#else
+    return QT_RUNTIME_G(request_active);
+#endif
+}
+
 bool qt_runtime_can_call_zend(void)
 {
 #if defined(ZTS)
@@ -101,6 +126,34 @@ bool qt_runtime_is_shutdown_in_progress(void)
 {
     return qt_shutdown_in_progress.load(std::memory_order_acquire);
 }
+
+@if($ctx->includeSignalConnectionSupport)
+static void qt_execute_signal_guard(zend_execute_data *execute_data)
+{
+    zend_function *func = execute_data != NULL ? execute_data->func : NULL;
+    if (func != NULL
+        && func->type == ZEND_USER_FUNCTION
+        && qt_php_signal_function_is_declaration(func)) {
+        const char *method_name = (func->common.function_name != NULL)
+            ? ZSTR_VAL(func->common.function_name)
+            : "<unknown>";
+        zend_throw_error(
+            NULL,
+            "Signal \"%s\" cannot be invoked directly; use emit('%s', ...).",
+            method_name,
+            method_name
+        );
+        return;
+    }
+
+    if (qt_saved_execute_ex != nullptr) {
+        qt_saved_execute_ex(execute_data);
+        return;
+    }
+
+    execute_ex(execute_data);
+}
+@endif
 
 zend_class_entry *qt_runtime_exception_ce(void)
 {
@@ -188,7 +241,7 @@ void qt_runtime_schedule_owner_drain(void)
 
 void qt_runtime_drain_owner_tasks(zend_long max_items)
 {
-    if (!qt_runtime_is_owner_thread()) {
+    if (!qt_runtime_is_primary_owner_thread()) {
         return;
     }
 
@@ -247,7 +300,7 @@ void qt_runtime_drain_owner_tasks(zend_long max_items)
 
 void qt_runtime_owner_safe_point(void)
 {
-    if (!qt_runtime_can_call_zend()) {
+    if (!qt_runtime_can_call_zend() || !qt_runtime_is_primary_owner_thread()) {
         return;
     }
 
@@ -344,6 +397,13 @@ PHP_MINIT_FUNCTION({!! $ctx->extensionName !!})
 {
     ZEND_INIT_MODULE_GLOBALS({!! $ctx->extensionName !!}, php_{!! $ctx->extensionName !!}_init_globals, NULL);
 
+@if($ctx->includeSignalConnectionSupport)
+    if (qt_saved_execute_ex == nullptr) {
+        qt_saved_execute_ex = zend_execute_ex;
+        zend_execute_ex = qt_execute_signal_guard;
+    }
+@endif
+
 @foreach($ctx->classMinits() as $minit)
     if (PHP_MINIT({!! $minit !!})(INIT_FUNC_ARGS_PASSTHRU) != SUCCESS) {
         return FAILURE;
@@ -363,6 +423,12 @@ PHP_MINIT_FUNCTION({!! $ctx->extensionName !!})
 PHP_MSHUTDOWN_FUNCTION({!! $ctx->extensionName !!})
 {
     qt_qthreadruntime_restore_sapi_deactivate();
+@if($ctx->includeSignalConnectionSupport)
+    if (qt_saved_execute_ex != nullptr) {
+        zend_execute_ex = qt_saved_execute_ex;
+        qt_saved_execute_ex = nullptr;
+    }
+@endif
 
     return SUCCESS;
 }
@@ -370,7 +436,7 @@ PHP_MSHUTDOWN_FUNCTION({!! $ctx->extensionName !!})
 @endif
 PHP_RINIT_FUNCTION({!! $ctx->extensionName !!})
 {
-#if defined(ZTS) && defined(COMPILE_DL_{!! strtoupper($ctx->extensionName) !!})
+#if defined(ZTS) && (defined(COMPILE_DL_{!! strtoupper($ctx->extensionName) !!}) || defined(ZEND_COMPILE_DL_EXT))
     ZEND_TSRMLS_CACHE_UPDATE();
 #endif
 
@@ -388,10 +454,23 @@ PHP_RINIT_FUNCTION({!! $ctx->extensionName !!})
     QT_RUNTIME_G(request_active) = true;
 
     if (!_qt_is_worker_request) {
+#if defined(ZTS)
+        qt_primary_owner_thread_id.store(QT_RUNTIME_G(owner_thread_id), std::memory_order_release);
+#else
+        qt_primary_owner_thread_id.store(0, std::memory_order_release);
+#endif
         qt_shutdown_in_progress.store(false, std::memory_order_release);
         qt_about_to_quit_hooked.store(false, std::memory_order_release);
         qt_runtime_drop_owner_tasks();
     }
+@if($ctx->includeSignalConnectionSupport)
+
+    if (qt_php_signal_ensure_current_thread_dispatcher() == NULL) {
+        QT_RUNTIME_G(request_active) = false;
+        zend_throw_error(NULL, "Failed to initialize the PHP signal dispatcher for the current thread.");
+        return FAILURE;
+    }
+@endif
 
     return SUCCESS;
 }
@@ -408,6 +487,7 @@ PHP_RSHUTDOWN_FUNCTION({!! $ctx->extensionName !!})
     qt_runtime_mark_shutdown_in_progress();
     qt_runtime_drain_owner_tasks(256);
     qt_runtime_drop_owner_tasks(true);
+    qt_primary_owner_thread_id.store(0, std::memory_order_release);
 @if($ctx->includeThreadRuntimeSupport)
     qt_qthreadruntime_shutdown_all(2000);
     qt_runtime_shutdown_qcoreapplication();
@@ -436,7 +516,7 @@ extern "C" zend_module_entry {!! $ctx->extensionName !!}_module_entry = {
     STANDARD_MODULE_PROPERTIES
 };
 
-#ifdef COMPILE_DL_{!! strtoupper($ctx->extensionName) !!}
+#if defined(COMPILE_DL_{!! strtoupper($ctx->extensionName) !!}) || defined(ZEND_COMPILE_DL_EXT)
 # ifdef ZTS
 ZEND_TSRMLS_CACHE_DEFINE()
 # endif

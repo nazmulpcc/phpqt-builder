@@ -119,6 +119,30 @@ it('does not treat qt function typedef names as enums', function (): void {
     Assert::assertContains('unsupported_parameter_type', array_column($result['skipped_methods'], 'reason_code'));
 });
 
+it('strips trailing qt disambiguation tag parameters from exposed methods', function (): void {
+    $policy = new MethodExposurePolicy();
+
+    $classData = [
+        'name' => 'QObject',
+        'methods' => [[
+            'name' => 'moveToThread',
+            'return_type' => 'bool',
+            'access' => 'public',
+            'parameters' => [
+                ['name' => 'thread', 'type' => 'QThread *', 'has_default' => false],
+                ['name' => '', 'type' => 'Qt::Disambiguated_t', 'has_default' => true],
+            ],
+            'is_static' => false,
+        ]],
+    ];
+
+    $result = $policy->filter($classData, ['QObject', 'QThread']);
+
+    Assert::assertCount(1, $result['selected_methods']);
+    Assert::assertSame('moveToThread', $result['selected_methods'][0]['name']);
+    Assert::assertSame([['name' => 'thread', 'type' => 'QThread *', 'has_default' => false]], $result['selected_methods'][0]['parameters']);
+});
+
 it('supports opengl const void input buffers only for opengl classes', function (): void {
     $policy = new MethodExposurePolicy();
 

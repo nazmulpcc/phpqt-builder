@@ -225,6 +225,166 @@ it('invalidates when module graph changes', function (): void {
     ))->toBeNull();
 });
 
+it('treats equivalent windows path variants as the same generation cache key', function (): void {
+    $cache = new GenerationAnalysisCache();
+    $metadataDir = qt_temp_dir('qtbuilder-generation-cache-');
+    $request = qt_generation_cache_windows_request();
+    $acceptedCandidates = qt_generation_cache_windows_candidates();
+    $preparedClassData = qt_generation_cache_windows_prepared_class_data();
+    $classNamespaces = ['QPoint' => 'Qt\\Core'];
+    $enumRegistry = qt_generation_cache_windows_enum_registry();
+    $generation = qt_generation_cache_generation($acceptedCandidates);
+
+    $cache->write(
+        $metadataDir,
+        $request,
+        $acceptedCandidates,
+        [],
+        $preparedClassData,
+        $classNamespaces,
+        $enumRegistry,
+        $generation,
+    );
+
+    $variantRequest = qt_generation_cache_windows_request(
+        rootPath: 'c:/users/admin/qt',
+        includeRoot: 'c:/users/admin/qt/include',
+    );
+    $variantCandidates = [
+        new HeaderCandidate(
+            'QtCore',
+            'QPoint',
+            'c:/users/admin/qt/include/QtCore/QPoint',
+            'c:/users/admin/qt/include/QtCore/QPoint',
+        ),
+    ];
+    $variantPreparedClassData = [
+        'QPoint' => [
+            'name' => 'QPoint',
+            'qualified_name' => 'QPoint',
+            'module' => 'QtCore',
+            'header' => 'c:/users/admin/qt/include/QtCore/QPoint',
+            'declared_in' => 'c:/users/admin/qt/include/QtCore/QPoint',
+            'bases' => [],
+            'methods' => [[
+                'name' => 'x',
+                'return_type' => 'int',
+                'parameters' => [],
+            ]],
+            'properties' => [],
+            'enum_names' => [],
+            'flag_aliases' => [],
+        ],
+    ];
+    $variantEnumRegistry = new EnumHolderRegistry([
+        'Qt::Orientation' => new EnumHolderDefinition(
+            module: 'QtCore',
+            cppType: 'Qt::Orientation',
+            phpNamespace: 'Qt\\Core',
+            phpClassName: 'Orientation',
+            constants: [new EnumHolderConstant('Horizontal', 1)],
+            headerPath: 'c:/users/admin/qt/include/QtCore/qnamespace.h',
+        ),
+    ]);
+
+    $loaded = $cache->load(
+        $metadataDir,
+        $variantRequest,
+        $variantCandidates,
+        [],
+        $variantPreparedClassData,
+        $classNamespaces,
+        $variantEnumRegistry,
+    );
+
+    expect($loaded)->not->toBeNull()
+        ->and($loaded['generated_classes'])->toBe(['QPoint', 'QPointList']);
+});
+
+it('treats equivalent windows skipped-class path variants as the same generation cache key', function (): void {
+    $cache = new GenerationAnalysisCache();
+    $metadataDir = qt_temp_dir('qtbuilder-generation-cache-');
+    $request = qt_generation_cache_windows_request();
+    $acceptedCandidates = qt_generation_cache_windows_candidates();
+    $preparedClassData = qt_generation_cache_windows_prepared_class_data();
+    $classNamespaces = ['QPoint' => 'Qt\\Core'];
+    $enumRegistry = qt_generation_cache_windows_enum_registry();
+    $generation = qt_generation_cache_generation($acceptedCandidates);
+    $skippedClasses = [[
+        'module' => 'QtCore',
+        'class' => 'QSkippedThing',
+        'header' => 'C:\\Users\\Admin\\qt\\include\\QtCore\\QSkippedThing',
+        'reason_code' => 'unsupported_parent_class',
+        'reason_message' => 'Parent class QUnsupportedThing is not currently supported (declared in C:\\Users\\Admin\\qt\\include\\QtCore\\QSkippedThing).',
+    ]];
+
+    $cache->write(
+        $metadataDir,
+        $request,
+        $acceptedCandidates,
+        $skippedClasses,
+        $preparedClassData,
+        $classNamespaces,
+        $enumRegistry,
+        $generation,
+    );
+
+    $loaded = $cache->load(
+        $metadataDir,
+        qt_generation_cache_windows_request(
+            rootPath: 'c:/users/admin/qt',
+            includeRoot: 'c:/users/admin/qt/include',
+        ),
+        [
+            new HeaderCandidate(
+                'QtCore',
+                'QPoint',
+                'c:/users/admin/qt/include/QtCore/QPoint',
+                'c:/users/admin/qt/include/QtCore/QPoint',
+            ),
+        ],
+        [[
+            'module' => 'QtCore',
+            'class' => 'QSkippedThing',
+            'header' => 'c:/users/admin/qt/include/QtCore/QSkippedThing',
+            'reason_code' => 'unsupported_parent_class',
+            'reason_message' => 'Parent class QUnsupportedThing is not currently supported (declared in c:/users/admin/qt/include/QtCore/QSkippedThing).',
+        ]],
+        [
+            'QPoint' => [
+                'name' => 'QPoint',
+                'qualified_name' => 'QPoint',
+                'module' => 'QtCore',
+                'header' => 'c:/users/admin/qt/include/QtCore/QPoint',
+                'declared_in' => 'c:/users/admin/qt/include/QtCore/QPoint',
+                'bases' => [],
+                'methods' => [[
+                    'name' => 'x',
+                    'return_type' => 'int',
+                    'parameters' => [],
+                ]],
+                'properties' => [],
+                'enum_names' => [],
+                'flag_aliases' => [],
+            ],
+        ],
+        $classNamespaces,
+        new EnumHolderRegistry([
+            'Qt::Orientation' => new EnumHolderDefinition(
+                module: 'QtCore',
+                cppType: 'Qt::Orientation',
+                phpNamespace: 'Qt\\Core',
+                phpClassName: 'Orientation',
+                constants: [new EnumHolderConstant('Horizontal', 1)],
+                headerPath: 'c:/users/admin/qt/include/QtCore/qnamespace.h',
+            ),
+        ]),
+    );
+
+    expect($loaded)->not->toBeNull()
+        ->and($loaded['generated_classes'])->toBe(['QPoint', 'QPointList']);
+});
+
 function qt_generation_cache_request(?ImportedModuleAbi $importedAbi = null, array $modules = ['QtCore'], ?ResolvedModuleGraph $graph = null): BuildExecutionRequest
 {
     $installation = new QtInstallation(
@@ -254,6 +414,39 @@ function qt_generation_cache_request(?ImportedModuleAbi $importedAbi = null, arr
         jobs: 1,
         resolvedModuleGraph: $graph,
         importedAbi: $importedAbi,
+    );
+}
+
+function qt_generation_cache_windows_request(
+    string $rootPath = 'C:\\Users\\Admin\\qt',
+    string $includeRoot = 'C:\\Users\\Admin\\qt\\include',
+): BuildExecutionRequest {
+    $installation = new QtInstallation(
+        rootPath: $rootPath,
+        osFamily: 'Windows',
+        includeRoots: [$includeRoot],
+        libraryRoots: ['C:\\Users\\Admin\\qt\\lib'],
+        moduleHeaderRoots: ['QtCore' => $includeRoot . '\\QtCore'],
+    );
+
+    $graph = new ResolvedModuleGraph(
+        requestedModules: ['QtCore'],
+        dependencies: ['QtCore' => []],
+        buildOrder: ['QtCore'],
+        extensionNames: ['QtCore' => 'qt'],
+        dependencySource: 'static_manifest',
+    );
+
+    return new BuildExecutionRequest(
+        installation: $installation,
+        buildRootDir: 'C:\\Users\\Admin\\build-root',
+        outputDir: 'C:\\Users\\Admin\\build-root\\ext',
+        modules: ['QtCore'],
+        requestedModules: ['QtCore'],
+        extensionName: 'qt',
+        extensionVersion: '0.1.0',
+        jobs: 1,
+        resolvedModuleGraph: $graph,
     );
 }
 
@@ -290,6 +483,46 @@ function qt_generation_cache_prepared_class_data(): array
     ];
 }
 
+/**
+ * @return list<HeaderCandidate>
+ */
+function qt_generation_cache_windows_candidates(): array
+{
+    return [
+        new HeaderCandidate(
+            'QtCore',
+            'QPoint',
+            'C:\\Users\\Admin\\qt\\include\\QtCore\\QPoint',
+            'C:\\Users\\Admin\\qt\\include\\QtCore\\QPoint',
+        ),
+    ];
+}
+
+/**
+ * @return array<string, array<string, mixed>>
+ */
+function qt_generation_cache_windows_prepared_class_data(): array
+{
+    return [
+        'QPoint' => [
+            'name' => 'QPoint',
+            'qualified_name' => 'QPoint',
+            'module' => 'QtCore',
+            'header' => 'C:\\Users\\Admin\\qt\\include\\QtCore\\QPoint',
+            'declared_in' => 'C:\\Users\\Admin\\qt\\include\\QtCore\\QPoint',
+            'bases' => [],
+            'methods' => [[
+                'name' => 'x',
+                'return_type' => 'int',
+                'parameters' => [],
+            ]],
+            'properties' => [],
+            'enum_names' => [],
+            'flag_aliases' => [],
+        ],
+    ];
+}
+
 function qt_generation_cache_enum_registry(): EnumHolderRegistry
 {
     return new EnumHolderRegistry([
@@ -300,6 +533,20 @@ function qt_generation_cache_enum_registry(): EnumHolderRegistry
             phpClassName: 'Orientation',
             constants: [new EnumHolderConstant('Horizontal', 1)],
             headerPath: '/tmp/qnamespace.h',
+        ),
+    ]);
+}
+
+function qt_generation_cache_windows_enum_registry(): EnumHolderRegistry
+{
+    return new EnumHolderRegistry([
+        'Qt::Orientation' => new EnumHolderDefinition(
+            module: 'QtCore',
+            cppType: 'Qt::Orientation',
+            phpNamespace: 'Qt\\Core',
+            phpClassName: 'Orientation',
+            constants: [new EnumHolderConstant('Horizontal', 1)],
+            headerPath: 'C:\\Users\\Admin\\qt\\include\\QtCore\\qnamespace.h',
         ),
     ]);
 }

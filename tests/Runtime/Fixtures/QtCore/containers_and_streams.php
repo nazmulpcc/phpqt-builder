@@ -22,8 +22,9 @@ $process = new \Qt\Core\QProcess();
 $process->setProgram('/bin/echo');
 $process->setArguments(['sales-sync', '--tenant=acme', '--batch=25']);
 
-$environment = \Qt\Core\QProcessEnvironment::systemEnvironment();
+$environment = new \Qt\Core\QProcessEnvironment();
 $environment->insert('PHPQT_DEMO_MODE', 'containers');
+$environment->insert('PHPQT_SECONDARY_FLAG', '1');
 
 $buffer = new \Qt\Core\QBuffer();
 $buffer->setData("sales-eu,1280\nsales-us,1540\n");

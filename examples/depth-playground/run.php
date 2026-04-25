@@ -268,7 +268,7 @@ $reset->onClicked(static function () use (&$intensity, $hint): void {
 $timer = new QTimer($window);
 $timer->setInterval(16);
 $start = microtime(true);
-$timer->connect('timeout()', static function () use (&$cards, &$intensity, $start): void {
+$timer->onTimeout(static function () use (&$cards, &$intensity, $start): void {
     $t = (microtime(true) - $start);
 
     $depthOrder = [];

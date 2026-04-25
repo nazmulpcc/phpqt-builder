@@ -143,6 +143,18 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
 
 @if(!$method->isConstructor)
+@if($ctx->isQObjectDerived)
+@php
+    $qtMovedSourceAllowedMethods = ['thread', 'objectName', 'signalsBlocked', 'dynamicPropertyNames', 'inherits'];
+@endphp
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(
+        intern,
+        "{!! $method->name !!}",
+        {!! in_array($method->name, $qtMovedSourceAllowedMethods, true) ? 'true' : 'false' !!}
+    )) {
+        RETURN_THROWS();
+    }
+@endif
     if (intern->native_ptr == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
         RETURN_THROWS();

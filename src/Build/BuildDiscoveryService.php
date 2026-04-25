@@ -16,7 +16,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class BuildDiscoveryService
 {
-    private const CLASS_CACHE_SCHEMA_VERSION = 13;
+    private const CLASS_CACHE_SCHEMA_VERSION = 14;
     private const DISCOVERY_CACHE_SCHEMA_VERSION = 1;
 
     public function __construct(

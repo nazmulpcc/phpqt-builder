@@ -24,6 +24,7 @@ extern "C" {
 }
 #endif
 #include "../qt_php_compat.h"
+#include <cstdint>
 @foreach($ctx->nativeIncludes as $include)
 #include {!! $include !!}
 @endforeach
@@ -73,6 +74,11 @@ typedef struct _{!! $ctx->objectStructName !!} {
     bool prevent_destroy;
     void *extra_storage;
 @endif
+@if($ctx->isQObjectDerived)
+    bool moved_source;
+    uint64_t moved_token;
+@endif
+    void (*native_rebind_php_object)(void *native_ptr, zend_object *php_object, zend_class_entry *actual_ce);
     zend_object std; /* MUST be last */
 } {!! $ctx->objectStructName !!};
 

@@ -773,7 +773,7 @@ it('skips unchanged class outputs on repeated generation', function (): void {
 
     $generator->generate($phpClass, 'Qt\\Core', $outputDir);
     $firstStats = $generator->lastWriteStats()->toArray();
-    expect($firstStats['written'])->toBe(8);
+    expect($firstStats['written'])->toBe(9);
 
     $headerFile = $outputDir . '/qt_qpoint.h';
     touch($headerFile, 1_000_000_000);

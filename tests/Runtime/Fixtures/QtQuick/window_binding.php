@@ -63,7 +63,7 @@ $initialTitle = $root->title;
 $sales->objectName = 'sales-2';
 $driver = new RuntimeQuickDriver();
 \Qt\Gui\QGuiApplication::exec();
-$sales->disconnect($notifyConnection);
+\Qt\Core\QObject::disconnect($notifyConnection);
 
 qt_runtime_result([
     'root_count' => count($roots),

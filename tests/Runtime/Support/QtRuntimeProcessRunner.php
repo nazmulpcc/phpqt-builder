@@ -42,6 +42,11 @@ final class QtRuntimeProcessRunner
 
     private static function qtRootPath(): ?string
     {
+        $recorded = self::recordedQtRootPath();
+        if ($recorded !== null) {
+            return $recorded;
+        }
+
         $configured = getenv('PHPQT_QT_ROOT');
         if (is_string($configured) && $configured !== '' && is_dir($configured)) {
             return $configured;
@@ -55,16 +60,54 @@ final class QtRuntimeProcessRunner
             }
         }
 
-        $configW32 = dirname(__DIR__, 3) . '/build/ext/config.w32';
-        if (is_file($configW32)) {
-            $contents = file_get_contents($configW32);
-            if (is_string($contents) && preg_match('/var qt_library_root = "([^"]+)";/', $contents, $matches) === 1) {
-                $libraryRoot = str_replace('\\', DIRECTORY_SEPARATOR, $matches[1]);
-                $candidate = dirname($libraryRoot);
-                if (is_dir($candidate)) {
-                    return $candidate;
-                }
+        return null;
+    }
+
+    private static function qtLibraryPath(): ?string
+    {
+        $configured = getenv('PHPQT_QT_LIB');
+        if (is_string($configured) && $configured !== '' && is_dir($configured)) {
+            return $configured;
+        }
+
+        $root = self::qtRootPath();
+        if ($root === null) {
+            return null;
+        }
+
+        $candidates = [
+            $root . DIRECTORY_SEPARATOR . 'lib',
+            $root,
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (is_dir($candidate)) {
+                return $candidate;
             }
+        }
+
+        return null;
+    }
+
+    private static function recordedQtRootPath(): ?string
+    {
+        $path = dirname(__DIR__, 3) . '/build/generated/discovery_cache.json';
+        if (!is_file($path)) {
+            return null;
+        }
+
+        $decoded = json_decode((string) file_get_contents($path), true);
+        if (!is_array($decoded)) {
+            return null;
+        }
+
+        $qtPath = $decoded['qt_path'] ?? null;
+        if (!is_string($qtPath) || $qtPath === '') {
+            return null;
+        }
+
+        if (is_dir($qtPath)) {
+            return $qtPath;
         }
 
         return null;
@@ -122,7 +165,36 @@ final class QtRuntimeProcessRunner
             }
         }
 
+        $qtLibraryPath = self::qtLibraryPath();
+        if ($qtLibraryPath !== null) {
+            self::prependEnvPath($runtimeEnv, 'DYLD_FRAMEWORK_PATH', $qtLibraryPath);
+            self::prependEnvPath($runtimeEnv, 'DYLD_LIBRARY_PATH', $qtLibraryPath);
+        }
+
         return $runtimeEnv;
+    }
+
+    /**
+     * @param array<string, string> $runtimeEnv
+     */
+    private static function prependEnvPath(array &$runtimeEnv, string $name, string $path): void
+    {
+        $existing = (string) ($runtimeEnv[$name] ?? getenv($name) ?: '');
+        if ($existing === '') {
+            $runtimeEnv[$name] = $path;
+
+            return;
+        }
+
+        $entries = array_filter(explode(PATH_SEPARATOR, $existing), static fn (string $entry): bool => $entry !== '');
+        if (in_array($path, $entries, true)) {
+            $runtimeEnv[$name] = $existing;
+
+            return;
+        }
+
+        array_unshift($entries, $path);
+        $runtimeEnv[$name] = implode(PATH_SEPARATOR, $entries);
     }
 
     public static function extensionPath(): ?string

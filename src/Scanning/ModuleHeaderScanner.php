@@ -74,13 +74,28 @@ class ModuleHeaderScanner
             return $publicHeader;
         }
 
-        if (preg_match('/#include\s+"([^"]+)"/', $content, $matches) !== 1) {
+        if (preg_match('/^\s*#\s*include\s*[<"]([^">]+)[">]/m', $content, $matches) !== 1) {
             return $publicHeader;
         }
 
-        $parseHeader = dirname($publicHeader) . '/' . $matches[1];
+        $includeTarget = trim((string) ($matches[1] ?? ''));
+        if ($includeTarget === '') {
+            return $publicHeader;
+        }
 
-        return is_file($parseHeader) ? $parseHeader : $publicHeader;
+        $headerDir = dirname($publicHeader);
+        $candidates = [$headerDir . '/' . $includeTarget];
+        if (str_contains($includeTarget, '/')) {
+            $candidates[] = $headerDir . '/' . basename($includeTarget);
+        }
+
+        foreach ($candidates as $candidate) {
+            if (is_file($candidate)) {
+                return $candidate;
+            }
+        }
+
+        return $publicHeader;
     }
 
     private function isTypeAliasForwarder(string $parseHeader, string $symbol): bool

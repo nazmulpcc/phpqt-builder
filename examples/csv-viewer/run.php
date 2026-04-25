@@ -224,7 +224,7 @@ $refresh = static function () use ($controller, $model, $pagination, $status, $w
 };
 
 $pagination->pageSizeBox()->setCurrentText((string) $controller->pageSize());
-$pagination->pageSizeBox()->connect('currentIndexChanged(int)', static function () use ($controller, $pagination, $refresh): void {
+$pagination->pageSizeBox()->onCurrentIndexChanged(static function () use ($controller, $pagination, $refresh): void {
     $controller->setPageSize((int) $pagination->pageSizeBox()->currentText());
     $refresh();
 });
@@ -239,7 +239,7 @@ $pagination->nextButton()->onClicked(static function () use ($controller, $refre
     $refresh();
 });
 
-$search->input()->connect('textChanged(QString)', static function (string $query) use ($controller, $refresh): void {
+$search->input()->onTextChanged(static function (string $query) use ($controller, $refresh): void {
     $controller->applyFilter($query);
     $refresh();
 });

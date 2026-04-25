@@ -48,8 +48,8 @@ it('generates signal apis and retains protected slots', function (): void {
         Assert::assertFileExists($outputDir . '/classes/qt_qmetaobjectconnection.stub.php');
     
         Assert::assertStringContainsString('protected function resetValue(): void {}', $stub);
-        Assert::assertStringContainsString('public function connect(string $signalSignature, callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
-        Assert::assertStringContainsString('public function disconnect(\Qt\Core\QMetaObjectConnection $connection): bool {}', $stub);
+        Assert::assertStringNotContainsString('public function connect(', $stub);
+        Assert::assertStringNotContainsString('public function disconnect(', $stub);
         Assert::assertStringContainsString('public function onTriggered(callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
         Assert::assertStringContainsString('public function onValueChanged(callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
         Assert::assertStringNotContainsString('function triggered(): void {}', $stub);
@@ -60,17 +60,17 @@ it('generates signal apis and retains protected slots', function (): void {
         Assert::assertStringContainsString('class qt_access_QSignalFixture : public QSignalFixture', $cpp);
         Assert::assertStringContainsString('qt_access_resetValue_0', $cpp);
     
-        Assert::assertStringContainsString('ZEND_METHOD(Qt_Core_QSignalFixture, connect)', $cpp);
-        Assert::assertStringContainsString('ZEND_METHOD(Qt_Core_QSignalFixture, disconnect)', $cpp);
+        Assert::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QSignalFixture, connect)', $cpp);
+        Assert::assertStringNotContainsString('ZEND_METHOD(Qt_Core_QSignalFixture, disconnect)', $cpp);
         Assert::assertStringContainsString('#include "qt_qmetaobjectconnection.h"', $cpp);
         Assert::assertStringContainsString('qt_track_native_instance(intern->native_ptr);', $cpp);
         Assert::assertStringContainsString('qt_should_delete_native', $cpp);
         Assert::assertStringContainsString('if (qt_should_delete_native(intern->native_ptr, intern->prevent_destroy)) {', $cpp);
         Assert::assertStringContainsString('if (qt_runtime_is_shutdown_in_progress()) {', $signalHelpers);
-        Assert::assertStringContainsString('if (!qt_runtime_can_call_zend()) {', $signalHelpers);
-        Assert::assertStringContainsString('if (qt_runtime_can_call_zend()) {', $signalHelpers);
-        Assert::assertStringContainsString('return qt_runtime_enqueue_owner_task([invoke]() mutable {', $signalHelpers);
-        Assert::assertStringContainsString('qt_signal_dispatch([_qt_handle]() mutable {', $signalHelpers);
+        Assert::assertStringContainsString('qt_signal_callback_is_owner_thread(callback) && qt_runtime_can_call_zend()', $signalHelpers);
+        Assert::assertStringContainsString('if (!callback->owner_owner_queue_supported) {', $signalHelpers);
+        Assert::assertStringContainsString('return qt_runtime_enqueue_owner_task([callback, invoke]() mutable {', $signalHelpers);
+        Assert::assertStringContainsString('qt_signal_dispatch(_qt_handle, [_qt_handle]() mutable {', $signalHelpers);
         Assert::assertStringContainsString('callback->fci.params = previousParams;', $signalHelpers);
         Assert::assertStringContainsString('callback->fci.param_count = previousParamCount;', $signalHelpers);
         Assert::assertStringContainsString('struct qt_qmetaobjectconnection_aux', $connectionSupport);
@@ -79,11 +79,9 @@ it('generates signal apis and retains protected slots', function (): void {
         Assert::assertStringContainsString('qt_qmetaobjectconnection_disconnect(qt_qmetaobjectconnection_object *intern)', $connectionSupport);
         Assert::assertStringContainsString('qt_runtime_owner_safe_point();', $cpp);
         Assert::assertStringNotContainsString('qt_signal_callback_clear(handle);', $cpp);
-        Assert::assertStringContainsString('zend_string_equals_literal(signalSignature, "triggered()")', $cpp);
         Assert::assertStringContainsString('static_cast<void (QSignalFixture::*)(int)>(&QSignalFixture::valueChanged)', $cpp);
         Assert::assertStringContainsString('ZEND_ME(Qt_Core_QSignalFixture, onTriggered,', $cpp);
         Assert::assertStringContainsString('qt_qmetaobjectconnection_wrap(return_value, _qt_connection);', $cpp);
-        Assert::assertStringContainsString('RETURN_BOOL(qt_qmetaobjectconnection_disconnect(connection_intern));', $cpp);
         Assert::assertStringContainsString('ZEND_METHOD(Qt_Core_QSignalFixture, resetValue)', $cpp);
         Assert::assertStringNotContainsString('zend_fcall_info_args_clear(&callback->fci, true);', $cpp);
         Assert::assertStringNotContainsString('static inline std::shared_ptr<qt_signal_callback_t> qt_signal_callback_create(', $cpp);
@@ -120,8 +118,8 @@ it('disambiguates overloaded signal sugar methods', function (): void {
     
         Assert::assertStringContainsString('public function onValueChangedInt(callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
         Assert::assertStringContainsString('public function onValueChangedBool(callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
-        Assert::assertStringContainsString('zend_string_equals_literal(signalSignature, "valueChanged(int)")', $cpp);
-        Assert::assertStringContainsString('zend_string_equals_literal(signalSignature, "valueChanged(bool)")', $cpp);
+        Assert::assertStringContainsString('/* onValueChangedInt */', $cpp);
+        Assert::assertStringContainsString('/* onValueChangedBool */', $cpp);
 });
 
 it('uses unique utf8 temp names for multi qstring signal callbacks', function (): void {
@@ -240,8 +238,6 @@ it('includes inherited signals in the connect api', function (): void {
     
         Assert::assertStringContainsString('public function onTriggered(callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
         Assert::assertStringContainsString('public function onChanged(callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
-        Assert::assertStringContainsString('zend_string_equals_literal(signalSignature, "triggered()")', $cpp);
-        Assert::assertStringContainsString('zend_string_equals_literal(signalSignature, "changed(int)")', $cpp);
         Assert::assertStringContainsString('static_cast<void (QSignalBaseFixture::*)()>(&QSignalBaseFixture::triggered)', $cpp);
 });
 
@@ -274,8 +270,8 @@ it('preserves const signal member pointers', function (): void {
         $stub = (string) file_get_contents($outputDir . '/classes/qt_qsignalconstfixture.stub.php');
         $cpp = (string) file_get_contents($outputDir . '/classes/qt_qsignalconstfixture.cpp');
     
-        Assert::assertStringContainsString('public function connect(string $signalSignature, callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
-        Assert::assertStringContainsString('public function disconnect(\Qt\Core\QMetaObjectConnection $connection): bool {}', $stub);
+        Assert::assertStringNotContainsString('public function connect(', $stub);
+        Assert::assertStringNotContainsString('public function disconnect(', $stub);
         Assert::assertStringContainsString('public function onChanged(callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
         Assert::assertStringContainsString('static_cast<void (QSignalConstFixture::*)(int) const>(&QSignalConstFixture::changed)', $cpp);
 });
@@ -313,8 +309,6 @@ it('includes signals with trailing qprivatesignal callback args stripped', funct
     
         Assert::assertStringContainsString('public function onFileChanged(callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
         Assert::assertStringContainsString('public function onChanged(callable $callback): \Qt\Core\QMetaObjectConnection {}', $stub);
-        Assert::assertStringContainsString('zend_string_equals_literal(signalSignature, "fileChanged(QString)")', $cpp);
-        Assert::assertStringContainsString('zend_string_equals_literal(signalSignature, "changed()")', $cpp);
         Assert::assertStringContainsString('&QPrivateSignalFixture::fileChanged', $cpp);
         Assert::assertStringContainsString('&QPrivateSignalFixture::changed', $cpp);
         Assert::assertStringContainsString('_qt_arg_0', $cpp);

@@ -66,6 +66,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
             _qt_trampoline->qt_cache_virtual_overrides(_qt_actual_ce, {!! $ctx->ceVarName !!});
             intern->native_is_generated_subclass = true;
             intern->native_is_virtual_trampoline = true;
+            intern->native_rebind_php_object = {!! $ctx->filePrefix !!}_rebind_php_object;
         } else {
 @if($ctx->isAbstract)
             zend_throw_error(NULL, "Abstract class {!! addslashes($ctx->phpClassName) !!} cannot be instantiated directly.");
@@ -74,6 +75,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
             intern->native_ptr = new {!! $ctx->plainNativeInstantiationType !!}(_qt_parent);
             intern->native_is_generated_subclass = {!! $ctx->plainInstantiationUsesGeneratedType() ? 'true' : 'false' !!};
             intern->native_is_virtual_trampoline = false;
+            intern->native_rebind_php_object = NULL;
 @endif
         }
 @else
@@ -108,6 +110,12 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
                 RETURN_THROWS();
             }
         }
+
+@if($ctx->isQObjectDerived)
+        if (intern->native_ptr != NULL) {
+            qt_php_signal_register_live_wrapper(static_cast<QObject *>(intern->native_ptr), &intern->std);
+        }
+@endif
 
         return;
     }
@@ -180,6 +188,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
         _qt_trampoline->qt_cache_virtual_overrides(_qt_actual_ce, {!! $ctx->ceVarName !!});
         intern->native_is_generated_subclass = true;
         intern->native_is_virtual_trampoline = true;
+        intern->native_rebind_php_object = {!! $ctx->filePrefix !!}_rebind_php_object;
     } else {
 @if($ctx->isAbstract)
         zend_throw_error(NULL, "Abstract class {!! addslashes($ctx->phpClassName) !!} cannot be instantiated directly.");
@@ -192,6 +201,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
         }
         intern->native_is_generated_subclass = {!! $ctx->plainInstantiationUsesGeneratedType() ? 'true' : 'false' !!};
         intern->native_is_virtual_trampoline = false;
+        intern->native_rebind_php_object = NULL;
 @endif
     }
 @else
@@ -231,6 +241,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
         _qt_trampoline->qt_cache_virtual_overrides(_qt_actual_ce, {!! $ctx->ceVarName !!});
         intern->native_is_generated_subclass = true;
         intern->native_is_virtual_trampoline = true;
+        intern->native_rebind_php_object = {!! $ctx->filePrefix !!}_rebind_php_object;
     } else {
 @if($ctx->isAbstract)
         zend_throw_error(NULL, "Abstract class {!! addslashes($ctx->phpClassName) !!} cannot be instantiated directly.");
@@ -239,6 +250,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
         intern->native_ptr = new {!! $ctx->plainNativeInstantiationType !!}({!! implode(', ', $callPlan['args']) !!});
         intern->native_is_generated_subclass = {!! $ctx->plainInstantiationUsesGeneratedType() ? 'true' : 'false' !!};
         intern->native_is_virtual_trampoline = false;
+        intern->native_rebind_php_object = NULL;
 @endif
     }
 @else
@@ -263,5 +275,11 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
 @endif
 @endif
 @endif
+@endif
+
+@if($ctx->isQObjectDerived && $ctx->nativeCppType !== 'QThread')
+    if (intern->native_ptr != NULL) {
+        qt_php_signal_register_live_wrapper(static_cast<QObject *>(intern->native_ptr), &intern->std);
+    }
 @endif
 }

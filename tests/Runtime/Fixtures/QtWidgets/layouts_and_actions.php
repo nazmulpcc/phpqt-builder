@@ -35,12 +35,12 @@ $genericCount = 0;
 $sugarConnection = $button->onClicked(function (bool $checked = false) use (&$sugarCount): void {
     $sugarCount++;
 });
-$connection = $button->connect('clicked(bool)', function ($checked = false) use (&$genericCount): void {
+$connection = $button->onClicked(function ($checked = false) use (&$genericCount): void {
     $genericCount++;
 });
 
 $button->click();
-$button->disconnect($connection);
+\Qt\Core\QObject::disconnect($connection);
 $button->click();
 
 $actionTexts = [];
@@ -50,7 +50,7 @@ foreach ($window->actions() as $action) {
     }
 }
 
-$button->disconnect($sugarConnection);
+\Qt\Core\QObject::disconnect($sugarConnection);
 
 qt_runtime_result([
     'window_title' => $window->windowTitle(),
