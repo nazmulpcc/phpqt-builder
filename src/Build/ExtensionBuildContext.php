@@ -143,6 +143,12 @@ readonly class ExtensionBuildContext
                 static fn(EnumHolderDefinition $holder): string => 'classes/' . $holder->filePrefix() . '.h',
                 $this->enumHolders,
             ),
+            $this->includeSignalConnectionSupport
+                ? [
+                    'classes/qt_qphpsignalconnection.h',
+                    'classes/qt_signalattribute.h',
+                ]
+                : [],
         ));
     }
 
@@ -162,6 +168,13 @@ readonly class ExtensionBuildContext
                 static fn(EnumHolderDefinition $holder): string => 'classes/' . $holder->filePrefix() . '.cpp',
                 $this->enumHolders,
             ),
+            $this->includeSignalConnectionSupport
+                ? [
+                    'classes/qt_qphpsignalconnection.cpp',
+                    'classes/qt_php_signal_helpers.cpp',
+                    'classes/qt_signalattribute.cpp',
+                ]
+                : [],
         ));
     }
 
@@ -227,6 +240,9 @@ readonly class ExtensionBuildContext
                 static fn(EnumHolderDefinition $holder): string => $holder->minitName(),
                 $this->enumHolders,
             ),
+            $this->includeSignalConnectionSupport
+                ? ['qt_qphpsignalconnection', 'qt_signalattribute']
+                : [],
         ));
     }
 

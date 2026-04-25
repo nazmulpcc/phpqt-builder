@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 final class DownloadManager
 {
-    private const USER_AGENT = 'phpqt-threaded-downloader/1.0';
+    private const USER_AGENT = 'phpqt-multithread-downloader/1.0';
 
     /**
      * @return array{size:int, accept_ranges:bool}
@@ -32,7 +32,6 @@ final class DownloadManager
         }
 
         $httpCode = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-
         if ($httpCode >= 400) {
             throw new RuntimeException(sprintf('Probe failed with HTTP %d.', $httpCode));
         }
@@ -69,8 +68,14 @@ final class DownloadManager
         ];
     }
 
-    public function downloadRange(string $url, int $startByte, int $endByte, string $outputPath): void
-    {
+    public function downloadRange(
+        string $url,
+        int $startByte,
+        int $endByte,
+        string $outputPath,
+        callable $onProgress,
+        ?callable $shouldCancel = null,
+    ): void {
         if ($endByte < $startByte) {
             throw new InvalidArgumentException('Invalid byte range.');
         }
@@ -91,6 +96,9 @@ final class DownloadManager
             throw new RuntimeException('Failed to initialize cURL.');
         }
 
+        $totalBytes = ($endByte - $startByte) + 1;
+        $lastReportedPercent = -1;
+
         curl_setopt_array($ch, [
             CURLOPT_FILE => $fh,
             CURLOPT_FOLLOWLOCATION => true,
@@ -99,7 +107,32 @@ final class DownloadManager
             CURLOPT_TIMEOUT => 0,
             CURLOPT_CONNECTTIMEOUT => 15,
             CURLOPT_USERAGENT => self::USER_AGENT,
+            CURLOPT_NOPROGRESS => false,
         ]);
+
+        curl_setopt($ch, CURLOPT_PROGRESSFUNCTION, static function (
+            $resource,
+            float $downloadSize,
+            float $downloadedBytes,
+            float $uploadSize,
+            float $uploadedBytes
+        ) use ($onProgress, $shouldCancel, $totalBytes, &$lastReportedPercent): int {
+            if ($shouldCancel !== null && $shouldCancel()) {
+                return 1;
+            }
+
+            $downloaded = (int) max(0, min($totalBytes, round($downloadedBytes)));
+            $percent = $totalBytes > 0
+                ? (int) floor(($downloaded * 100) / $totalBytes)
+                : 0;
+
+            if ($percent !== $lastReportedPercent) {
+                $lastReportedPercent = $percent;
+                $onProgress($downloaded, $totalBytes, $percent);
+            }
+
+            return 0;
+        });
 
         $ok = curl_exec($ch);
         $httpCode = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
@@ -114,6 +147,10 @@ final class DownloadManager
         if ($httpCode >= 400) {
             @unlink($outputPath);
             throw new RuntimeException(sprintf('Range download failed with HTTP %d.', $httpCode));
+        }
+
+        if ($lastReportedPercent !== 100) {
+            $onProgress($totalBytes, $totalBytes, 100);
         }
     }
 
@@ -134,6 +171,10 @@ final class DownloadManager
 
         try {
             foreach ($partPaths as $path) {
+                if (\Qt\Core\QThread::currentThread()->isInterruptionRequested()) {
+                    throw new RuntimeException('Merge cancelled.');
+                }
+
                 $in = fopen($path, 'rb');
                 if ($in === false) {
                     throw new RuntimeException('Missing part file: ' . $path);
@@ -157,15 +198,10 @@ final class DownloadManager
             return $message;
         }
 
-        $configuredCa = [
-            'curl.cainfo' => ini_get('curl.cainfo'),
-            'openssl.cafile' => ini_get('openssl.cafile'),
-        ];
-
         return $message . sprintf(
             ' Configure curl.cainfo and openssl.cafile in php.ini to point at a valid CA bundle. Current values: curl.cainfo=%s, openssl.cafile=%s',
-            $this->formatIniValue($configuredCa['curl.cainfo']),
-            $this->formatIniValue($configuredCa['openssl.cafile']),
+            $this->formatIniValue(ini_get('curl.cainfo')),
+            $this->formatIniValue(ini_get('openssl.cafile')),
         );
     }
 

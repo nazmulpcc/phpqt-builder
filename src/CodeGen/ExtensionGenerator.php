@@ -229,30 +229,28 @@ class ExtensionGenerator
     {
         $files = $this->writePhpCompatHeader($outputDir);
 
-        $headerFile = $outputDir . '/qt_qmetaobjectconnection.h';
-        $sourceFile = $outputDir . '/qt_qmetaobjectconnection.cpp';
-        $stubFile = $outputDir . '/qt_qmetaobjectconnection.stub.php';
+        $supportFiles = [
+            ['qt_qmetaobjectconnection.h', 'generation.support.qmetaobjectconnection_header'],
+            ['qt_qmetaobjectconnection.cpp', 'generation.support.qmetaobjectconnection_source'],
+            ['qt_qmetaobjectconnection.stub.php', 'generation.support.qmetaobjectconnection_stub'],
+            ['qt_qphpsignalconnection.h', 'generation.support.qphpsignalconnection_header'],
+            ['qt_qphpsignalconnection.cpp', 'generation.support.qphpsignalconnection_source'],
+            ['qt_qphpsignalconnection.stub.php', 'generation.support.qphpsignalconnection_stub'],
+            ['qt_php_signal_helpers.cpp', 'generation.support.php_signal_helpers_source'],
+            ['qt_signalattribute.h', 'generation.support.signalattribute_header'],
+            ['qt_signalattribute.cpp', 'generation.support.signalattribute_source'],
+            ['qt_signalattribute.stub.php', 'generation.support.signalattribute_stub'],
+        ];
 
-        $headerResult = $this->fileWriter->write(
-            $headerFile,
-            $this->cleanOutput($this->blade->run('generation.support.qmetaobjectconnection_header', [])),
-        );
-        $this->lastWriteStats->record($headerResult);
-        $files[] = $headerFile;
-
-        $sourceResult = $this->fileWriter->write(
-            $sourceFile,
-            $this->cleanOutput($this->blade->run('generation.support.qmetaobjectconnection_source', [])),
-        );
-        $this->lastWriteStats->record($sourceResult);
-        $files[] = $sourceFile;
-
-        $stubResult = $this->fileWriter->write(
-            $stubFile,
-            $this->cleanOutput($this->blade->run('generation.support.qmetaobjectconnection_stub', [])),
-        );
-        $this->lastWriteStats->record($stubResult);
-        $files[] = $stubFile;
+        foreach ($supportFiles as [$filename, $view]) {
+            $path = $outputDir . '/' . $filename;
+            $result = $this->fileWriter->write(
+                $path,
+                $this->cleanOutput($this->blade->run($view, [])),
+            );
+            $this->lastWriteStats->record($result);
+            $files[] = $path;
+        }
 
         return $files;
     }
@@ -395,6 +393,7 @@ class ExtensionGenerator
         $supportFiles = [
             ['qt_class_helpers.h', 'generation.support.class_helpers_header'],
             ['qt_qobject_helpers.h', 'generation.support.qobject_helpers_header'],
+            ['qt_php_signal_helpers.h', 'generation.support.php_signal_helpers_header'],
             ['qt_signal_helpers.h', 'generation.support.signal_helpers_header'],
             ['qt_ownership_helpers.h', 'generation.support.ownership_helpers_header'],
         ];

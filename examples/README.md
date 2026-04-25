@@ -48,8 +48,8 @@ php -dextension=$PWD/build/ext/.libs/qt.so examples/<example>/run.php
   An interactive QtQuick3D stress scene with presets, camera controls, dynamic instancing, and FPS HUD.
 - `bluetooth-scan-connect`
   An easy Bluetooth demo to scan nearby devices, inspect services, and attempt a socket connection.
-- `threaded-downloader`
-  A range-based downloader using `QThread` task mode and `QFuture` workers for per-part downloads and a final merge worker.
+- `multithread-downloader`
+  A clean event-driven downloader demo using `QThread` task workers, direct `publish()`/`on()` events, and compact per-worker progress rows.
 
 ## Data model
 

@@ -66,6 +66,11 @@ class QtInstallationResolver
         $headersPath ??= is_dir($rootPath . '/include') ? $rootPath . '/include' : null;
         $libsPath ??= is_dir($rootPath . '/lib') ? $rootPath . '/lib' : null;
 
+        [$qtVersion, $qtVersionMajor, $qtVersionMinor, $qtVersionPatch] = $this->resolveQtVersion(
+            $rootPath,
+            $headersPath,
+        );
+
         $includeRoots = [];
         if ($headersPath !== null && is_dir($headersPath)) {
             $includeRoots[] = $headersPath;
@@ -111,15 +116,17 @@ class QtInstallationResolver
             $moduleHeaderRoots[$module] = $headerRoot;
         }
 
+        foreach ($modules as $module) {
+            foreach ($this->privateHeaderIncludeRoots($headersPath, $module, $qtVersion) as $privateIncludeRoot) {
+                $includeRoots[] = $privateIncludeRoot;
+            }
+        }
+
         $libraryRoots = [];
         if ($libsPath !== null && is_dir($libsPath)) {
             $libraryRoots[] = $libsPath;
         }
 
-        [$qtVersion, $qtVersionMajor, $qtVersionMinor, $qtVersionPatch] = $this->resolveQtVersion(
-            $rootPath,
-            $headersPath,
-        );
         $moduleLinkFlags = $this->resolveModuleLinkFlags($modules, $rootPath, $tools);
 
         return new QtInstallation(
@@ -242,6 +249,14 @@ class QtInstallationResolver
      */
     private function resolveQtVersion(string $rootPath, ?string $headersPath): array
     {
+        $qconfigPath = $this->qconfigPath($rootPath, $headersPath);
+        if ($qconfigPath !== null) {
+            $parsed = $this->parseQconfigVersion($qconfigPath);
+            if ($parsed !== null) {
+                return $parsed;
+            }
+        }
+
         $qtpaths = $this->findFirstExecutable(['qtpaths6', 'qtpaths']);
         if ($qtpaths !== null) {
             $version = $this->queryTool($qtpaths, ['--qt-version']);
@@ -263,14 +278,6 @@ class QtInstallationResolver
             $version = $this->queryTool($pkgConfig, ['--modversion', 'Qt6Core']);
             if ($version !== null) {
                 return $this->normalizeQtVersion($version);
-            }
-        }
-
-        $qconfigPath = $this->qconfigPath($rootPath, $headersPath);
-        if ($qconfigPath !== null) {
-            $parsed = $this->parseQconfigVersion($qconfigPath);
-            if ($parsed !== null) {
-                return $parsed;
             }
         }
 
@@ -317,6 +324,29 @@ class QtInstallationResolver
         }
 
         return null;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function privateHeaderIncludeRoots(?string $headersPath, string $module, string $qtVersion): array
+    {
+        if ($headersPath === null || $qtVersion === '') {
+            return [];
+        }
+
+        $roots = [];
+        $versionedRoot = sprintf('%s/%s/%s', $headersPath, $module, $qtVersion);
+        if (is_dir($versionedRoot)) {
+            $roots[] = $versionedRoot;
+        }
+
+        $nestedModuleRoot = sprintf('%s/%s', $versionedRoot, $module);
+        if (is_dir($nestedModuleRoot)) {
+            $roots[] = $nestedModuleRoot;
+        }
+
+        return $roots;
     }
 
     /**

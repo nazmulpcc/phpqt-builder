@@ -887,12 +887,37 @@ class MethodExposurePolicy
             },
             $variant['parameters'],
         );
+        $variant['parameters'] = $this->stripTrailingDisambiguationTagParameters($variant['parameters']);
 
         if ($isAbstractClass && $this->isConstructor($className, $variant)) {
             $variant['access'] = 'protected';
         }
 
         return $variant;
+    }
+
+    /**
+     * Qt 6 injects defaulted disambiguation tag parameters into some public
+     * APIs. They are not user-facing API surface and should not block method
+     * exposure when they appear as optional trailing parameters.
+     *
+     * @param list<array<string, mixed>> $parameters
+     * @return list<array<string, mixed>>
+     */
+    private function stripTrailingDisambiguationTagParameters(array $parameters): array
+    {
+        while ($parameters !== []) {
+            $last = $parameters[array_key_last($parameters)];
+            $type = is_string($last['type'] ?? null) ? trim((string) $last['type']) : '';
+            $hasDefault = ($last['has_default'] ?? false) === true;
+            if (!$hasDefault || !$this->isDisambiguationTagType($type)) {
+                break;
+            }
+
+            array_pop($parameters);
+        }
+
+        return array_values($parameters);
     }
 
     /**

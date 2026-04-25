@@ -57,8 +57,11 @@
 @foreach($ctx->requiredIncludes as $include)
 #include "{!! $include !!}"
 @endforeach
-@if($ctx->nativeCppType === 'QThread')
+@if($ctx->nativeCppType === 'QThread' || $ctx->isQObjectDerived)
 #include "qt_qthreadruntime.h"
+@endif
+@if($ctx->nativeCppType === 'QObject')
+#include "qt_qthread.h"
 @endif
 
 #include "qt_class_helpers.h"
@@ -67,6 +70,12 @@
 @endif
 @if($ctx->hasSignals())
 #include "qt_signal_helpers.h"
+@endif
+@if($ctx->isQObjectClass)
+#include "qt_qphpsignalconnection.h"
+#include "qt_php_signal_helpers.h"
+@elseif($ctx->isQObjectDerived)
+#include "qt_php_signal_helpers.h"
 @endif
 @if($ctx->hasPreventDestroy || $ctx->hasPostCallOwnershipHandling())
 #include "qt_ownership_helpers.h"
@@ -78,14 +87,250 @@
 
 zend_class_entry *{!! $ctx->ceVarName !!} = NULL;
 zend_object_handlers {!! $ctx->handlersVarName !!};
+@if($ctx->isQObjectDerived)
+static zend_always_inline bool {!! $ctx->filePrefix !!}_is_moved_source_handle({!! $ctx->objectStructName !!} *intern)
+{
+    return intern != NULL && intern->moved_source && intern->moved_token != 0;
+}
+
+static zend_always_inline bool {!! $ctx->filePrefix !!}_moved_source_handle_is_alive({!! $ctx->objectStructName !!} *intern)
+{
+    return !{!! $ctx->filePrefix !!}_is_moved_source_handle(intern)
+        || qt_qthreadruntime_moved_object_is_alive(intern->moved_token);
+}
+
+static void {!! $ctx->filePrefix !!}_throw_moved_source_unavailable(void)
+{
+    zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} moved object is no longer available.");
+}
+
+static void {!! $ctx->filePrefix !!}_throw_moved_source_method_error(const char *method_name)
+{
+    zend_throw_error(
+        NULL,
+        "{!! addslashes($ctx->phpClassName) !!}::%s() is unavailable on a moved source handle.",
+        method_name != NULL ? method_name : "unknown"
+    );
+}
+
+static void {!! $ctx->filePrefix !!}_throw_moved_source_property_error(zend_string *member, const char *operation)
+{
+    zend_throw_error(
+        NULL,
+        "{!! addslashes($ctx->phpClassName) !!}::$%s is unavailable on a moved source handle during %s.",
+        member != NULL ? ZSTR_VAL(member) : "<unknown>",
+        operation != NULL ? operation : "property access"
+    );
+}
+
+static zend_always_inline bool {!! $ctx->filePrefix !!}_moved_source_method_allowed(const char *method_name)
+{
+    if (method_name == NULL) {
+        return false;
+    }
+
+    return strcmp(method_name, "thread") == 0
+        || strcmp(method_name, "objectName") == 0
+        || strcmp(method_name, "property") == 0
+        || strcmp(method_name, "signalsBlocked") == 0
+        || strcmp(method_name, "dynamicPropertyNames") == 0
+        || strcmp(method_name, "inherits") == 0
+        || strcmp(method_name, "connectPropertyNotify") == 0;
+}
+
+static zend_always_inline bool {!! $ctx->filePrefix !!}_guard_moved_source_method(
+    {!! $ctx->objectStructName !!} *intern,
+    const char *method_name,
+    bool allow_on_moved_source
+)
+{
+    if (!{!! $ctx->filePrefix !!}_is_moved_source_handle(intern)) {
+        return true;
+    }
+
+    if (!{!! $ctx->filePrefix !!}_moved_source_handle_is_alive(intern)) {
+        {!! $ctx->filePrefix !!}_throw_moved_source_unavailable();
+        return false;
+    }
+
+    if (allow_on_moved_source || {!! $ctx->filePrefix !!}_moved_source_method_allowed(method_name)) {
+        return true;
+    }
+
+    {!! $ctx->filePrefix !!}_throw_moved_source_method_error(method_name);
+    return false;
+}
+
+static zend_always_inline bool {!! $ctx->filePrefix !!}_guard_moved_source_property(
+    {!! $ctx->objectStructName !!} *intern,
+    zend_string *member,
+    const char *operation
+)
+{
+    if (!{!! $ctx->filePrefix !!}_is_moved_source_handle(intern)) {
+        return true;
+    }
+
+    if (!{!! $ctx->filePrefix !!}_moved_source_handle_is_alive(intern)) {
+        {!! $ctx->filePrefix !!}_throw_moved_source_unavailable();
+        return false;
+    }
+
+    {!! $ctx->filePrefix !!}_throw_moved_source_property_error(member, operation);
+    return false;
+}
+@endif
+@if($ctx->nativeCppType === 'QObject')
+static zend_always_inline bool qt_qobject_php_receiver_method_info(
+    zend_object *receiver_object,
+    const QByteArray &method_signature,
+    std::string *method_name_out,
+    uint32_t *required_args_out,
+    uint32_t *accepted_args_out,
+    uint32_t *signature_args_out,
+    std::string *error
+)
+{
+    if (receiver_object == NULL || receiver_object->ce == NULL) {
+        if (error != NULL) {
+            *error = "Receiver PHP object is not initialized.";
+        }
+        return false;
+    }
+
+    const int open_paren = method_signature.indexOf('(');
+    if (open_paren <= 0) {
+        if (error != NULL) {
+            *error = "Receiver method signature must be normalized like doWork().";
+        }
+        return false;
+    }
+
+    QByteArray method_name = method_signature.left(open_paren);
+    QByteArray argument_segment = method_signature.mid(open_paren + 1, method_signature.size() - open_paren - 2);
+    uint32_t signature_args = 0;
+    if (!argument_segment.isEmpty()) {
+        signature_args = 1;
+        for (const char ch : argument_segment) {
+            if (ch == ',') {
+                signature_args++;
+            }
+        }
+    }
+    zend_function *method = qt_lookup_method(receiver_object->ce, method_name.constData());
+    if (method == NULL) {
+        if (error != NULL) {
+            *error = std::string("Unknown receiver method ") + method_signature.constData() + ".";
+        }
+        return false;
+    }
+
+    if ((method->common.fn_flags & ZEND_ACC_STATIC) != 0) {
+        if (error != NULL) {
+            *error = std::string("Receiver method ") + method_signature.constData() + " must be an instance method.";
+        }
+        return false;
+    }
+
+    if (method_name_out != NULL) {
+        *method_name_out = method_name.toStdString();
+    }
+    if (required_args_out != NULL) {
+        *required_args_out = method->common.required_num_args;
+    }
+    if (accepted_args_out != NULL) {
+        *accepted_args_out = method->common.num_args;
+    }
+    if (signature_args_out != NULL) {
+        *signature_args_out = signature_args;
+    }
+
+    return true;
+}
+@endif
+@if($ctx->hasSignals() && $ctx->isQObjectDerived)
+@foreach($ctx->signalOverloads as $signal)
+@php
+$bridgeName = sprintf('%s_php_receiver_bridge_%d', $ctx->filePrefix, $loop->index);
+$lambdaParams = [];
+$setupLines = [];
+$teardownLines = [];
+$paramCount = count($signal->params);
+foreach ($signal->params as $index => $param) {
+    $nativeVar = sprintf('_qt_arg_%d', $index);
+    $lambdaParams[] = $param->cppType . ' ' . $nativeVar;
+    $setupLines[] = $ctx->typeBridge->signalArgToZvalBlock(
+        sprintf('&_qt_params[%d]', $index),
+        $param->phpType,
+        $param->cppType,
+        $nativeVar,
+        $index,
+    );
+    $teardownLines[] = sprintf('zval_ptr_dtor(&_qt_params[%d]);', $index);
+}
+@endphp
+static QMetaObject::Connection {!! $bridgeName !!}(
+    QObject *sender_object,
+    QObject *receiver_object,
+    zend_object *source_receiver_object,
+    const std::string &method_name,
+    int signal_index,
+    Qt::ConnectionType connection_type
+)
+{
+    auto *typed_sender = dynamic_cast<{!! $ctx->nativeCppType !!} *>(sender_object);
+    if (typed_sender == NULL || receiver_object == NULL) {
+        return QMetaObject::Connection();
+    }
+
+    auto state = std::make_shared<qt_qobject_php_receiver_invocation_state>(
+        sender_object,
+        receiver_object,
+        source_receiver_object,
+        method_name,
+        signal_index
+    );
+
+    return QObject::connect(
+        typed_sender,
+        {!! $signal->memberPointerExpr !!},
+        receiver_object,
+        [state]({!! implode(', ', $lambdaParams) !!}) mutable {
+            if (!state) {
+                return;
+            }
+@if($paramCount > 0)
+            zval _qt_params[{!! $paramCount !!}];
+@foreach($setupLines as $line)
+            {!! $line !!}
+@endforeach
+            state->invoke_marshaled({!! $paramCount !!}, _qt_params);
+@foreach($teardownLines as $line)
+            {!! $line !!}
+@endforeach
+@else
+            state->invoke();
+@endif
+        },
+        connection_type
+    );
+}
+
+@endforeach
+@endif
 @if($ctx->hasQObjectPropertySupport())
 static zval *{!! $ctx->filePrefix !!}_read_property(zend_object *object, zend_string *member, int type, void **cache_slot, zval *rv)
 {
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
+@if($ctx->isQObjectDerived)
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_property(intern, member, "read")) {
+        return &EG(uninitialized_zval);
+    }
+@endif
     if (qt_qobject_should_delegate_to_std_property(object, member)) {
         return zend_std_read_property(object, member, type, cache_slot, rv);
     }
 
-    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
     QObject *_qt_obj = intern->native_ptr != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
     if (_qt_obj == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
@@ -101,11 +346,16 @@ static zval *{!! $ctx->filePrefix !!}_read_property(zend_object *object, zend_st
 
 static zval *{!! $ctx->filePrefix !!}_write_property(zend_object *object, zend_string *member, zval *value, void **cache_slot)
 {
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
+@if($ctx->isQObjectDerived)
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_property(intern, member, "write")) {
+        return &EG(uninitialized_zval);
+    }
+@endif
     if (qt_qobject_should_delegate_to_std_property(object, member)) {
         return zend_std_write_property(object, member, value, cache_slot);
     }
 
-    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
     QObject *_qt_obj = intern->native_ptr != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
     if (_qt_obj == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
@@ -121,11 +371,16 @@ static zval *{!! $ctx->filePrefix !!}_write_property(zend_object *object, zend_s
 
 static zval *{!! $ctx->filePrefix !!}_get_property_ptr_ptr(zend_object *object, zend_string *member, int type, void **cache_slot)
 {
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
+@if($ctx->isQObjectDerived)
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_property(intern, member, "indirect access")) {
+        return NULL;
+    }
+@endif
     if (qt_qobject_should_delegate_to_std_property(object, member)) {
         return zend_std_get_property_ptr_ptr(object, member, type, cache_slot);
     }
 
-    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
     QObject *_qt_obj = intern->native_ptr != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
     if (_qt_obj != NULL && qt_qobject_has_property_name(_qt_obj, member)) {
         return NULL;
@@ -136,11 +391,16 @@ static zval *{!! $ctx->filePrefix !!}_get_property_ptr_ptr(zend_object *object, 
 
 static int {!! $ctx->filePrefix !!}_has_property(zend_object *object, zend_string *member, int has_set_exists, void **cache_slot)
 {
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
+@if($ctx->isQObjectDerived)
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_property(intern, member, has_set_exists == ZEND_PROPERTY_EXISTS ? "isset" : "empty")) {
+        return 0;
+    }
+@endif
     if (qt_qobject_should_delegate_to_std_property(object, member)) {
         return zend_std_has_property(object, member, has_set_exists, cache_slot);
     }
 
-    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
     QObject *_qt_obj = intern->native_ptr != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
     if (_qt_obj == NULL) {
         return zend_std_has_property(object, member, has_set_exists, cache_slot);
@@ -171,6 +431,11 @@ static int {!! $ctx->filePrefix !!}_has_property(zend_object *object, zend_strin
 static zend_array *{!! $ctx->filePrefix !!}_get_properties_for(zend_object *object, zend_prop_purpose purpose)
 {
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
+@if($ctx->isQObjectDerived)
+    if ({!! $ctx->filePrefix !!}_is_moved_source_handle(intern)) {
+        return zend_new_array(0);
+    }
+@endif
     QObject *_qt_obj = intern->native_ptr != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
     zend_array *_qt_props = zend_std_get_properties_for(object, purpose);
     if (_qt_obj == NULL) {
@@ -258,9 +523,19 @@ public:
 
     void run() override
     {
-        if (qt_task_runtime_host_ != NULL
-            && qt_qthread_task_host_execute_pending(static_cast<qt_qthread_task_host *>(qt_task_runtime_host_), this)) {
-            return;
+        if (qt_task_runtime_host_ != NULL) {
+            auto *_qt_host = static_cast<qt_qthread_task_host *>(qt_task_runtime_host_);
+            if (qt_qthread_task_host_execute_pending(_qt_host, this)) {
+                return;
+            }
+
+            if (qt_qthread_task_host_enter_moved_runtime(_qt_host, this)) {
+                if (qt_qthread_task_host_is_moved_runtime_active(_qt_host)) {
+                    this->QThread::run();
+                    qt_qthread_task_host_leave_moved_runtime(_qt_host);
+                }
+                return;
+            }
         }
 
         this->QThread::run();
@@ -510,6 +785,24 @@ public:
 @endforeach
 };
 
+static void {!! $ctx->filePrefix !!}_rebind_php_object(void *native_ptr, zend_object *php_object, zend_class_entry *actual_ce)
+{
+    if (native_ptr == NULL) {
+        return;
+    }
+
+    auto *_qt_trampoline = static_cast<{!! $ctx->trampolineTypeName !!} *>(native_ptr);
+    _qt_trampoline->php_object = php_object;
+    _qt_trampoline->qt_override_cache_initialized = false;
+@foreach($ctx->virtualDispatchCacheEntries() as $entry)
+    _qt_trampoline->{!! $entry['field'] !!} = false;
+@endforeach
+
+    if (php_object != NULL) {
+        _qt_trampoline->qt_cache_virtual_overrides(actual_ce != NULL ? actual_ce : php_object->ce, {!! $ctx->ceVarName !!});
+    }
+}
+
 @endif
 
 /* ------------------------------------------------------------------ */
@@ -532,12 +825,17 @@ static zend_object *{!! $ctx->filePrefix !!}_create_object(zend_class_entry *ce)
     intern->prevent_destroy = false;
     intern->extra_storage = NULL;
 @endif
+@if($ctx->isQObjectDerived)
+    intern->moved_source = false;
+    intern->moved_token = 0;
+@endif
 @if($ctx->needsArgvStorage)
     intern->extra_storage = new {!! $ctx->argvStorageStructName !!}();
 @endif
 @if($ctx->nativeCppType === 'QThread')
     intern->extra_storage = qt_qthread_task_host_create();
 @endif
+    intern->native_rebind_php_object = NULL;
 
     zend_object_std_init(&intern->std, ce);
     object_properties_init(&intern->std, ce);
@@ -552,6 +850,17 @@ static zend_object *{!! $ctx->filePrefix !!}_create_object(zend_class_entry *ce)
 static void {!! $ctx->filePrefix !!}_free_object(zend_object *object)
 {
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
+@if($ctx->isQObjectDerived)
+    if (intern->native_ptr != NULL) {
+        qt_php_signal_unregister_live_wrapper(static_cast<QObject *>(intern->native_ptr), object);
+    }
+@endif
+@if($ctx->isQObjectDerived)
+    if (intern->moved_token != 0) {
+        intern->moved_token = 0;
+    }
+    intern->moved_source = false;
+@endif
 
 @if($ctx->nativeCppType === 'QThread')
     if (intern->extra_storage != NULL) {
@@ -638,6 +947,16 @@ static void {!! $ctx->filePrefix !!}_free_object(zend_object *object)
 static zend_object *{!! $ctx->filePrefix !!}_clone_object(zend_object *old_object)
 {
     {!! $ctx->objectStructName !!} *old_intern = {!! $ctx->fromObjFunc !!}(old_object);
+@if($ctx->isQObjectDerived)
+    if ({!! $ctx->filePrefix !!}_is_moved_source_handle(old_intern)) {
+        if (!{!! $ctx->filePrefix !!}_moved_source_handle_is_alive(old_intern)) {
+            {!! $ctx->filePrefix !!}_throw_moved_source_unavailable();
+        } else {
+            zend_throw_error(NULL, "Cannot clone a moved source handle of {!! addslashes($ctx->phpClassName) !!}.");
+        }
+        return NULL;
+    }
+@endif
     zend_object *new_obj = {!! $ctx->filePrefix !!}_create_object(old_object->ce);
     {!! $ctx->objectStructName !!} *new_intern = {!! $ctx->fromObjFunc !!}(new_obj);
 
@@ -693,6 +1012,11 @@ PHP_QT_API void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativ
     qt_runtime_try_hook_about_to_quit();
 @endif
     intern->prevent_destroy = prevent_destroy;
+    intern->native_rebind_php_object = NULL;
+@if($ctx->isQObjectDerived)
+    intern->moved_source = false;
+    intern->moved_token = 0;
+@endif
 @if($ctx->tracksGeneratedNativeSubclass)
     intern->native_is_generated_subclass = false;
 @if($ctx->requiresVirtualTrampoline)
@@ -701,6 +1025,28 @@ PHP_QT_API void {!! $ctx->wrapNativeFunc !!}(zval *return_value, {!! $ctx->nativ
 @endif
 }
 
+@endif
+@if($ctx->nativeCppType === 'QObject')
+static void qt_qobject_wrap_runtime_adapter(zval *return_value, QObject *native, bool prevent_destroy)
+{
+    {!! $ctx->wrapNativeFunc !!}(return_value, static_cast<QObject *>(native), {!! $ctx->ceVarName !!}, prevent_destroy);
+}
+@elseif($ctx->isQObjectDerived && $ctx->wrapNativeFunc)
+static void {!! $ctx->filePrefix !!}_wrap_runtime_adapter(zval *return_value, QObject *native, bool prevent_destroy)
+{
+    {!! $ctx->wrapNativeFunc !!}(return_value, static_cast<{!! $ctx->nativeCppType !!} *>(native), {!! $ctx->ceVarName !!}, prevent_destroy);
+}
+@endif
+@if($ctx->isQObjectDerived)
+static QObject *{!! $ctx->filePrefix !!}_extract_native_adapter(zend_object *object)
+{
+    if (object == NULL) {
+        return NULL;
+    }
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->fromObjFunc !!}(object);
+    return intern != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
+}
 @endif
 /* ==================================================================
  * Method implementations
@@ -748,6 +1094,9 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, property)
     ZEND_PARSE_PARAMETERS_END();
 
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "property", true)) {
+        RETURN_THROWS();
+    }
     QObject *_qt_obj = intern->native_ptr != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
     if (_qt_obj == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
@@ -772,6 +1121,9 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, setProperty)
     ZEND_PARSE_PARAMETERS_END();
 
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "setProperty", false)) {
+        RETURN_THROWS();
+    }
     QObject *_qt_obj = intern->native_ptr != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
     if (_qt_obj == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
@@ -795,6 +1147,9 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, hasProperty)
     ZEND_PARSE_PARAMETERS_END();
 
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "hasProperty", false)) {
+        RETURN_THROWS();
+    }
     QObject *_qt_obj = intern->native_ptr != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
     if (_qt_obj == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
@@ -810,6 +1165,9 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, propertyNames)
     ZEND_PARSE_PARAMETERS_NONE();
 
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "propertyNames", false)) {
+        RETURN_THROWS();
+    }
     QObject *_qt_obj = intern->native_ptr != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
     if (_qt_obj == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
@@ -829,6 +1187,9 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, propertyInfo)
     ZEND_PARSE_PARAMETERS_END();
 
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "propertyInfo", false)) {
+        RETURN_THROWS();
+    }
     QObject *_qt_obj = intern->native_ptr != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
     if (_qt_obj == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
@@ -853,6 +1214,9 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connectPropertyNotify)
     ZEND_PARSE_PARAMETERS_END();
 
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "connectPropertyNotify", true)) {
+        RETURN_THROWS();
+    }
     QObject *_qt_obj = intern->native_ptr != NULL ? static_cast<QObject *>(intern->native_ptr) : NULL;
     if (_qt_obj == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
@@ -887,7 +1251,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connectPropertyNotify)
         void operator()() const
         {
             auto _qt_callback_copy = callback;
-            qt_signal_dispatch([_qt_callback_copy]() mutable {
+            qt_signal_dispatch(_qt_callback_copy, [_qt_callback_copy]() mutable {
                 qt_signal_callback_invoke(_qt_callback_copy, 0, nullptr);
             });
         }
@@ -903,7 +1267,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connectPropertyNotify)
 
     qt_qmetaobjectconnection_wrap(return_value, _qt_connection);
 @else
-    QSignalMapper *_qt_mapper = new QSignalMapper(_qt_obj);
+    QSignalMapper *_qt_mapper = new QSignalMapper();
     _qt_mapper->setMapping(_qt_obj, _qt_obj);
 
     const QMetaObject &_qt_mapper_meta = QSignalMapper::staticMetaObject;
@@ -931,7 +1295,7 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connectPropertyNotify)
     QMetaObject::Connection _qt_bridge_connection = QObject::connect(
         _qt_mapper,
         qOverload<QObject *>(&QSignalMapper::mappedObject),
-        _qt_obj,
+        _qt_mapper,
         [_qt_handler = _qt_property_notify_handler_t{_qt_callback}](QObject *) {
             _qt_handler();
         }
@@ -953,31 +1317,417 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connectPropertyNotify)
 @endif
 @if($ctx->hasSignals())
 
-/* connect */
-ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connect)
+@if($ctx->isQObjectClass)
+/* on */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, on)
 {
-    zend_string *signalSignature;
-    zval *callback;
+    qt_runtime_owner_safe_point();
 
-    ZEND_PARSE_PARAMETERS_START(2, 2)
-        Z_PARAM_STR(signalSignature)
-        Z_PARAM_ZVAL(callback)
+    zend_string *signal_name = NULL;
+    zval *listener = NULL;
+    zend_string *method_name = NULL;
+
+    ZEND_PARSE_PARAMETERS_START(2, 3)
+        Z_PARAM_STR(signal_name)
+        Z_PARAM_ZVAL(listener)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_STR_OR_NULL(method_name)
     ZEND_PARSE_PARAMETERS_END();
 
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+@if($ctx->isQObjectDerived)
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "on", true)) {
+        RETURN_THROWS();
+    }
+@endif
     if (intern->native_ptr == NULL) {
-        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
+        zend_throw_error(NULL, "QObject native instance is not initialized");
+        RETURN_THROWS();
+    }
+    if (ZSTR_LEN(signal_name) == 0) {
+        zend_argument_value_error(1, "must be a non-empty signal name");
         RETURN_THROWS();
     }
 
-@foreach($ctx->signalOverloads as $signal)
-    if (zend_string_equals_literal(signalSignature, "{!! $signal->signatureLiteral() !!}")) {
-@include('generation.method.signal_bind', ['ctx' => $ctx, 'signal' => $signal])
-    }
-@endforeach
+    const bool _qt_use_task_listener_api =
+        qt_ce_qthread != NULL && instanceof_function(Z_OBJCE_P(ZEND_THIS), qt_ce_qthread);
 
-    zend_throw_error(NULL, "Unknown signal signature for {!! addslashes($ctx->phpClassName) !!}::connect().");
+    if (_qt_use_task_listener_api && !qt_php_signal_has_declared_signal(Z_OBJCE_P(ZEND_THIS), signal_name)) {
+        if (method_name != NULL) {
+            zend_argument_value_error(3, "must be omitted for QThread task listeners");
+            RETURN_THROWS();
+        }
+#if !defined(ZTS)
+        zend_throw_exception_ex(
+            qt_runtime_exception_ce(),
+            0,
+            "Qt\\Core\\QThread::on() requires a ZTS PHP build (thread start/management APIs are unavailable on NTS)."
+        );
+        RETURN_THROWS();
+#else
+        if (intern->extra_storage == NULL) {
+            zend_throw_error(NULL, "QThread task runtime host is not initialized.");
+            RETURN_THROWS();
+        }
+
+        uint64_t listener_id = 0;
+        std::string task_error;
+        if (!qt_qthread_task_host_on(
+            static_cast<qt_qthread_task_host *>(intern->extra_storage),
+            std::string(ZSTR_VAL(signal_name), ZSTR_LEN(signal_name)),
+            listener,
+            &listener_id,
+            &task_error
+        )) {
+            zend_throw_error(NULL, "%s", task_error.c_str());
+            RETURN_THROWS();
+        }
+
+        RETURN_LONG((zend_long) listener_id);
+#endif
+    }
+
+    uint64_t sender_token = 0;
+    uint64_t listener_id = 0;
+    uint64_t generation = 0;
+    std::string error;
+    QObject *sender_native = static_cast<QObject *>(intern->native_ptr);
+
+    if (method_name == NULL) {
+        char *callable_error = NULL;
+        zend_fcall_info callable_fci;
+        zend_fcall_info_cache callable_fcc;
+        if (zend_fcall_info_init(listener, 0, &callable_fci, &callable_fcc, NULL, &callable_error) != SUCCESS) {
+            zend_argument_type_error(2, "must be callable or a QObject receiver when method is provided");
+            if (callable_error != NULL) {
+                efree(callable_error);
+            }
+            RETURN_THROWS();
+        }
+        if (callable_error != NULL) {
+            efree(callable_error);
+        }
+
+        if (!qt_php_signal_register_callable_listener(
+            Z_OBJCE_P(ZEND_THIS),
+            sender_native,
+            signal_name,
+            listener,
+            &sender_token,
+            &listener_id,
+            &generation,
+            &error
+        )) {
+            zend_throw_error(NULL, "%s", error.c_str());
+            RETURN_THROWS();
+        }
+    } else {
+        if (Z_TYPE_P(listener) != IS_OBJECT || !instanceof_function(Z_OBJCE_P(listener), qt_ce_qobject)) {
+            zend_argument_type_error(2, "must be of type Qt\\Core\\QObject when method is provided");
+            RETURN_THROWS();
+        }
+
+        qt_qobject_object *receiver_intern = qt_qobject_from_obj(Z_OBJ_P(listener));
+        QObject *receiver_native = receiver_intern != NULL
+            ? static_cast<QObject *>(receiver_intern->native_ptr)
+            : NULL;
+        if (receiver_native == NULL) {
+            zend_throw_error(NULL, "QObject receiver native instance is not initialized");
+            RETURN_THROWS();
+        }
+
+        if (!qt_php_signal_register_receiver_listener(
+            Z_OBJCE_P(ZEND_THIS),
+            sender_native,
+            signal_name,
+            receiver_native,
+            Z_OBJ_P(listener),
+            method_name,
+            &sender_token,
+            &listener_id,
+            &generation,
+            &error
+        )) {
+            zend_throw_error(NULL, "%s", error.c_str());
+            RETURN_THROWS();
+        }
+    }
+
+    qt_qphpsignalconnection_wrap(return_value, sender_token, listener_id, generation);
+}
+
+/* off */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, off)
+{
+    zval *connection = NULL;
+
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_ZVAL(connection)
+    ZEND_PARSE_PARAMETERS_END();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+@if($ctx->isQObjectDerived)
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "off", true)) {
+        RETURN_THROWS();
+    }
+@endif
+
+    if (Z_TYPE_P(connection) == IS_OBJECT && instanceof_function(Z_OBJCE_P(connection), qt_ce_QPhpSignalConnection)) {
+        RETURN_BOOL(qt_qphpsignalconnection_disconnect(Z_QPHPSIGNALCONNECTION_P(connection)));
+    }
+
+    const bool _qt_use_task_listener_api =
+        qt_ce_qthread != NULL && instanceof_function(Z_OBJCE_P(ZEND_THIS), qt_ce_qthread);
+
+    if (_qt_use_task_listener_api) {
+        if (Z_TYPE_P(connection) != IS_LONG) {
+            zend_argument_type_error(1, "must be of type int|Qt\\Core\\QPhpSignalConnection");
+            RETURN_THROWS();
+        }
+
+#if !defined(ZTS)
+        zend_throw_exception_ex(
+            qt_runtime_exception_ce(),
+            0,
+            "Qt\\Core\\QThread::off() requires a ZTS PHP build (thread start/management APIs are unavailable on NTS)."
+        );
+        RETURN_THROWS();
+#else
+        if (intern->extra_storage == NULL) {
+            RETURN_FALSE;
+        }
+
+        RETURN_BOOL(qt_qthread_task_host_off(
+            static_cast<qt_qthread_task_host *>(intern->extra_storage),
+            (uint64_t) zval_get_long(connection)
+        ));
+#endif
+    }
+
+    zend_argument_type_error(1, "must be of type Qt\\Core\\QPhpSignalConnection");
     RETURN_THROWS();
+}
+
+/* emit */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, emit)
+{
+    qt_runtime_owner_safe_point();
+
+    zend_string *signal_name = NULL;
+    zval *args = NULL;
+
+    ZEND_PARSE_PARAMETERS_START(1, 2)
+        Z_PARAM_STR(signal_name)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_ARRAY(args)
+    ZEND_PARSE_PARAMETERS_END();
+
+    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+@if($ctx->isQObjectDerived)
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "emit", false)) {
+        RETURN_THROWS();
+    }
+@endif
+    if (intern->native_ptr == NULL) {
+        zend_throw_error(NULL, "QObject native instance is not initialized");
+        RETURN_THROWS();
+    }
+    if (ZSTR_LEN(signal_name) == 0) {
+        zend_argument_value_error(1, "must be a non-empty signal name");
+        RETURN_THROWS();
+    }
+
+    zval local_args;
+    if (args != NULL) {
+        ZVAL_COPY(&local_args, args);
+    } else {
+        array_init(&local_args);
+    }
+
+    std::string error;
+    const bool emitted = qt_php_signal_emit(
+        Z_OBJCE_P(ZEND_THIS),
+        static_cast<QObject *>(intern->native_ptr),
+        signal_name,
+        &local_args,
+        &error
+    );
+    zval_ptr_dtor(&local_args);
+
+    if (!emitted) {
+        zend_throw_error(NULL, "%s", error.c_str());
+        RETURN_THROWS();
+    }
+
+    return;
+}
+@if($ctx->nativeCppType === 'QObject')
+/* connect */
+ZEND_METHOD({!! $ctx->zendClassSymbol !!}, connect)
+{
+    zval *sender_zv;
+    zend_string *signal_signature = NULL;
+    zval *receiver_zv;
+    zend_string *method_signature = NULL;
+    zend_long connection_type = (zend_long) Qt::AutoConnection;
+
+    ZEND_PARSE_PARAMETERS_START(4, 5)
+        Z_PARAM_OBJECT_OF_CLASS(sender_zv, {!! $ctx->ceVarName !!})
+        Z_PARAM_STR(signal_signature)
+        Z_PARAM_OBJECT_OF_CLASS(receiver_zv, {!! $ctx->ceVarName !!})
+        Z_PARAM_STR(method_signature)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_LONG(connection_type)
+    ZEND_PARSE_PARAMETERS_END();
+
+    qt_qobject_object *sender_intern = qt_qobject_from_obj(Z_OBJ_P(sender_zv));
+    qt_qobject_object *receiver_intern = qt_qobject_from_obj(Z_OBJ_P(receiver_zv));
+    if (sender_intern->native_ptr == NULL) {
+        zend_throw_error(NULL, "QObject sender native instance is not initialized");
+        RETURN_THROWS();
+    }
+    if (receiver_intern->native_ptr == NULL) {
+        zend_throw_error(NULL, "QObject receiver native instance is not initialized");
+        RETURN_THROWS();
+    }
+
+    QByteArray _qt_signal_signature;
+    std::string _qt_signal_error;
+    if (!qt_qobject_normalize_signature(signal_signature, &_qt_signal_signature, &_qt_signal_error, "Signal signature")) {
+        zend_throw_error(NULL, "%s", _qt_signal_error.c_str());
+        RETURN_THROWS();
+    }
+
+    QByteArray _qt_method_signature;
+    std::string _qt_method_error;
+    if (!qt_qobject_normalize_signature(method_signature, &_qt_method_signature, &_qt_method_error, "Receiver method signature")) {
+        zend_throw_error(NULL, "%s", _qt_method_error.c_str());
+        RETURN_THROWS();
+    }
+
+    QObject *_qt_sender = static_cast<QObject *>(sender_intern->native_ptr);
+    QObject *_qt_receiver = static_cast<QObject *>(receiver_intern->native_ptr);
+
+    const QMetaObject *_qt_sender_meta = _qt_sender->metaObject();
+    const int _qt_signal_index = _qt_sender_meta->indexOfSignal(_qt_signal_signature.constData());
+    if (_qt_signal_index < 0) {
+        zend_throw_error(NULL, "Unknown signal signature for QObject::connect(): %s", _qt_signal_signature.constData());
+        RETURN_THROWS();
+    }
+
+    const QMetaMethod _qt_signal_method = _qt_sender_meta->method(_qt_signal_index);
+
+    const QMetaObject *_qt_receiver_meta = _qt_receiver->metaObject();
+    const int _qt_receiver_method_index = _qt_receiver_meta->indexOfMethod(_qt_method_signature.constData());
+    if (_qt_receiver_method_index >= 0) {
+        const QMetaMethod _qt_receiver_method = _qt_receiver_meta->method(_qt_receiver_method_index);
+        if (!QMetaObject::checkConnectArgs(_qt_signal_method, _qt_receiver_method)) {
+            zend_throw_error(
+                NULL,
+                "Incompatible signal/receiver method signatures for QObject::connect(): %s -> %s",
+                _qt_signal_signature.constData(),
+                _qt_method_signature.constData()
+            );
+            RETURN_THROWS();
+        }
+
+        QMetaObject::Connection _qt_connection = QObject::connect(
+            _qt_sender,
+            _qt_signal_method,
+            _qt_receiver,
+            _qt_receiver_method,
+            static_cast<Qt::ConnectionType>(connection_type)
+        );
+        if (!_qt_connection) {
+            zend_throw_error(NULL, "Failed to connect %s to native receiver method %s.", _qt_signal_signature.constData(), _qt_method_signature.constData());
+            RETURN_THROWS();
+        }
+
+        qt_qmetaobjectconnection_wrap(return_value, _qt_connection);
+        return;
+    }
+
+    std::string _qt_receiver_method_name;
+    uint32_t _qt_required_args = 0;
+    uint32_t _qt_accepted_args = 0;
+    uint32_t _qt_signature_args = 0;
+    std::string _qt_php_method_error;
+    if (!qt_qobject_php_receiver_method_info(
+        &receiver_intern->std,
+        _qt_method_signature,
+        &_qt_receiver_method_name,
+        &_qt_required_args,
+        &_qt_accepted_args,
+        &_qt_signature_args,
+        &_qt_php_method_error
+    )) {
+        zend_throw_error(NULL, "%s", _qt_php_method_error.c_str());
+        RETURN_THROWS();
+    }
+
+    const int _qt_signal_parameter_count = _qt_signal_method.parameterCount();
+    if (_qt_required_args > (uint32_t) _qt_signal_parameter_count) {
+        zend_throw_error(
+            NULL,
+            "Receiver method %s requires %u argument(s), but signal %s provides %d.",
+            _qt_method_signature.constData(),
+            (unsigned) _qt_required_args,
+            _qt_signal_signature.constData(),
+            _qt_signal_parameter_count
+        );
+        RETURN_THROWS();
+    }
+
+    if (_qt_signature_args < _qt_required_args || _qt_signature_args > _qt_accepted_args) {
+        zend_throw_error(
+            NULL,
+            "Receiver method signature %s does not match PHP method arity for %s().",
+            _qt_method_signature.constData(),
+            _qt_receiver_method_name.c_str()
+        );
+        RETURN_THROWS();
+    }
+
+    if (_qt_signature_args > (uint32_t) _qt_signal_parameter_count) {
+        zend_throw_error(
+            NULL,
+            "Receiver method %s expects %u delivered argument(s), but signal %s provides %d.",
+            _qt_method_signature.constData(),
+            (unsigned) _qt_signature_args,
+            _qt_signal_signature.constData(),
+            _qt_signal_parameter_count
+        );
+        RETURN_THROWS();
+    }
+
+    qt_qobject_php_receiver_connect_bridge_t _qt_connect_bridge = qt_qobject_lookup_php_receiver_connect_bridge(
+        _qt_sender,
+        _qt_signal_signature
+    );
+    if (_qt_connect_bridge == NULL) {
+        zend_throw_error(
+            NULL,
+            "Signal %s does not have a generated public PHP receiver bridge for sender class %s.",
+            _qt_signal_signature.constData(),
+            _qt_sender->metaObject()->className()
+        );
+        RETURN_THROWS();
+    }
+
+    QMetaObject::Connection _qt_connection = _qt_connect_bridge(
+        _qt_sender,
+        _qt_receiver,
+        &receiver_intern->std,
+        _qt_receiver_method_name,
+        _qt_signal_index,
+        static_cast<Qt::ConnectionType>(connection_type)
+    );
+    if (!_qt_connection) {
+        zend_throw_error(NULL, "Failed to connect %s to PHP receiver method %s.", _qt_signal_signature.constData(), _qt_method_signature.constData());
+        RETURN_THROWS();
+    }
+
+    qt_qmetaobjectconnection_wrap(return_value, _qt_connection);
 }
 
 /* disconnect */
@@ -989,12 +1739,6 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, disconnect)
         Z_PARAM_OBJECT_OF_CLASS(connection, qt_ce_QMetaObjectConnection)
     ZEND_PARSE_PARAMETERS_END();
 
-    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
-    if (intern->native_ptr == NULL) {
-        zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
-        RETURN_THROWS();
-    }
-
     qt_qmetaobjectconnection_object *connection_intern = qt_qmetaobjectconnection_from_obj(Z_OBJ_P(connection));
     if (connection_intern->native_ptr == NULL) {
         RETURN_FALSE;
@@ -1002,6 +1746,8 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, disconnect)
 
     RETURN_BOOL(qt_qmetaobjectconnection_disconnect(connection_intern));
 }
+@endif
+@endif
 
 @foreach($ctx->signalOverloads as $signal)
 /* {!! $signal->phpMethodName !!} */
@@ -1014,6 +1760,9 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $signal->phpMethodName !!})
     ZEND_PARSE_PARAMETERS_END();
 
     {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
+    if (!{!! $ctx->filePrefix !!}_guard_moved_source_method(intern, "{!! $signal->phpMethodName !!}", true)) {
+        RETURN_THROWS();
+    }
     if (intern->native_ptr == NULL) {
         zend_throw_error(NULL, "{!! addslashes($ctx->phpClassName) !!} native instance is not initialized");
         RETURN_THROWS();
@@ -1025,82 +1774,6 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $signal->phpMethodName !!})
 @endforeach
 @endif
 @if($ctx->nativeCppType === 'QThread')
-
-/* on */
-ZEND_METHOD({!! $ctx->zendClassSymbol !!}, on)
-{
-    zend_string *event_name = NULL;
-    zval *listener = NULL;
-
-    ZEND_PARSE_PARAMETERS_START(2, 2)
-        Z_PARAM_STR(event_name)
-        Z_PARAM_ZVAL(listener)
-    ZEND_PARSE_PARAMETERS_END();
-
-#if !defined(ZTS)
-    zend_throw_exception_ex(
-        qt_runtime_exception_ce(),
-        0,
-        "Qt\\Core\\QThread::on() requires a ZTS PHP build (thread start/management APIs are unavailable on NTS)."
-    );
-    RETURN_THROWS();
-#else
-    if (ZSTR_LEN(event_name) == 0) {
-        zend_argument_value_error(1, "must be a non-empty event name");
-        RETURN_THROWS();
-    }
-
-    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
-    if (intern->extra_storage == NULL) {
-        zend_throw_error(NULL, "QThread task runtime host is not initialized.");
-        RETURN_THROWS();
-    }
-
-    uint64_t listener_id = 0;
-    std::string error;
-    if (!qt_qthread_task_host_on(
-        static_cast<qt_qthread_task_host *>(intern->extra_storage),
-        std::string(ZSTR_VAL(event_name), ZSTR_LEN(event_name)),
-        listener,
-        &listener_id,
-        &error
-    )) {
-        zend_throw_error(NULL, "%s", error.c_str());
-        RETURN_THROWS();
-    }
-
-    RETURN_LONG((zend_long) listener_id);
-#endif
-}
-
-/* off */
-ZEND_METHOD({!! $ctx->zendClassSymbol !!}, off)
-{
-    zend_long listener_id = 0;
-    ZEND_PARSE_PARAMETERS_START(1, 1)
-        Z_PARAM_LONG(listener_id)
-    ZEND_PARSE_PARAMETERS_END();
-
-#if !defined(ZTS)
-    zend_throw_exception_ex(
-        qt_runtime_exception_ce(),
-        0,
-        "Qt\\Core\\QThread::off() requires a ZTS PHP build (thread start/management APIs are unavailable on NTS)."
-    );
-    RETURN_THROWS();
-#else
-    {!! $ctx->objectStructName !!} *intern = {!! $ctx->zMacro !!}(ZEND_THIS);
-    if (intern->extra_storage == NULL) {
-        RETURN_FALSE;
-    }
-
-    RETURN_BOOL(qt_qthread_task_host_off(
-        static_cast<qt_qthread_task_host *>(intern->extra_storage),
-        (uint64_t) listener_id
-    ));
-#endif
-}
-
 /* drainEvents */
 ZEND_METHOD({!! $ctx->zendClassSymbol !!}, drainEvents)
 {
@@ -1367,23 +2040,26 @@ static const zend_function_entry {!! $ctx->filePrefix !!}_methods[] = {
     ZEND_ME({!! $ctx->zendClassSymbol !!}, __toString, {!! $ctx->filePrefix !!}_arginfo___tostring, ZEND_ACC_PUBLIC)
 @endif
 @if($ctx->isQObjectClass)
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, on, {!! $ctx->phpSignalOnArginfoName !!}, ZEND_ACC_PUBLIC)
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, off, {!! $ctx->phpSignalOffArginfoName !!}, ZEND_ACC_PUBLIC)
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, emit, {!! $ctx->phpSignalEmitArginfoName !!}, ZEND_ACC_PUBLIC)
     ZEND_ME({!! $ctx->zendClassSymbol !!}, property, {!! $ctx->propertyArginfoName !!}, ZEND_ACC_PUBLIC)
     ZEND_ME({!! $ctx->zendClassSymbol !!}, setProperty, {!! $ctx->setPropertyArginfoName !!}, ZEND_ACC_PUBLIC)
     ZEND_ME({!! $ctx->zendClassSymbol !!}, hasProperty, {!! $ctx->hasPropertyArginfoName !!}, ZEND_ACC_PUBLIC)
     ZEND_ME({!! $ctx->zendClassSymbol !!}, propertyNames, {!! $ctx->propertyNamesArginfoName !!}, ZEND_ACC_PUBLIC)
     ZEND_ME({!! $ctx->zendClassSymbol !!}, propertyInfo, {!! $ctx->propertyInfoArginfoName !!}, ZEND_ACC_PUBLIC)
     ZEND_ME({!! $ctx->zendClassSymbol !!}, connectPropertyNotify, {!! $ctx->connectPropertyNotifyArginfoName !!}, ZEND_ACC_PUBLIC)
+@if($ctx->nativeCppType === 'QObject')
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, connect, {!! $ctx->signalConnectArginfoName !!}, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+    ZEND_ME({!! $ctx->zendClassSymbol !!}, disconnect, {!! $ctx->signalDisconnectArginfoName !!}, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
+@endif
 @endif
 @if($ctx->hasSignals())
-    ZEND_ME({!! $ctx->zendClassSymbol !!}, connect, {!! $ctx->signalConnectArginfoName !!}, ZEND_ACC_PUBLIC)
-    ZEND_ME({!! $ctx->zendClassSymbol !!}, disconnect, {!! $ctx->signalDisconnectArginfoName !!}, ZEND_ACC_PUBLIC)
 @foreach($ctx->signalOverloads as $signal)
     ZEND_ME({!! $ctx->zendClassSymbol !!}, {!! $signal->phpMethodName !!}, {!! $signal->arginfoName !!}, ZEND_ACC_PUBLIC)
 @endforeach
 @endif
 @if($ctx->nativeCppType === 'QThread')
-    ZEND_ME({!! $ctx->zendClassSymbol !!}, on, arginfo_class_Qt_Core_QThread_on, ZEND_ACC_PUBLIC)
-    ZEND_ME({!! $ctx->zendClassSymbol !!}, off, arginfo_class_Qt_Core_QThread_off, ZEND_ACC_PUBLIC)
     ZEND_ME({!! $ctx->zendClassSymbol !!}, drainEvents, arginfo_class_Qt_Core_QThread_drainEvents, ZEND_ACC_PUBLIC)
     ZEND_ME({!! $ctx->zendClassSymbol !!}, send, arginfo_class_Qt_Core_QThread_send, ZEND_ACC_PUBLIC)
     ZEND_ME({!! $ctx->zendClassSymbol !!}, startFuture, arginfo_class_Qt_Core_QThread_startFuture, ZEND_ACC_PUBLIC)
@@ -1466,6 +2142,25 @@ PHP_MINIT_FUNCTION({!! $ctx->minitName !!})
             zend_string_release_ex(_qt_property_name, 1);
         }
     }
+@endif
+@if($ctx->nativeCppType === 'QObject')
+    qt_qobject_register_runtime_wrapper(&QObject::staticMetaObject, "QObject", qt_qobject_wrap_runtime_adapter);
+    qt_qobject_register_native_extract_adapter(&QObject::staticMetaObject, "QObject", {!! $ctx->filePrefix !!}_extract_native_adapter);
+@elseif($ctx->isQObjectDerived && $ctx->wrapNativeFunc)
+    qt_qobject_register_runtime_wrapper(&{!! $ctx->nativeCppType !!}::staticMetaObject, "{!! $ctx->phpClassName !!}", {!! $ctx->filePrefix !!}_wrap_runtime_adapter);
+    qt_qobject_register_native_extract_adapter(&{!! $ctx->nativeCppType !!}::staticMetaObject, "{!! $ctx->phpClassName !!}", {!! $ctx->filePrefix !!}_extract_native_adapter);
+@elseif($ctx->isQObjectDerived)
+    qt_qobject_register_native_extract_adapter(&{!! $ctx->nativeCppType !!}::staticMetaObject, "{!! $ctx->phpClassName !!}", {!! $ctx->filePrefix !!}_extract_native_adapter);
+@endif
+@if($ctx->hasSignals() && $ctx->isQObjectDerived)
+@foreach($ctx->signalOverloads as $signal)
+    qt_qobject_register_php_receiver_connect_bridge(
+        &{!! $ctx->nativeCppType !!}::staticMetaObject,
+        "{!! $ctx->phpClassName !!}",
+        "{!! $signal->signatureLiteral() !!}",
+        {!! sprintf('%s_php_receiver_bridge_%d', $ctx->filePrefix, $loop->index) !!}
+    );
+@endforeach
 @endif
 
     memcpy(&{!! $ctx->handlersVarName !!}, &std_object_handlers, sizeof(zend_object_handlers));

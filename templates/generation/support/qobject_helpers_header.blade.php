@@ -8,11 +8,452 @@
 #define QT_QOBJECT_HELPERS_H
 
 #include "qt_class_helpers.h"
+
+#ifndef PHP_QT_API
+# if defined(PHP_WIN32)
+#  define PHP_QT_API __declspec(dllexport)
+# elif defined(__GNUC__) && __GNUC__ >= 4
+#  define PHP_QT_API __attribute__ ((visibility("default")))
+# else
+#  define PHP_QT_API
+# endif
+#endif
+
 #include <QMetaMethod>
 #include <QMetaProperty>
 #include <QObject>
+#include <QMetaObject>
+#include <QMetaType>
+#include <QPointer>
+#include <QVariant>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
+#include <utility>
+
+typedef void (*qt_qobject_runtime_wrap_adapter_t)(zval *return_value, QObject *native, bool prevent_destroy);
+typedef QObject *(*qt_qobject_native_extract_adapter_t)(zend_object *object);
+typedef QMetaObject::Connection (*qt_qobject_php_receiver_connect_bridge_t)(
+    QObject *sender_object,
+    QObject *receiver_object,
+    zend_object *source_receiver_object,
+    const std::string &method_name,
+    int signal_index,
+    Qt::ConnectionType connection_type
+);
+
+struct qt_qobject_sender_override_state
+{
+    QObject *sender{nullptr};
+    int signal_index{-1};
+    bool active{false};
+};
+
+PHP_QT_API qt_qobject_sender_override_state &qt_qobject_current_sender_override();
+
+static inline qt_qobject_sender_override_state qt_qobject_push_sender_override(QObject *sender, int signal_index)
+{
+    qt_qobject_sender_override_state &state = qt_qobject_current_sender_override();
+    qt_qobject_sender_override_state previous = state;
+    state.sender = sender;
+    state.signal_index = signal_index;
+    state.active = true;
+    return previous;
+}
+
+static inline void qt_qobject_pop_sender_override(const qt_qobject_sender_override_state &previous)
+{
+    qt_qobject_current_sender_override() = previous;
+}
+
+inline std::unordered_map<std::string, qt_qobject_runtime_wrap_adapter_t> &qt_qobject_runtime_wrapper_registry()
+{
+    static std::unordered_map<std::string, qt_qobject_runtime_wrap_adapter_t> registry;
+    return registry;
+}
+
+inline std::unordered_map<std::string, qt_qobject_native_extract_adapter_t> &qt_qobject_native_extract_registry()
+{
+    static std::unordered_map<std::string, qt_qobject_native_extract_adapter_t> registry;
+    return registry;
+}
+
+inline std::mutex &qt_qobject_runtime_wrapper_registry_mutex()
+{
+    static std::mutex registry_mutex;
+    return registry_mutex;
+}
+
+inline std::mutex &qt_qobject_native_extract_registry_mutex()
+{
+    static std::mutex registry_mutex;
+    return registry_mutex;
+}
+
+inline std::unordered_map<std::string, std::unordered_map<std::string, qt_qobject_php_receiver_connect_bridge_t>> &qt_qobject_php_receiver_connect_bridge_registry()
+{
+    static std::unordered_map<std::string, std::unordered_map<std::string, qt_qobject_php_receiver_connect_bridge_t>> registry;
+    return registry;
+}
+
+inline std::mutex &qt_qobject_php_receiver_connect_bridge_registry_mutex()
+{
+    static std::mutex registry_mutex;
+    return registry_mutex;
+}
+
+static inline void qt_qobject_register_runtime_wrapper(
+    const QMetaObject *meta_object,
+    const char *expected_class_name,
+    qt_qobject_runtime_wrap_adapter_t wrap_adapter
+)
+{
+    if (meta_object == NULL || wrap_adapter == NULL) {
+        return;
+    }
+
+    const char *class_name = meta_object->className();
+    if (class_name == NULL || *class_name == '\0') {
+        return;
+    }
+    if (expected_class_name != NULL && *expected_class_name != '\0' && strcmp(class_name, expected_class_name) != 0) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(qt_qobject_runtime_wrapper_registry_mutex());
+    qt_qobject_runtime_wrapper_registry().try_emplace(std::string(class_name), wrap_adapter);
+}
+
+static inline void qt_qobject_register_runtime_wrapper(
+    const QMetaObject *meta_object,
+    qt_qobject_runtime_wrap_adapter_t wrap_adapter
+)
+{
+    qt_qobject_register_runtime_wrapper(meta_object, NULL, wrap_adapter);
+}
+
+static inline void qt_qobject_register_native_extract_adapter(
+    const QMetaObject *meta_object,
+    const char *expected_class_name,
+    qt_qobject_native_extract_adapter_t extract_adapter
+)
+{
+    if (meta_object == NULL || extract_adapter == NULL) {
+        return;
+    }
+
+    const char *class_name = meta_object->className();
+    if (class_name == NULL || *class_name == '\0') {
+        return;
+    }
+    if (expected_class_name != NULL && *expected_class_name != '\0' && strcmp(class_name, expected_class_name) != 0) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(qt_qobject_native_extract_registry_mutex());
+    qt_qobject_native_extract_registry().try_emplace(std::string(class_name), extract_adapter);
+}
+
+static inline void qt_qobject_register_native_extract_adapter(
+    const QMetaObject *meta_object,
+    qt_qobject_native_extract_adapter_t extract_adapter
+)
+{
+    qt_qobject_register_native_extract_adapter(meta_object, NULL, extract_adapter);
+}
+
+static inline void qt_qobject_register_php_receiver_connect_bridge(
+    const QMetaObject *meta_object,
+    const char *expected_class_name,
+    const char *signal_signature,
+    qt_qobject_php_receiver_connect_bridge_t connect_bridge
+)
+{
+    if (meta_object == NULL || signal_signature == NULL || *signal_signature == '\0' || connect_bridge == NULL) {
+        return;
+    }
+
+    const char *class_name = meta_object->className();
+    if (class_name == NULL || *class_name == '\0') {
+        return;
+    }
+    if (expected_class_name != NULL && *expected_class_name != '\0' && strcmp(class_name, expected_class_name) != 0) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(qt_qobject_php_receiver_connect_bridge_registry_mutex());
+    auto &class_registry = qt_qobject_php_receiver_connect_bridge_registry()[std::string(class_name)];
+    class_registry.emplace(std::string(signal_signature), connect_bridge);
+}
+
+static inline void qt_qobject_register_php_receiver_connect_bridge(
+    const QMetaObject *meta_object,
+    const char *signal_signature,
+    qt_qobject_php_receiver_connect_bridge_t connect_bridge
+)
+{
+    qt_qobject_register_php_receiver_connect_bridge(meta_object, NULL, signal_signature, connect_bridge);
+}
+
+static inline qt_qobject_php_receiver_connect_bridge_t qt_qobject_lookup_php_receiver_connect_bridge(
+    QObject *sender_object,
+    const QByteArray &signal_signature
+)
+{
+    if (sender_object == NULL || signal_signature.isEmpty()) {
+        return NULL;
+    }
+
+    std::lock_guard<std::mutex> lock(qt_qobject_php_receiver_connect_bridge_registry_mutex());
+    for (const QMetaObject *meta = sender_object->metaObject(); meta != NULL; meta = meta->superClass()) {
+        const char *class_name = meta->className();
+        if (class_name == NULL || *class_name == '\0') {
+            continue;
+        }
+
+        auto class_it = qt_qobject_php_receiver_connect_bridge_registry().find(std::string(class_name));
+        if (class_it == qt_qobject_php_receiver_connect_bridge_registry().end()) {
+            continue;
+        }
+
+        auto signal_it = class_it->second.find(std::string(signal_signature.constData(), (size_t) signal_signature.size()));
+        if (signal_it == class_it->second.end() || signal_it->second == NULL) {
+            continue;
+        }
+
+        return signal_it->second;
+    }
+
+    return NULL;
+}
+
+static inline bool qt_qobject_wrap_runtime_instance(zval *return_value, QObject *native, bool prevent_destroy)
+{
+    if (return_value == NULL) {
+        return false;
+    }
+
+    if (native == NULL) {
+        ZVAL_NULL(return_value);
+        return true;
+    }
+
+    std::lock_guard<std::mutex> lock(qt_qobject_runtime_wrapper_registry_mutex());
+    for (const QMetaObject *meta = native->metaObject(); meta != NULL; meta = meta->superClass()) {
+        const char *class_name = meta->className();
+        if (class_name == NULL || *class_name == '\0') {
+            continue;
+        }
+
+        auto it = qt_qobject_runtime_wrapper_registry().find(std::string(class_name));
+        if (it == qt_qobject_runtime_wrapper_registry().end() || it->second == NULL) {
+            continue;
+        }
+
+        it->second(return_value, native, prevent_destroy);
+        return true;
+    }
+
+    return false;
+}
+
+static inline QObject *qt_qobject_extract_native_from_object(zend_object *object)
+{
+    if (object == NULL || object->ce == NULL) {
+        return NULL;
+    }
+
+    std::lock_guard<std::mutex> lock(qt_qobject_native_extract_registry_mutex());
+    for (zend_class_entry *ce = object->ce; ce != NULL; ce = ce->parent) {
+        const zend_string *ce_name = ce->name;
+        if (ce_name == NULL || ZSTR_LEN(ce_name) == 0) {
+            continue;
+        }
+
+        auto it = qt_qobject_native_extract_registry().find(std::string(ZSTR_VAL(ce_name), ZSTR_LEN(ce_name)));
+        if (it == qt_qobject_native_extract_registry().end() || it->second == NULL) {
+            continue;
+        }
+
+        return it->second(object);
+    }
+
+    return NULL;
+}
+
+static inline QObject *qt_qobject_extract_native_from_zval(zval *value)
+{
+    if (value == NULL || Z_TYPE_P(value) != IS_OBJECT) {
+        return NULL;
+    }
+
+    return qt_qobject_extract_native_from_object(Z_OBJ_P(value));
+}
+
+PHP_QT_API zend_object *qt_qthreadruntime_resolve_live_php_object(QObject *native_object);
+PHP_QT_API bool qt_qthreadruntime_has_moved_object(QObject *native_object);
+
+struct qt_qobject_php_receiver_invocation_state
+{
+    explicit qt_qobject_php_receiver_invocation_state(
+        QObject *sender_object,
+        QObject *receiver_object,
+        zend_object *source_receiver_object,
+        std::string method_name_value,
+        int signal_index_value
+    )
+        : sender_native(sender_object)
+        , receiver_native(receiver_object)
+        , source_receiver(source_receiver_object)
+        , method_name(std::move(method_name_value))
+        , signal_index(signal_index_value)
+    {
+        if (source_receiver != nullptr) {
+            GC_ADDREF(source_receiver);
+        }
+    }
+
+    ~qt_qobject_php_receiver_invocation_state()
+    {
+        if (source_receiver != nullptr) {
+            OBJ_RELEASE(source_receiver);
+            source_receiver = nullptr;
+        }
+    }
+
+    zend_object *resolve_target_object() const
+    {
+        QObject *native_receiver = receiver_native.data();
+        if (native_receiver == nullptr) {
+            return NULL;
+        }
+
+        zend_object *target_object = qt_qthreadruntime_resolve_live_php_object(native_receiver);
+        if (target_object == NULL && !qt_qthreadruntime_has_moved_object(native_receiver)) {
+            target_object = source_receiver;
+        }
+
+        return target_object;
+    }
+
+    bool invoke_marshaled(uint32_t param_count, zval *params)
+    {
+        if (!qt_runtime_can_call_zend()) {
+            return false;
+        }
+
+        zend_object *target_object = resolve_target_object();
+        if (target_object == NULL) {
+            return false;
+        }
+
+        qt_qobject_sender_override_state previous_sender_state = qt_qobject_push_sender_override(sender_native.data(), signal_index);
+
+        zval retval;
+        ZVAL_NULL(&retval);
+        const bool ok = qt_call_php_method(
+            target_object,
+            method_name.c_str(),
+            &retval,
+            param_count,
+            param_count > 0 ? params : NULL
+        );
+        qt_qobject_pop_sender_override(previous_sender_state);
+        zval_ptr_dtor(&retval);
+
+        return ok;
+    }
+
+    bool invoke()
+    {
+        return invoke_marshaled(0, NULL);
+    }
+
+    QPointer<QObject> sender_native;
+    QPointer<QObject> receiver_native;
+    zend_object *source_receiver{nullptr};
+    std::string method_name;
+    int signal_index{-1};
+};
+
+static inline bool qt_qobject_signal_arg_to_zval(zval *target, const QMetaType &meta_type, void *arg_data)
+{
+    if (target == NULL) {
+        return false;
+    }
+
+    if (!meta_type.isValid()) {
+        ZVAL_NULL(target);
+        return true;
+    }
+
+    if (meta_type.flags().testFlag(QMetaType::PointerToQObject)) {
+        QObject *native = arg_data != NULL ? *reinterpret_cast<QObject **>(arg_data) : NULL;
+        return qt_qobject_wrap_runtime_instance(target, native, true);
+    }
+
+    if (arg_data == NULL) {
+        ZVAL_NULL(target);
+        return true;
+    }
+
+    QVariant value(meta_type, arg_data);
+    qt_variant_to_zval(target, value);
+    return true;
+}
+
+static inline bool qt_qobject_normalize_signature(
+    zend_string *signature,
+    QByteArray *normalized,
+    std::string *error,
+    const char *kind
+)
+{
+    const char *label = (kind != NULL && *kind != '\0') ? kind : "signature";
+    if (signature == NULL || ZSTR_LEN(signature) == 0) {
+        if (error != NULL) {
+            *error = std::string(label) + " must be a non-empty normalized signature like started().";
+        }
+        return false;
+    }
+
+    QByteArray candidate(ZSTR_VAL(signature), (int) ZSTR_LEN(signature));
+    if (candidate.startsWith("SIGNAL(") || candidate.startsWith("SLOT(")) {
+        if (error != NULL) {
+            *error = std::string(label) + " must use normalized syntax like started(), not SIGNAL()/SLOT() macros.";
+        }
+        return false;
+    }
+
+    if (!candidate.contains('(') || !candidate.endsWith(')')) {
+        if (error != NULL) {
+            *error = std::string(label) + " must be a normalized signature like started().";
+        }
+        return false;
+    }
+
+    QByteArray normalized_signature = QMetaObject::normalizedSignature(candidate.constData());
+    if (normalized_signature.isEmpty()) {
+        if (error != NULL) {
+            *error = std::string("Invalid ") + label + ".";
+        }
+        return false;
+    }
+
+    if (normalized_signature != candidate) {
+        if (error != NULL) {
+            *error = std::string(label) + " must already be normalized as " + normalized_signature.constData() + ".";
+        }
+        return false;
+    }
+
+    if (normalized != NULL) {
+        *normalized = normalized_signature;
+    }
+    return true;
+}
 
 static zend_always_inline int qt_qobject_meta_property_index(QObject *obj, zend_string *name)
 {

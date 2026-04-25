@@ -152,14 +152,26 @@ it('queues supplemental class candidates discovered through included headers', f
     $accepted = qt_decode_json((string) file_get_contents($metadataDir . '/accepted_candidates.json'));
     expect(array_column($accepted, 'class'))->toContain('QAbstractOpenGLFunctions', 'QOpenGLFunctions_1_0');
 
-    $supplemental = qt_decode_json((string) file_get_contents($metadataDir . '/supplemental_candidates.json'));
+    $normalizePath = static fn(string $path): string => str_replace('\\', '/', $path);
+    $supplemental = array_map(
+        static function (array $entry) use ($normalizePath): array {
+            foreach (['public_header', 'parse_header', 'discovered_from_header'] as $field) {
+                if (is_string($entry[$field] ?? null)) {
+                    $entry[$field] = $normalizePath($entry[$field]);
+                }
+            }
+
+            return $entry;
+        },
+        qt_decode_json((string) file_get_contents($metadataDir . '/supplemental_candidates.json')),
+    );
     expect($supplemental)->toContainEqual([
         'module' => 'QtOpenGL',
         'class' => 'QAbstractOpenGLFunctions',
-        'public_header' => $fixtureRoot . '/include/QtOpenGL/qopenglversionfunctions.h',
-        'parse_header' => $fixtureRoot . '/include/QtOpenGL/qopenglversionfunctions.h',
+        'public_header' => $normalizePath($fixtureRoot . '/include/QtOpenGL/qopenglversionfunctions.h'),
+        'parse_header' => $normalizePath($fixtureRoot . '/include/QtOpenGL/qopenglversionfunctions.h'),
         'discovered_from_class' => 'QOpenGLFunctions_1_0',
-        'discovered_from_header' => $fixtureRoot . '/include/QtOpenGL/qopenglfunctions_1_0.h',
+        'discovered_from_header' => $normalizePath($fixtureRoot . '/include/QtOpenGL/qopenglfunctions_1_0.h'),
         'trigger_reason' => 'unsupported_parent_class',
     ]);
 
@@ -178,7 +190,18 @@ it('queues supplemental class candidates discovered through included headers', f
 
     expect($secondRun)->toBeSuccessfulCommandResult();
 
-    $secondSupplemental = qt_decode_json((string) file_get_contents($metadataDir . '/supplemental_candidates.json'));
+    $secondSupplemental = array_map(
+        static function (array $entry) use ($normalizePath): array {
+            foreach (['public_header', 'parse_header', 'discovered_from_header'] as $field) {
+                if (is_string($entry[$field] ?? null)) {
+                    $entry[$field] = $normalizePath($entry[$field]);
+                }
+            }
+
+            return $entry;
+        },
+        qt_decode_json((string) file_get_contents($metadataDir . '/supplemental_candidates.json')),
+    );
     expect($secondSupplemental)->toHaveCount(1)
         ->and($secondSupplemental)->toContainEqual($supplemental[0]);
 });

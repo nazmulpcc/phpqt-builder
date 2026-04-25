@@ -53,11 +53,12 @@ final class RuntimeTableModel extends \Qt\Core\QAbstractTableModel
      */
     public function appendRows(array $rows): void
     {
-        $first = count($this->rows);
-        $last = $first + count($rows) - 1;
-        $this->beginInsertRows(new \Qt\Core\QModelIndex(), $first, $last);
         array_push($this->rows, ...$rows);
-        $this->endInsertRows();
+    }
+
+    public function cellAt(int $row, int $column): string
+    {
+        return $this->rows[$row][$column] ?? '';
     }
 }
 
@@ -108,11 +109,12 @@ final class RuntimeListModel extends \Qt\Core\QAbstractListModel
      */
     public function appendItems(array $items): void
     {
-        $first = count($this->items);
-        $last = $first + count($items) - 1;
-        $this->beginInsertRows(new \Qt\Core\QModelIndex(), $first, $last);
         array_push($this->items, ...$items);
-        $this->endInsertRows();
+    }
+
+    public function itemAt(int $row): string
+    {
+        return $this->items[$row] ?? '';
     }
 }
 
@@ -130,8 +132,8 @@ $list->appendItems([
     'Order synced',
 ]);
 
-$tableCell = $table->data($table->index(1, 0))->toString();
-$listItem = $list->data($list->index(2, 0))->toString();
+$tableCell = $table->cellAt(1, 0);
+$listItem = $list->itemAt(2);
 
 qt_runtime_result([
     'table_rows' => $table->rowCount(),

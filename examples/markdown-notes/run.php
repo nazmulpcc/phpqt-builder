@@ -245,11 +245,15 @@ $reloadList = static function () use ($controller, $list, $search): void {
 
 $reloadList();
 
-$search->input()->connect('textChanged(QString)', $reloadList);
-$title->connect('textChanged(QString)', [$controller, 'markDirty']);
-$editor->connect('textChanged()', [$controller, 'markDirty']);
+$search->input()->onTextChanged($reloadList);
+$title->onTextChanged(static function (string $_text) use ($controller): void {
+    $controller->markDirty();
+});
+$editor->onTextChanged(static function () use ($controller): void {
+    $controller->markDirty();
+});
 
-$list->connect('currentRowChanged(int)', static function (int $row) use ($list, $controller, $banner): void {
+$list->onCurrentRowChanged(static function (int $row) use ($list, $controller, $banner): void {
     $item = $list->item($row);
     if ($item === null) {
         return;

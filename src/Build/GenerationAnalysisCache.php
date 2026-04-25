@@ -6,6 +6,7 @@ namespace QtBuilder\Build;
 
 use QtBuilder\Definition\PhpClass;
 use QtBuilder\Scanning\HeaderCandidate;
+use QtBuilder\Support\GeneratedTypeIdentity;
 
 final class GenerationAnalysisCache
 {
@@ -150,7 +151,25 @@ final class GenerationAnalysisCache
         array $classNamespaces,
         EnumHolderRegistry $enumRegistry,
     ): string {
-        return hash('sha256', json_encode($this->normalizeValue([
+        return hash('sha256', json_encode($this->cacheKeyPayload(
+            $request,
+            $acceptedCandidates,
+            $initialSkippedClasses,
+            $preparedClassDataByClass,
+            $classNamespaces,
+            $enumRegistry,
+        ), JSON_UNESCAPED_SLASHES) ?: '');
+    }
+
+    private function cacheKeyPayload(
+        BuildExecutionRequest $request,
+        array $acceptedCandidates,
+        array $initialSkippedClasses,
+        array $preparedClassDataByClass,
+        array $classNamespaces,
+        EnumHolderRegistry $enumRegistry,
+    ): array {
+        return $this->normalizeValue([
             'schema' => self::SCHEMA_VERSION,
             'request' => [
                 'modules' => array_values($request->modules),
@@ -168,7 +187,7 @@ final class GenerationAnalysisCache
                 static fn(EnumHolderDefinition $holder): array => $holder->toArray(),
                 $enumRegistry->holders(),
             ),
-        ]), JSON_UNESCAPED_SLASHES) ?: '');
+        ]);
     }
 
     /**
@@ -194,14 +213,19 @@ final class GenerationAnalysisCache
     private function serializeCandidates(array $candidates): array
     {
         $serialized = array_values(array_map(
-            static fn(HeaderCandidate $candidate): array => [
-                'module' => $candidate->module,
-                'class' => $candidate->className,
-                'qualified_name' => $candidate->qualifiedClassName,
-                'generation_id' => $candidate->resolvedGenerationId(),
-                'public_header' => $candidate->publicHeader,
-                'parse_header' => $candidate->parseHeader,
-            ],
+            function (HeaderCandidate $candidate): array {
+                $publicHeader = $this->normalizeStringValue($candidate->publicHeader);
+                $parseHeader = $this->normalizeStringValue($candidate->parseHeader);
+
+                return [
+                    'module' => $candidate->module,
+                    'class' => $candidate->className,
+                    'qualified_name' => $candidate->qualifiedClassName,
+                    'generation_id' => $this->normalizedCandidateGenerationId($candidate, $parseHeader),
+                    'public_header' => $publicHeader,
+                    'parse_header' => $parseHeader,
+                ];
+            },
             $candidates,
         ));
 
@@ -213,6 +237,24 @@ final class GenerationAnalysisCache
         });
 
         return $serialized;
+    }
+
+    private function normalizedCandidateGenerationId(HeaderCandidate $candidate, string $normalizedParseHeader): string
+    {
+        $qualifiedName = $candidate->qualifiedClassName;
+        if (is_string($qualifiedName) && trim($qualifiedName) !== '') {
+            return GeneratedTypeIdentity::fromNames(
+                $candidate->className,
+                $qualifiedName,
+                $candidate->module,
+            )->generationId;
+        }
+
+        return GeneratedTypeIdentity::provisional(
+            $candidate->module,
+            $candidate->className,
+            $normalizedParseHeader,
+        )->generationId;
     }
 
     /**
@@ -437,6 +479,10 @@ final class GenerationAnalysisCache
 
     private function normalizeValue(mixed $value): mixed
     {
+        if (is_string($value)) {
+            return $this->normalizeStringValue($value);
+        }
+
         if (!is_array($value)) {
             return $value;
         }
@@ -453,10 +499,65 @@ final class GenerationAnalysisCache
                 continue;
             }
 
-            $normalized[(string) $key] = $this->normalizeValue($value[$key]);
+            $normalizedKey = is_string($key)
+                ? $this->normalizeStringValue($key)
+                : (string) $key;
+
+            $normalized[$normalizedKey] = $this->normalizeValue($value[$key]);
         }
 
         return $normalized;
+    }
+
+    private function normalizeStringValue(string $value): string
+    {
+        if ($value === '') {
+            return $value;
+        }
+
+        $value = $this->normalizeEmbeddedWindowsPaths($value);
+
+        if (!$this->looksLikePath($value)) {
+            return $value;
+        }
+
+        $normalized = str_replace('\\', '/', $value);
+        $normalized = preg_replace('#(?<!:)/{2,}#', '/', $normalized) ?? $normalized;
+
+        if ($this->isWindowsAbsolutePath($normalized) || str_starts_with($normalized, '//')) {
+            return strtolower($normalized);
+        }
+
+        return $normalized;
+    }
+
+    private function normalizeEmbeddedWindowsPaths(string $value): string
+    {
+        return preg_replace_callback(
+            '/[A-Za-z]:[\\\\\\/][^\s,)]+/',
+            function (array $matches): string {
+                $path = (string) ($matches[0] ?? '');
+                $normalized = str_replace('\\', '/', $path);
+                $normalized = preg_replace('#(?<!:)/{2,}#', '/', $normalized) ?? $normalized;
+
+                return strtolower($normalized);
+            },
+            $value,
+        ) ?? $value;
+    }
+
+    private function looksLikePath(string $value): bool
+    {
+        if ($this->isWindowsAbsolutePath($value) || str_starts_with($value, '\\\\') || str_starts_with($value, '//')) {
+            return true;
+        }
+
+        return str_contains($value, '/');
+    }
+
+    private function isWindowsAbsolutePath(string $value): bool
+    {
+        return preg_match('/^[A-Za-z]:[\\\\\\/]/', $value) === 1;
     }
 
     /**
@@ -465,7 +566,10 @@ final class GenerationAnalysisCache
      */
     private function normalizeSkippedClasses(array $skippedClasses): array
     {
-        $normalized = array_values(array_filter($skippedClasses, 'is_array'));
+        $normalized = array_values(array_map(
+            fn(array $entry): array => $this->normalizeValue($entry),
+            array_filter($skippedClasses, 'is_array'),
+        ));
         usort($normalized, static function (array $left, array $right): int {
             return strcmp(
                 json_encode($left, JSON_UNESCAPED_SLASHES) ?: '',
