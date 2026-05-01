@@ -165,6 +165,7 @@ private:
     bool m_metaObjectBuilt{false};
 
     std::unordered_map<std::string, int> m_signalIndexByName;
+    std::vector<size_t> m_methodIndexToMetadataIndex;
 };
 
 PHP_QT_API void qt_php_metaobject_register_bridge(QObject *native, QtPhpMetaObjectBridge *bridge);

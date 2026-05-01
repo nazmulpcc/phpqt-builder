@@ -5,6 +5,7 @@
  */
 
 #include "qt_qmetaobject_bridge.h"
+#include "qt_qobject.h"
 #include "qt_php_signal_helpers.h"
 #include "qt_slotattribute.h"
 
@@ -244,7 +245,8 @@ void QtPhpMetaObjectBridge::buildDynamicMetaObject()
     builder.setClassName(m_phpCe->name->val);
     builder.setSuperClass(&QObject::staticMetaObject);
 
-    for (const auto &method : m_classMetadata->methods) {
+    auto addMethod = [&] (size_t metadataIndex) {
+        const auto &method = m_classMetadata->methods[metadataIndex];
         std::string sig = method.name + "(";
         for (size_t i = 0; i < method.param_types.size(); i++) {
             if (i > 0) sig += ",";
@@ -256,15 +258,40 @@ void QtPhpMetaObjectBridge::buildDynamicMetaObject()
         QMetaMethodBuilder mb = (method.kind == qt_php_metaobject_method_entry::kind_t::signal_method)
             ? builder.addSignal(QByteArray::fromStdString(sig))
             : builder.addSlot(QByteArray::fromStdString(sig));
-
         mb.setAccess(QMetaMethod::Public);
 
         QList<QByteArray> paramNames;
         for (size_t i = 0; i < method.param_types.size(); i++) {
-            paramNames.append(QByteArray());
+            paramNames.append(QByteArray("arg") + QByteArray::number(i));
         }
         if (!paramNames.isEmpty()) {
             mb.setParameterNames(paramNames);
+        }
+
+        int localMethodIndex = mb.index();
+        if (localMethodIndex >= 0) {
+            if ((size_t) localMethodIndex >= m_methodIndexToMetadataIndex.size()) {
+                m_methodIndexToMetadataIndex.resize((size_t) localMethodIndex + 1, ((size_t) -1));
+            }
+            m_methodIndexToMetadataIndex[(size_t) localMethodIndex] = metadataIndex;
+        }
+    };
+
+    int signalIndex = 0;
+    for (size_t i = 0; i < m_classMetadata->methods.size(); i++) {
+        const auto &method = m_classMetadata->methods[i];
+        if (method.kind == qt_php_metaobject_method_entry::kind_t::signal_method) {
+            addMethod(i);
+            std::string lcKey(method.name);
+            for (char &ch : lcKey) { ch = (char) std::tolower((unsigned char) ch); }
+            m_signalIndexByName[lcKey] = signalIndex++;
+        }
+    }
+
+    for (size_t i = 0; i < m_classMetadata->methods.size(); i++) {
+        const auto &method = m_classMetadata->methods[i];
+        if (method.kind == qt_php_metaobject_method_entry::kind_t::slot_method) {
+            addMethod(i);
         }
     }
 
@@ -390,11 +417,14 @@ int QtPhpMetaObjectBridge::qt_metacall(QMetaObject::Call call, int id, void **ar
     if (id < 0) return id;
 
     if (call == QMetaObject::InvokeMetaMethod) {
-        int methodCount = m_classMetadata ? (int) m_classMetadata->methods.size() : 0;
+        int methodCount = (int) m_methodIndexToMetadataIndex.size();
         if (id < methodCount) {
-            const auto &method = m_classMetadata->methods[id];
-            if (method.kind == qt_php_metaobject_method_entry::kind_t::slot_method) {
-                qt_php_metaobject_invoke_slot(m_phpObject, method.name, method.param_types, args);
+            size_t metadataIndex = m_methodIndexToMetadataIndex[(size_t) id];
+            if (metadataIndex != ((size_t) -1) && m_classMetadata != nullptr && metadataIndex < m_classMetadata->methods.size()) {
+                const auto &method = m_classMetadata->methods[metadataIndex];
+                if (method.kind == qt_php_metaobject_method_entry::kind_t::slot_method) {
+                    qt_php_metaobject_invoke_slot(m_phpObject, method.name, method.param_types, args);
+                }
             }
         }
         id -= methodCount;
@@ -441,7 +471,13 @@ void QtPhpMetaObjectBridge::activatePhpSignal(const char *signalName, int argc, 
     }
     if (signalIndex < 0) return;
 
-    int localIndex = signalIndex - m_dynamicMetaObject->methodOffset();
+    int localIndex = -1;
+    auto signalIt = m_signalIndexByName.find(lowered);
+    if (signalIt != m_signalIndexByName.end()) {
+        localIndex = signalIt->second;
+    }
+    if (localIndex < 0) return;
+
     QMetaObject::activate(this, m_dynamicMetaObject, localIndex, argv);
 }
 
@@ -484,7 +520,7 @@ PHP_QT_API zend_function *qt_php_metaobject_get_method(
     func->scope = fbc->common.scope;
     func->num_args = fbc->common.num_args;
     func->required_num_args = fbc->common.required_num_args;
-    func->arg_info = fbc->common.arg_info;
+    func->arg_info = (zend_internal_arg_info *) fbc->common.arg_info;
     func->handler = qt_php_metaobject_signal_trampoline;
 
     return (zend_function *) func;
@@ -547,84 +583,65 @@ PHP_QT_API void qt_php_metaobject_signal_trampoline(INTERNAL_FUNCTION_PARAMETERS
     const auto &entry = metadata->methods[it->second];
     uint32_t argc = ZEND_CALL_NUM_ARGS(execute_data);
 
-    std::vector<void *> argvStorage(argc + 1, nullptr);
-    std::vector<bool> storage;
+    std::vector<void *> argvStorage(entry.param_types.size() + 1, nullptr);
     std::vector<int> argMetaTypes;
+    argMetaTypes.reserve(entry.param_types.size());
 
     for (size_t i = 0; i < entry.param_types.size(); i++) {
         int mt = qt_php_metaobject_type_token_to_qmetatype(entry.param_types[i]);
         argMetaTypes.push_back(mt != QMetaType::UnknownType ? mt : QMetaType::QVariant);
-    }
+        zval *arg = (i < argc) ? ZEND_CALL_ARG(execute_data, i + 1) : &EG(uninitialized_zval);
 
-    #define QT_PHP_EMIT_ARG_CASE(mt, php_type, storage_type) \
-        case mt: { \
-            storage_type typed; \
-            ZVAL_UNDEF(&tmp); \
-            if (zend_parse_parameter(i + 1, &tmp, php_type) == FAILURE) { \
-                typed = storage_type{}; \
-            } else { \
-                typed = static_cast<storage_type>(zval_get_##php_type(&tmp)); \
-                if (!Z_ISUNDEF(tmp)) zval_ptr_dtor(&tmp); \
-            } \
-            void *heap = emalloc(sizeof(storage_type)); \
-            std::memcpy(heap, &typed, sizeof(storage_type)); \
-            argvStorage[i + 1] = heap; \
-            break; \
-        }
-
-    zval tmp;
-    for (uint32_t i = 0; i < argc && i < entry.param_types.size(); i++) {
-        ZVAL_UNDEF(&tmp);
-        int mt = (i < argMetaTypes.size()) ? argMetaTypes[i] : QMetaType::QVariant;
-        switch (mt) {
+        switch (argMetaTypes.back()) {
             case QMetaType::Bool: {
-                bool val = (i < argc) ? zval_is_true(ZEND_CALL_ARG(execute_data, i + 1)) : false;
-                void *heap = emalloc(sizeof(bool));
-                std::memcpy(heap, &val, sizeof(bool));
+                bool *heap = static_cast<bool *>(emalloc(sizeof(bool)));
+                *heap = zend_is_true(arg);
                 argvStorage[i + 1] = heap;
                 break;
             }
             case QMetaType::Int: {
-                zend_long val = (i < argc) ? zval_get_long(ZEND_CALL_ARG(execute_data, i + 1)) : 0;
-                void *heap = emalloc(sizeof(int));
-                int typed = static_cast<int>(val);
-                std::memcpy(heap, &typed, sizeof(int));
+                int *heap = static_cast<int *>(emalloc(sizeof(int)));
+                *heap = static_cast<int>(zval_get_long(arg));
+                argvStorage[i + 1] = heap;
+                break;
+            }
+            case QMetaType::LongLong: {
+                qlonglong *heap = static_cast<qlonglong *>(emalloc(sizeof(qlonglong)));
+                *heap = static_cast<qlonglong>(zval_get_long(arg));
                 argvStorage[i + 1] = heap;
                 break;
             }
             case QMetaType::Double: {
-                double val = (i < argc) ? zval_get_double(ZEND_CALL_ARG(execute_data, i + 1)) : 0.0;
-                void *heap = emalloc(sizeof(double));
-                std::memcpy(heap, &val, sizeof(double));
+                double *heap = static_cast<double *>(emalloc(sizeof(double)));
+                *heap = zval_get_double(arg);
                 argvStorage[i + 1] = heap;
                 break;
             }
             case QMetaType::QString: {
-                zval *arg = (i < argc) ? ZEND_CALL_ARG(execute_data, i + 1) : &EG(uninitialized_zval);
                 zend_string *zs = zval_get_string(arg);
-                QString qs = QString::fromUtf8(ZSTR_VAL(zs), static_cast<int>(ZSTR_LEN(zs)));
                 void *heap = emalloc(sizeof(QString));
-                new (heap) QString(std::move(qs));
-                argvStorage[i + 1] = heap;
+                new (heap) QString(QString::fromUtf8(ZSTR_VAL(zs), static_cast<int>(ZSTR_LEN(zs))));
                 zend_string_release(zs);
+                argvStorage[i + 1] = heap;
                 break;
             }
             case QMetaType::QVariant: {
-                zval *arg = (i < argc) ? ZEND_CALL_ARG(execute_data, i + 1) : &EG(uninitialized_zval);
                 void *heap = emalloc(sizeof(QVariant));
                 switch (Z_TYPE_P(arg)) {
+                    case IS_STRING:
+                        new (heap) QVariant(QString::fromUtf8(Z_STRVAL_P(arg), static_cast<int>(Z_STRLEN_P(arg))));
+                        break;
                     case IS_TRUE:
+                        new (heap) QVariant(true);
+                        break;
                     case IS_FALSE:
-                        new (heap) QVariant(Z_TYPE_P(arg) == IS_TRUE);
+                        new (heap) QVariant(false);
                         break;
                     case IS_LONG:
-                        new (heap) QVariant(static_cast<int>(Z_LVAL_P(arg)));
+                        new (heap) QVariant(static_cast<qlonglong>(Z_LVAL_P(arg)));
                         break;
                     case IS_DOUBLE:
                         new (heap) QVariant(Z_DVAL_P(arg));
-                        break;
-                    case IS_STRING:
-                        new (heap) QVariant(QString::fromUtf8(Z_STRVAL_P(arg), static_cast<int>(Z_STRLEN_P(arg))));
                         break;
                     default:
                         new (heap) QVariant();
@@ -633,19 +650,17 @@ PHP_QT_API void qt_php_metaobject_signal_trampoline(INTERNAL_FUNCTION_PARAMETERS
                 argvStorage[i + 1] = heap;
                 break;
             }
-            default: {
+            default:
                 argvStorage[i + 1] = nullptr;
                 break;
-            }
         }
     }
 
-    bridge->activatePhpSignal(entry.name.c_str(), static_cast<int>(argc), argvStorage.data());
+    bridge->activatePhpSignal(entry.name.c_str(), static_cast<int>(entry.param_types.size()), argvStorage.data());
 
     for (size_t i = 0; i < entry.param_types.size() && i + 1 < argvStorage.size(); i++) {
         if (argvStorage[i + 1] != nullptr) {
-            int mt = (i < argMetaTypes.size()) ? argMetaTypes[i] : QMetaType::QVariant;
-            switch (mt) {
+            switch (argMetaTypes[i]) {
                 case QMetaType::QString:
                     static_cast<QString *>(argvStorage[i + 1])->~QString();
                     efree(argvStorage[i + 1]);
