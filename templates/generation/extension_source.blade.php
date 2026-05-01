@@ -38,6 +38,7 @@ extern "C" {
 @endif
 @if($ctx->includeSignalConnectionSupport)
 #include "classes/qt_php_signal_helpers.h"
+#include "classes/qt_qmetaobject_bridge.h"
 @endif
 
 static std::atomic_bool qt_shutdown_in_progress{false};

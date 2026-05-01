@@ -62,6 +62,7 @@
 @endif
 @if($ctx->nativeCppType === 'QObject')
 #include "qt_qthread.h"
+#include "qt_qmetaobject_bridge.h"
 @endif
 
 #include "qt_class_helpers.h"
@@ -1558,6 +1559,68 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, emit)
         zend_throw_error(NULL, "%s", error.c_str());
         RETURN_THROWS();
     }
+
+@if($ctx->nativeCppType === 'QObject')
+    QtPhpMetaObjectBridge *_qt_bridge = qt_php_metaobject_bridge_for_native(static_cast<QObject *>(intern->native_ptr));
+    if (_qt_bridge != nullptr) {
+        auto _qt_sig_metadata = qt_php_metaobject_metadata_for_ce(Z_OBJCE_P(ZEND_THIS), nullptr);
+        if (_qt_sig_metadata && _qt_sig_metadata->valid) {
+            std::string _qt_sig_lookup(ZSTR_VAL(signal_name), ZSTR_LEN(signal_name));
+            auto _qt_sig_it = _qt_sig_metadata->method_by_name.find(_qt_sig_lookup);
+            if (_qt_sig_it != _qt_sig_metadata->method_by_name.end()) {
+                const auto &_qt_sig_method = _qt_sig_metadata->methods[_qt_sig_it->second];
+                if (_qt_sig_method.kind == qt_php_metaobject_method_entry::kind_t::signal_method) {
+                    const int _qt_sig_argc = (int) _qt_sig_method.param_types.size();
+                    std::vector<void *> _qt_emit_args(_qt_sig_argc + 1, nullptr);
+                    std::vector<QVariant> _qt_emit_storage(_qt_sig_argc);
+                    if (args != NULL && Z_TYPE_P(args) == IS_ARRAY && _qt_sig_argc > 0) {
+                        uint32_t _qt_arg_idx = 0;
+                        zval *_qt_arg_entry = NULL;
+                        ZEND_HASH_FOREACH_VAL(Z_ARRVAL_P(args), _qt_arg_entry) {
+                            if (_qt_arg_idx >= (uint32_t) _qt_sig_argc) break;
+                            if (_qt_arg_entry == NULL) { _qt_arg_idx++; continue; }
+                            const std::string &_qt_type_token = _qt_sig_method.param_types[_qt_arg_idx];
+                            int _qt_meta_type = qt_php_metaobject_type_token_to_qmetatype(_qt_type_token);
+                            switch (_qt_meta_type) {
+                                case QMetaType::QString: {
+                                    zend_string *_qt_zs = zval_get_string(_qt_arg_entry);
+                                    _qt_emit_storage[_qt_arg_idx] = QVariant(QString::fromUtf8(ZSTR_VAL(_qt_zs), (int) ZSTR_LEN(_qt_zs)));
+                                    zend_string_release(_qt_zs);
+                                    _qt_emit_args[_qt_arg_idx + 1] = const_cast<void *>(_qt_emit_storage[_qt_arg_idx].constData());
+                                    break;
+                                }
+                                case QMetaType::Bool: {
+                                    _qt_emit_storage[_qt_arg_idx] = QVariant(zend_is_true(_qt_arg_entry));
+                                    _qt_emit_args[_qt_arg_idx + 1] = const_cast<void *>(_qt_emit_storage[_qt_arg_idx].constData());
+                                    break;
+                                }
+                                case QMetaType::LongLong: {
+                                    zend_long _qt_lv = zval_get_long(_qt_arg_entry);
+                                    _qt_emit_storage[_qt_arg_idx] = QVariant((qlonglong) _qt_lv);
+                                    _qt_emit_args[_qt_arg_idx + 1] = const_cast<void *>(_qt_emit_storage[_qt_arg_idx].constData());
+                                    break;
+                                }
+                                case QMetaType::Double: {
+                                    double _qt_dv = zval_get_double(_qt_arg_entry);
+                                    _qt_emit_storage[_qt_arg_idx] = QVariant(_qt_dv);
+                                    _qt_emit_args[_qt_arg_idx + 1] = const_cast<void *>(_qt_emit_storage[_qt_arg_idx].constData());
+                                    break;
+                                }
+                                default: {
+                                    _qt_emit_storage[_qt_arg_idx] = QVariant();
+                                    _qt_emit_args[_qt_arg_idx + 1] = const_cast<void *>(_qt_emit_storage[_qt_arg_idx].constData());
+                                    break;
+                                }
+                            }
+                            _qt_arg_idx++;
+                        } ZEND_HASH_FOREACH_END();
+                    }
+                    _qt_bridge->activatePhpSignal(ZSTR_VAL(signal_name), _qt_sig_argc, _qt_emit_args.data());
+                }
+            }
+        }
+    }
+@endif
 
     return;
 }

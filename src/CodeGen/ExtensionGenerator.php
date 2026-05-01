@@ -240,6 +240,11 @@ class ExtensionGenerator
             ['qt_signalattribute.h', 'generation.support.signalattribute_header'],
             ['qt_signalattribute.cpp', 'generation.support.signalattribute_source'],
             ['qt_signalattribute.stub.php', 'generation.support.signalattribute_stub'],
+            ['qt_slotattribute.h', 'generation.support.slotattribute_header'],
+            ['qt_slotattribute.cpp', 'generation.support.slotattribute_source'],
+            ['qt_slotattribute.stub.php', 'generation.support.slotattribute_stub'],
+            ['qt_qmetaobject_bridge.h', 'generation.support.qmetaobject_bridge_header'],
+            ['qt_qmetaobject_bridge.cpp', 'generation.support.qmetaobject_bridge_source'],
         ];
 
         foreach ($supportFiles as [$filename, $view]) {

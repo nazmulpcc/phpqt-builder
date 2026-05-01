@@ -102,6 +102,7 @@ class QtInstallationResolver
                     if ($versionedModuleDirs !== false) {
                         foreach ($versionedModuleDirs as $dir) {
                             if (is_dir($dir)) {
+                                $includeRoots[] = dirname($dir);
                                 $includeRoots[] = $dir;
                             }
                         }
