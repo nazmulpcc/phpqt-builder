@@ -2242,6 +2242,9 @@ PHP_MINIT_FUNCTION({!! $ctx->minitName !!})
     {!! $ctx->handlersVarName !!}.has_property = {!! $ctx->filePrefix !!}_has_property;
     {!! $ctx->handlersVarName !!}.get_properties_for = {!! $ctx->filePrefix !!}_get_properties_for;
 @endif
+@if($ctx->isQObjectDerived)
+    {!! $ctx->handlersVarName !!}.get_method = qt_php_metaobject_get_method;
+@endif
     {!! $ctx->ceVarName !!}->default_object_handlers = &{!! $ctx->handlersVarName !!};
 
     return SUCCESS;

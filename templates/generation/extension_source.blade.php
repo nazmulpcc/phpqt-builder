@@ -131,22 +131,6 @@ bool qt_runtime_is_shutdown_in_progress(void)
 @if($ctx->includeSignalConnectionSupport)
 static void qt_execute_signal_guard(zend_execute_data *execute_data)
 {
-    zend_function *func = execute_data != NULL ? execute_data->func : NULL;
-    if (func != NULL
-        && func->type == ZEND_USER_FUNCTION
-        && qt_php_signal_function_is_declaration(func)) {
-        const char *method_name = (func->common.function_name != NULL)
-            ? ZSTR_VAL(func->common.function_name)
-            : "<unknown>";
-        zend_throw_error(
-            NULL,
-            "Signal \"%s\" cannot be invoked directly; use emit('%s', ...).",
-            method_name,
-            method_name
-        );
-        return;
-    }
-
     if (qt_saved_execute_ex != nullptr) {
         qt_saved_execute_ex(execute_data);
         return;

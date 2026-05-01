@@ -97,7 +97,7 @@ static inline int qt_php_metaobject_type_token_to_qmetatype(const std::string &t
     }(token);
 
     if (lowered == "bool") return QMetaType::Bool;
-    if (lowered == "int") return QMetaType::LongLong;
+    if (lowered == "int") return QMetaType::Int;
     if (lowered == "float") return QMetaType::Double;
     if (lowered == "string") return QMetaType::QString;
     if (lowered == "array" || lowered == "mixed") return QMetaType::QVariant;
@@ -170,5 +170,8 @@ private:
 PHP_QT_API void qt_php_metaobject_register_bridge(QObject *native, QtPhpMetaObjectBridge *bridge);
 PHP_QT_API void qt_php_metaobject_unregister_bridge(QObject *native);
 PHP_QT_API QtPhpMetaObjectBridge *qt_php_metaobject_bridge_for_native(QObject *native);
+
+PHP_QT_API zend_function *qt_php_metaobject_get_method(zend_object **object, zend_string *method_name, const zval *key);
+PHP_QT_API void qt_php_metaobject_signal_trampoline(INTERNAL_FUNCTION_PARAMETERS);
 
 #endif /* QT_METAOBJECT_BRIDGE_H */
