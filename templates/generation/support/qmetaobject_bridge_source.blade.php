@@ -223,6 +223,12 @@ QtPhpMetaObjectBridge::QtPhpMetaObjectBridge(QObject *parent, zend_class_entry *
     }
 
     buildDynamicMetaObject();
+
+    if (m_dynamicMetaObject) {
+        auto *dmd = new QtPhpDynamicMetaObjectData(m_dynamicMetaObject);
+        static_cast<QObjectPrivate *>(QObject::d_ptr.data())->metaObject = dmd;
+    }
+
     qt_php_metaobject_register_bridge(this, this);
 }
 

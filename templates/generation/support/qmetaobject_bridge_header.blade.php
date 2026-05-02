@@ -35,6 +35,14 @@ extern "C" {
 #include <unordered_map>
 
 #include <private/qmetaobjectbuilder_p.h>
+#include <private/qobject_p.h>
+
+struct QtPhpDynamicMetaObjectData : public QDynamicMetaObjectData {
+    QMetaObject *meta;
+    explicit QtPhpDynamicMetaObjectData(QMetaObject *m) : meta(m) {}
+    void objectDestroyed(QObject *) override {}
+    QMetaObject *toDynamicMetaObject(QObject *) override { return meta; }
+};
 
 #ifndef PHP_QT_API
 # if defined(PHP_WIN32)
