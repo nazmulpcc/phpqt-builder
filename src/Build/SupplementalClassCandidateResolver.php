@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace QtBuilder\Build;
 
+use QtBuilder\Filtering\ClassExposurePolicy;
 use QtBuilder\Parsing\ClangArgumentBuilder;
 use QtBuilder\Parsing\QtClassInspector;
 use QtBuilder\Scanning\HeaderCandidate;
@@ -12,6 +13,7 @@ class SupplementalClassCandidateResolver
 {
     public function __construct(
         private readonly IncludeGraphResolver $includeGraphResolver = new IncludeGraphResolver(),
+        private readonly ClassExposurePolicy $classPolicy = new ClassExposurePolicy(),
     ) {}
 
     /**
@@ -33,6 +35,10 @@ class SupplementalClassCandidateResolver
         }
 
         if (isset($knownClasses[$missingClass])) {
+            return null;
+        }
+
+        if (!$this->classPolicy->decideClassName($missingClass)->accepted) {
             return null;
         }
 

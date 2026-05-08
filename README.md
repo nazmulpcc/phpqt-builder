@@ -150,13 +150,14 @@ php qtb example calculator-basic
 
 ## Supported Qt Modules
 
-PHP Qt Builder currently supports **36 Qt 6 modules**. The build system automatically resolves inter-module dependencies.
+PHP Qt Builder currently supports **37 Qt 6 modules**. The build system automatically resolves inter-module dependencies.
 
 | Module | Extension | Dependencies |
 |--------|-----------|--------------|
 | `QtCore` | `qtcore` | — |
 | `QtGui` | `qtgui` | QtCore |
 | `QtWidgets` | `qtwidgets` | QtCore, QtGui |
+| `QtTest` | `qttest` | QtCore, QtGui, QtWidgets |
 | `QtNetwork` | `qtnetwork` | QtCore |
 | `QtBluetooth` | `qtbluetooth` | QtCore, QtNetwork |
 | `QtSql` | `qtsql` | QtCore |

@@ -19,6 +19,14 @@
                 "QtGui"
             ]
         },
+        "QtTest": {
+            "extension_name": "qttest",
+            "dependencies": [
+                "QtCore",
+                "QtGui",
+                "QtWidgets"
+            ]
+        },
     "QtNetwork": {
       "extension_name": "qtnetwork",
       "dependencies": [

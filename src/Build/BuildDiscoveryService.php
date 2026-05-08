@@ -434,7 +434,27 @@ class BuildDiscoveryService
             /** @var array<string, SupplementalClassCandidate> $queuedThisPass */
             $queuedThisPass = [];
             $candidateLoopStartedAt = microtime(true);
+            $candidateCount = count($candidateMap);
+            $processedCandidates = 0;
+            $progressBar = $this->createProgressBar(
+                $output,
+                $candidateCount,
+                'qt_supplemental_discovery',
+                'Supplemental discovery pass ' . $pass,
+            );
+            $progressBar?->start();
             foreach ($candidateMap as $className => $candidate) {
+                $processedCandidates++;
+                if ($this->debugTimingEnabled() && ($processedCandidates === 1 || $processedCandidates % 100 === 0 || $processedCandidates === $candidateCount)) {
+                    $output->writeln(sprintf(
+                        '  <comment>debug:</comment> supplemental.pass_%d progress %d/%d (%s)',
+                        $pass,
+                        $processedCandidates,
+                        $candidateCount,
+                        $candidate->identityKey(),
+                    ));
+                }
+                $progressBar?->advance();
                 $classData = $preparedClassDataByClass[$className] ?? null;
                 if (!is_array($classData)) {
                     continue;
@@ -473,6 +493,10 @@ class BuildDiscoveryService
 
                 $queuedThisPass[$supplemental->candidate->identityKey()] = $supplemental;
                 $knownClasses[$supplemental->candidate->identityKey()] = true;
+            }
+            if ($progressBar !== null) {
+                $progressBar->finish();
+                $output->write(PHP_EOL);
             }
             $this->renderDebugTiming(
                 $output,

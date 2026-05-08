@@ -12,6 +12,7 @@ it('loads supported modules from the static manifest', function (): void {
         'QtCore',
         'QtGui',
         'QtWidgets',
+        'QtTest',
         'QtNetwork',
         'QtBluetooth',
         'QtSql',
@@ -46,6 +47,20 @@ it('loads supported modules from the static manifest', function (): void {
         'QtCharts',
         'Qt3DAnimation',
     ]);
+});
+
+it('expands qttest dependencies for automated GUI testing support', function (): void {
+    $resolver = new StaticModuleDependencyResolver();
+
+    $graph = $resolver->resolve(['QtTest']);
+
+    expect($graph)->toBeInstanceOf(ResolvedModuleGraph::class)
+        ->and($graph->requestedModules)->toBe(['QtTest'])
+        ->and($graph->expandedModules())->toBe(['QtCore', 'QtGui', 'QtWidgets', 'QtTest'])
+        ->and($graph->autoAddedModules())->toBe(['QtCore', 'QtGui', 'QtWidgets'])
+        ->and($graph->dependenciesFor('QtTest'))->toBe(['QtCore', 'QtGui', 'QtWidgets'])
+        ->and($graph->extensionNameFor('QtTest'))->toBe('qttest')
+        ->and($graph->dependencySource)->toBe('static_manifest');
 });
 
 it('expands transitive dependencies with a stable topological order', function (): void {

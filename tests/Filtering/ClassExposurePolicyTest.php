@@ -30,3 +30,12 @@ it('explicitly filters the internal qml placeholder type', function (): void {
     expect($decision->accepted)->toBeFalse()
         ->and($decision->reasonCode)->toBe('class_filtered');
 });
+
+it('filters qtest accessibility because its public header defines link-visible helpers', function (): void {
+    $policy = new ClassExposurePolicy();
+
+    $decision = $policy->decideClassName('QTestAccessibility');
+
+    expect($decision->accepted)->toBeFalse()
+        ->and($decision->reasonCode)->toBe('class_filtered');
+});
