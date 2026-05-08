@@ -243,6 +243,22 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
         intern->native_is_virtual_trampoline = true;
         intern->native_rebind_php_object = {!! $ctx->filePrefix !!}_rebind_php_object;
     } else {
+@if($ctx->nativeCppType === 'QObject')
+        zend_class_entry *_qt_php_ce = Z_OBJCE_P(ZEND_THIS);
+        if (_qt_php_ce != qt_ce_qobject && qt_php_metaobject_class_needs_bridging(_qt_php_ce)) {
+            intern->native_ptr = new QtPhpMetaObjectBridge({!! implode(', ', $callPlan['args']) !!}, _qt_php_ce, &intern->std);
+        } else {
+@if($ctx->isAbstract)
+            zend_throw_error(NULL, "Abstract class {!! addslashes($ctx->phpClassName) !!} cannot be instantiated directly.");
+            RETURN_THROWS();
+@else
+            intern->native_ptr = new {!! $ctx->plainNativeInstantiationType !!}({!! implode(', ', $callPlan['args']) !!});
+            intern->native_is_generated_subclass = {!! $ctx->plainInstantiationUsesGeneratedType() ? 'true' : 'false' !!};
+            intern->native_is_virtual_trampoline = false;
+            intern->native_rebind_php_object = NULL;
+@endif
+        }
+@else
 @if($ctx->isAbstract)
         zend_throw_error(NULL, "Abstract class {!! addslashes($ctx->phpClassName) !!} cannot be instantiated directly.");
         RETURN_THROWS();
@@ -252,9 +268,19 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, __construct)
         intern->native_is_virtual_trampoline = false;
         intern->native_rebind_php_object = NULL;
 @endif
+@endif
+    }
+@else
+@if($ctx->nativeCppType === 'QObject')
+    zend_class_entry *_qt_php_ce = Z_OBJCE_P(ZEND_THIS);
+    if (_qt_php_ce != qt_ce_qobject && qt_php_metaobject_class_needs_bridging(_qt_php_ce)) {
+        intern->native_ptr = new QtPhpMetaObjectBridge({!! implode(', ', $callPlan['args']) !!}, _qt_php_ce, &intern->std);
+    } else {
+        intern->native_ptr = new QObject({!! implode(', ', $callPlan['args']) !!});
     }
 @else
     intern->native_ptr = new {!! $ctx->nativeInstantiationType !!}({!! implode(', ', $callPlan['args']) !!});
+@endif
 @if($ctx->tracksGeneratedNativeSubclass)
     intern->native_is_generated_subclass = true;
 @endif

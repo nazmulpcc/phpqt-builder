@@ -147,6 +147,8 @@ readonly class ExtensionBuildContext
                 ? [
                     'classes/qt_qphpsignalconnection.h',
                     'classes/qt_signalattribute.h',
+                    'classes/qt_slotattribute.h',
+                    'classes/qt_qmetaobject_bridge.h',
                 ]
                 : [],
         ));
@@ -173,6 +175,8 @@ readonly class ExtensionBuildContext
                     'classes/qt_qphpsignalconnection.cpp',
                     'classes/qt_php_signal_helpers.cpp',
                     'classes/qt_signalattribute.cpp',
+                    'classes/qt_slotattribute.cpp',
+                    'classes/qt_qmetaobject_bridge.cpp',
                 ]
                 : [],
         ));
@@ -241,7 +245,7 @@ readonly class ExtensionBuildContext
                 $this->enumHolders,
             ),
             $this->includeSignalConnectionSupport
-                ? ['qt_qphpsignalconnection', 'qt_signalattribute']
+                ? ['qt_qphpsignalconnection', 'qt_signalattribute', 'qt_slotattribute']
                 : [],
         ));
     }

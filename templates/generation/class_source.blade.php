@@ -63,6 +63,9 @@
 @if($ctx->nativeCppType === 'QObject')
 #include "qt_qthread.h"
 @endif
+@if($ctx->isQObjectDerived)
+#include "qt_qmetaobject_bridge.h"
+@endif
 
 #include "qt_class_helpers.h"
 @if($ctx->hasQObjectPropertySupport())
@@ -2178,6 +2181,9 @@ PHP_MINIT_FUNCTION({!! $ctx->minitName !!})
     {!! $ctx->handlersVarName !!}.get_property_ptr_ptr = {!! $ctx->filePrefix !!}_get_property_ptr_ptr;
     {!! $ctx->handlersVarName !!}.has_property = {!! $ctx->filePrefix !!}_has_property;
     {!! $ctx->handlersVarName !!}.get_properties_for = {!! $ctx->filePrefix !!}_get_properties_for;
+@endif
+@if($ctx->isQObjectDerived)
+    {!! $ctx->handlersVarName !!}.get_method = qt_php_metaobject_get_method;
 @endif
     {!! $ctx->ceVarName !!}->default_object_handlers = &{!! $ctx->handlersVarName !!};
 
