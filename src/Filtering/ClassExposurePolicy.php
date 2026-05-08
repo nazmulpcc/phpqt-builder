@@ -32,6 +32,7 @@ class ClassExposurePolicy
         'QStringTokenizer',
         'QStringTokenizerBase',
         'QStringTokenizerBaseBase',
+        'QTestAccessibility',
     ];
 
     /** @var list<string> */
