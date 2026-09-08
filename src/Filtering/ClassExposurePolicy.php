@@ -64,6 +64,20 @@ class ClassExposurePolicy
         'Private',
     ];
 
+    /** @var list<string> */
+    private const array ALWAYS_EXPOSE = [
+        'QPropertyAnimation',
+        'QSequentialAnimationGroup',
+        'QCryptographicHash',
+        'QCborMap',
+        'QQmlPropertyMap',
+        'QDirIterator',
+        'QTreeWidgetItemIterator',
+        'QStringMatcher',
+        'QByteArrayMatcher',
+        'QTextList',
+    ];
+
     public function decideCandidate(HeaderCandidate $candidate): ExposureDecision
     {
         return $this->decideClassName($candidate->className);
@@ -77,6 +91,10 @@ class ClassExposurePolicy
 
         if (in_array($className, self::EXACT_SKIP, true)) {
             return ExposureDecision::skip('class_filtered', sprintf('Class %s is explicitly filtered.', $className));
+        }
+
+        if (in_array($className, self::ALWAYS_EXPOSE, true)) {
+            return ExposureDecision::accept();
         }
 
         foreach (self::PREFIX_SKIP as $prefix) {

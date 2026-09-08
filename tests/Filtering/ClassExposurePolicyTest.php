@@ -39,3 +39,48 @@ it('filters qtest accessibility because its public header defines link-visible h
     expect($decision->accepted)->toBeFalse()
         ->and($decision->reasonCode)->toBe('class_filtered');
 });
+
+it('accepts whitelisted concrete classes that would otherwise match prefix or suffix filters', function (): void {
+    $policy = new ClassExposurePolicy();
+
+    $whitelisted = [
+        'QPropertyAnimation',
+        'QSequentialAnimationGroup',
+        'QCryptographicHash',
+        'QCborMap',
+        'QQmlPropertyMap',
+        'QDirIterator',
+        'QTreeWidgetItemIterator',
+        'QStringMatcher',
+        'QByteArrayMatcher',
+        'QTextList',
+    ];
+
+    foreach ($whitelisted as $className) {
+        $decision = $policy->decideClassName($className);
+        expect($decision->accepted)->toBeTrue("Expected {$className} to be accepted by ALWAYS_EXPOSE")
+            ->and($decision->reasonCode)->toBeNull();
+    }
+});
+
+it('keeps generic containers and low-level iterators filtered', function (): void {
+    $policy = new ClassExposurePolicy();
+
+    $filtered = [
+        'QProperty',
+        'QSequentialIterator',
+        'QHash',
+        'QMap',
+        'QList',
+        'QSet',
+        'QListIterator',
+        'QBitRef',
+        'QJsonValueRef',
+    ];
+
+    foreach ($filtered as $className) {
+        $decision = $policy->decideClassName($className);
+        expect($decision->accepted)->toBeFalse("Expected {$className} to be filtered")
+            ->and($decision->reasonCode)->toBe('class_filtered');
+    }
+});
