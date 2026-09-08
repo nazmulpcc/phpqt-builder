@@ -13,6 +13,7 @@ use QtBuilder\Definition\PhpParameter;
 use QtBuilder\Definition\PhpProperty;
 use QtBuilder\Support\CppClassTypeResolver;
 use QtBuilder\Support\GeneratedTypeIdentity;
+use QtBuilder\Support\SameClassReferenceResolver;
 use QtBuilder\Support\TypeResolutionContext;
 
 /**
@@ -379,8 +380,24 @@ class ClassDefinitionBuilder
         $phpTypes = [];
 
         foreach ($variants as $v) {
+            $returnType = (string) ($v['return_type'] ?? 'void');
+            if (
+                !($v['is_static'] ?? false)
+                && SameClassReferenceResolver::isSameClassReference(
+                    $returnType,
+                    $className,
+                    false,
+                    is_string($v['declaring_class'] ?? null) ? $v['declaring_class'] : null,
+                    $classTypeResolver,
+                    $resolutionContext,
+                )
+            ) {
+                $phpTypes[] = 'static';
+                continue;
+            }
+
             $cppType = $this->canonicalizeCppType(
-                (string) ($v['return_type'] ?? 'void'),
+                $returnType,
                 $classTypeResolver,
                 $resolutionContext,
             );

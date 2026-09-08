@@ -726,7 +726,7 @@ class ClassContext
         $parts = explode('|', $phpType);
 
         foreach ($parts as $part) {
-            if ($part === 'QPrivateSignal') {
+            if ($part === 'QPrivateSignal' || $part === 'static') {
                 continue;
             }
             if ($typeBridge->isObjectType($part)) {

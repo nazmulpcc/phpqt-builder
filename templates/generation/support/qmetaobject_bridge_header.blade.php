@@ -42,6 +42,9 @@ struct QtPhpDynamicMetaObjectData : public QDynamicMetaObjectData {
     explicit QtPhpDynamicMetaObjectData(QMetaObject *m) : meta(m) {}
     void objectDestroyed(QObject *) override {}
     QMetaObject *toDynamicMetaObject(QObject *) override { return meta; }
+    int metaCall(QObject *o, QMetaObject::Call c, int id, void **a) override {
+        return o ? o->qt_metacall(c, id, a) : id;
+    }
 };
 
 #ifndef PHP_QT_API

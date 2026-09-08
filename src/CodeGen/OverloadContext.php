@@ -8,6 +8,7 @@ use QtBuilder\Definition\MethodOverload;
 use QtBuilder\Definition\OverloadParameter;
 use QtBuilder\Parsing\CppToPhpTypeMapper;
 use QtBuilder\Support\CppClassTypeResolver;
+use QtBuilder\Support\SameClassReferenceResolver;
 use QtBuilder\Support\TypeResolutionContext;
 
 /**
@@ -81,12 +82,24 @@ class OverloadContext
 
         // Map the C++ return type through the type mapper to get strategy
         $ownerClass = $overload->declaringClass !== '' ? $overload->declaringClass : $classCtx->nativeCppType;
-        $this->phpReturnType = $overload->smartPointerReturnTargetCppType !== null
-            ? $this->cppReturnToPhp($overload->smartPointerReturnTargetCppType, $ownerClass)
-            : $this->cppReturnToPhp($overload->returnType, $ownerClass);
-        $this->returnStrategy = $overload->smartPointerReturnTargetCppType !== null
-            ? 'smart_pointer_alias'
-            : $typeBridge->returnStrategyForCpp($this->phpReturnType, $overload->returnType);
+        if (!$overload->isStatic && SameClassReferenceResolver::isSameClassReference(
+            $overload->returnType,
+            $classCtx->phpClassName,
+            false,
+            $ownerClass,
+            $this->classTypeResolver(),
+            TypeResolutionContext::fromNames($this->classNameForContext($ownerClass), $ownerClass),
+        )) {
+            $this->phpReturnType = 'static';
+            $this->returnStrategy = 'this';
+        } else {
+            $this->phpReturnType = $overload->smartPointerReturnTargetCppType !== null
+                ? $this->cppReturnToPhp($overload->smartPointerReturnTargetCppType, $ownerClass)
+                : $this->cppReturnToPhp($overload->returnType, $ownerClass);
+            $this->returnStrategy = $overload->smartPointerReturnTargetCppType !== null
+                ? 'smart_pointer_alias'
+                : $typeBridge->returnStrategyForCpp($this->phpReturnType, $overload->returnType);
+        }
 
         $params = [];
         foreach ($overload->parameters as $param) {

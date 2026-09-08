@@ -11,6 +11,7 @@ use QtBuilder\Parsing\CppToPhpTypeMapper;
 use QtBuilder\Support\CppClassTypeResolver;
 use QtBuilder\Support\CppName;
 use QtBuilder\Support\OpenGLNumericPointerArrayRegistry;
+use QtBuilder\Support\SameClassReferenceResolver;
 use QtBuilder\Support\TypeResolutionContext;
 
 class MethodExposurePolicy
@@ -341,7 +342,9 @@ class MethodExposurePolicy
         }
 
         $returnType = (string) $variant['return_type'];
-        if ($this->isUnsafeReferenceReturn($returnType)) {
+        if ($this->isSameClassReferenceReturn($returnType, $className, $variant, $classTypeResolver, $resolutionContext)) {
+            // Safe fluent same-class return — do not reject as unsafe reference return
+        } elseif ($this->isUnsafeReferenceReturn($returnType)) {
             return ['code' => 'unsupported_reference_return', 'message' => 'Non-const reference returns are skipped.'];
         }
 
@@ -532,6 +535,23 @@ class MethodExposurePolicy
         }
 
         return trim($type);
+    }
+
+    public function isSameClassReferenceReturn(
+        string $returnType,
+        string $className,
+        array $variant,
+        ?CppClassTypeResolver $classTypeResolver = null,
+        ?TypeResolutionContext $resolutionContext = null,
+    ): bool {
+        return SameClassReferenceResolver::isSameClassReference(
+            $returnType,
+            $className,
+            (bool) ($variant['is_static'] ?? false),
+            is_string($variant['declaring_class'] ?? null) ? $variant['declaring_class'] : null,
+            $classTypeResolver,
+            $resolutionContext,
+        );
     }
 
     private function isUnsafeReferenceReturn(string $cppType): bool
@@ -1178,7 +1198,17 @@ class MethodExposurePolicy
         $required = 0;
         $pointerPenalty = substr_count((string) $variant['return_type'], '*');
         $templatePenalty = str_contains((string) $variant['return_type'], '<') ? 1 : 0;
-        $referencePenalty = str_contains((string) $variant['return_type'], '&') ? 1 : 0;
+        $returnIsSelfRef = false;
+        $declaringClass = is_string($variant['declaring_class'] ?? null) ? $variant['declaring_class'] : '';
+        if ($declaringClass !== '' && !($variant['is_static'] ?? false)) {
+            $returnIsSelfRef = SameClassReferenceResolver::isSameClassReference(
+                (string) $variant['return_type'],
+                $declaringClass,
+                false,
+                $declaringClass,
+            );
+        }
+        $referencePenalty = (!$returnIsSelfRef && str_contains((string) $variant['return_type'], '&')) ? 1 : 0;
 
         foreach ($variant['parameters'] as $parameter) {
             if (!$parameter['has_default']) {

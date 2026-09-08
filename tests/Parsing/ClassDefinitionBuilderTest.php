@@ -323,3 +323,36 @@ it('keeps owner-scoped bare key-like types unresolved when module context exclud
         ->and($class->methods[1]->parameters[0]->phpType)->toBe('int')
         ->and($class->methods[1]->overloads[0]->parameters[0]->cppType)->toBe('Key');
 });
+
+it('maps same-class reference returns to static return type for fluent chaining', function (): void {
+    $builder = new ClassDefinitionBuilder();
+
+    $class = $builder->build([
+        'name' => 'QString',
+        'is_abstract' => false,
+        'is_struct' => false,
+        'bases' => [],
+        'properties' => [],
+        'methods' => [
+            [
+                'name' => 'append',
+                'return_type' => 'QString &',
+                'access' => 'public',
+                'parameters' => [
+                    ['name' => 'str', 'type' => 'const QString &', 'has_default' => false],
+                ],
+                'is_static' => false,
+                'is_const' => false,
+                'is_virtual' => false,
+                'is_pure_virtual' => false,
+                'is_override' => false,
+            ],
+        ],
+        'signals' => [],
+    ]);
+
+    expect($class->methods)->toHaveCount(1)
+        ->and($class->methods[0]->name)->toBe('append')
+        ->and($class->methods[0]->returnType)->toBe('static')
+        ->and($class->methods[0]->overloads[0]->returnType)->toBe('QString &');
+});

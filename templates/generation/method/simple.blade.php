@@ -296,6 +296,8 @@ ZEND_METHOD({!! $ctx->zendClassSymbol !!}, {!! $method->name !!})
 @endif
 @if($method->returnStrategy === 'void')
 @include('generation.return.void', ['ctx' => $ctx, 'method' => $method])
+@elseif($method->returnStrategy === 'this')
+@include('generation.return.this', ['ctx' => $ctx, 'method' => $method])
 @elseif($method->returnStrategy === 'scalar')
 @include('generation.return.scalar', ['ctx' => $ctx, 'method' => $method])
 @elseif($method->returnStrategy === 'string')

@@ -136,9 +136,9 @@ class MethodContext
         $primarySmartPointerTarget = $method->overloads[0]->smartPointerReturnTargetCppType ?? null;
         $this->returnStrategy = $primarySmartPointerTarget !== null
             ? 'smart_pointer_alias'
-            : $typeBridge->returnStrategyForCpp($primaryReturn, $primaryCppReturn);
+            : ($primaryReturn === 'static' ? 'this' : $typeBridge->returnStrategyForCpp($primaryReturn, $primaryCppReturn));
         $this->returnMacro = $typeBridge->returnMacro($primaryReturn);
-        $this->returnsObject = $typeBridge->isObjectType($primaryReturn);
+        $this->returnsObject = $primaryReturn === 'static' || $typeBridge->isObjectType($primaryReturn);
 
         // Arginfo
         $this->arginfoName = $typeBridge->arginfoName(

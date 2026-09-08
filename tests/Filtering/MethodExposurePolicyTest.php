@@ -342,3 +342,50 @@ it('accepts pair-sequence containers with object keys when key classes are allow
     Assert::assertSame(['serviceDataMap'], array_column($result['selected_methods'], 'name'));
     Assert::assertSame([], $result['skipped_methods']);
 });
+
+it('accepts same-class reference returns on instance methods for fluent chaining', function (): void {
+    $policy = new MethodExposurePolicy();
+
+    $classData = [
+        'name' => 'QString',
+        'methods' => [
+            [
+                'name' => 'append',
+                'return_type' => 'QString &',
+                'access' => 'public',
+                'parameters' => [
+                    ['name' => 'str', 'type' => 'const QString &', 'has_default' => false],
+                ],
+                'is_static' => false,
+            ],
+            [
+                'name' => 'front',
+                'return_type' => 'QChar &',
+                'access' => 'public',
+                'parameters' => [],
+                'is_static' => false,
+            ],
+            [
+                'name' => 'globalDefault',
+                'return_type' => 'QString &',
+                'access' => 'public',
+                'parameters' => [],
+                'is_static' => true,
+            ],
+        ],
+    ];
+
+    $result = $policy->filter($classData, ['QString']);
+
+    Assert::assertSame(['append'], array_column($result['selected_methods'], 'name'));
+
+    $skipped = [];
+    foreach ($result['skipped_methods'] as $item) {
+        $skipped[$item['name']] = $item['reason_code'];
+    }
+
+    Assert::assertArrayHasKey('front', $skipped);
+    Assert::assertSame('unsupported_reference_return', $skipped['front']);
+    Assert::assertArrayHasKey('globalDefault', $skipped);
+    Assert::assertSame('unsupported_reference_return', $skipped['globalDefault']);
+});

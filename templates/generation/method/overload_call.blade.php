@@ -49,6 +49,15 @@ if (!$overload->isPureVirtual) {
 @if($method->shouldReturnNullForVoidOverload($overload))
 {!! $indent !!}RETURN_NULL();
 @endif
+@elseif($overload->returnStrategy === 'this')
+{!! $indent !!}{!! $callExpr !!};
+@foreach($postCallLines as $line)
+{!! $indent !!}{!! $line !!}
+@endforeach
+@foreach($writebackLines as $line)
+{!! $indent !!}{!! $line !!}
+@endforeach
+{!! $indent !!}RETURN_OBJ_COPY(Z_OBJ_P(ZEND_THIS));
 @elseif($overload->returnStrategy === 'scalar')
 @php
     $macro = $ctx->typeBridge->returnMacro($overload->phpReturnType);

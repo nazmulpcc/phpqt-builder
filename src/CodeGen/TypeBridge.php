@@ -308,7 +308,7 @@ class TypeBridge
      */
     public function isObjectType(string $phpType): bool
     {
-        return !$this->isScalarType($phpType) && $phpType !== '';
+        return !$this->isScalarType($phpType) && $phpType !== '' && $phpType !== 'static';
     }
 
     /**
@@ -425,6 +425,10 @@ class TypeBridge
      */
     public function zendTypeConstant(string $phpType): ?string
     {
+        if ($phpType === 'static') {
+            return 'IS_STATIC';
+        }
+
         return self::ZEND_TYPE_MAP[$phpType] ?? null;
     }
 
@@ -435,6 +439,10 @@ class TypeBridge
      */
     public function mayBeConstant(string $phpType): string
     {
+        if ($phpType === 'static') {
+            return 'MAY_BE_STATIC';
+        }
+
         return self::MAY_BE_MAP[$phpType] ?? 'MAY_BE_OBJECT';
     }
 
@@ -556,7 +564,7 @@ class TypeBridge
      */
     private function qualifyStubTypePart(string $type, string $currentNamespace, array $classNamespaces): string
     {
-        if ($type === '' || $type === 'null' || $type === 'mixed' || isset(self::ZEND_TYPE_MAP[$type])) {
+        if ($type === '' || $type === 'null' || $type === 'mixed' || $type === 'static' || isset(self::ZEND_TYPE_MAP[$type])) {
             return $type;
         }
 
@@ -658,6 +666,10 @@ class TypeBridge
      */
     public function returnStrategyForCpp(string $phpType, string $cppType): string
     {
+        if ($phpType === 'static') {
+            return 'this';
+        }
+
         if ($phpType === 'void') {
             return 'void';
         }
@@ -1925,6 +1937,7 @@ class TypeBridge
         $strategy = $this->returnStrategyForCpp($phpType, $cppType);
 
         return match ($strategy) {
+            'this' => '*this',
             'void' => '',
             'scalar' => match ($phpType) {
                 'bool' => 'false',

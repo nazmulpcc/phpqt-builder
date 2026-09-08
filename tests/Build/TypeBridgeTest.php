@@ -222,3 +222,13 @@ it('escapes fqcn backslashes in generated container type-error strings', functio
     expect($generated)->toContain('Expected array of \\\\Qt\\\\Network\\\\QSslError objects.')
         ->not->toContain('Expected array of \\Qt\\Network\\QSslError objects.');
 });
+
+it('supports static return type for fluent same-class return strategy', function (): void {
+    $bridge = new TypeBridge();
+
+    expect($bridge->returnStrategyForCpp('static', 'QString &'))->toBe('this')
+        ->and($bridge->stubType('static', false, 'Qt\\Core', ['QString' => 'Qt\\Core']))->toBe('static')
+        ->and($bridge->zendTypeConstant('static'))->toBe('IS_STATIC')
+        ->and($bridge->mayBeConstant('static'))->toBe('MAY_BE_STATIC')
+        ->and($bridge->defaultNativeReturnExpr('static', 'QString &'))->toBe('*this');
+});
