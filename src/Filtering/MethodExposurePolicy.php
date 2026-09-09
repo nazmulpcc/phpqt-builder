@@ -85,13 +85,14 @@ class MethodExposurePolicy
         $isAbstractClass = (bool) ($classData['is_abstract'] ?? false);
         $resolutionContext = TypeResolutionContext::fromClassData($classData);
         $this->containerBridge->setTypeResolutionMetadata($classTypeResolver, $resolutionContext, $smartPointerAliases);
+        $allowedLookup = $this->buildAllowedLookup($allowedClasses);
 
         foreach ($grouped as $methodName => $variants) {
             $result = $this->selectVariants(
                 $classData['name'],
                 $methodName,
                 $variants,
-                $allowedClasses,
+                $allowedLookup,
                 $flagAliases,
                 $enumNames,
                 $isCopyConstructible,
@@ -697,17 +698,46 @@ class MethodExposurePolicy
     }
 
     /**
-     * @param list<string> $allowedClasses
+     * @param list<string>|array<string, true> $allowedClasses
      */
     private function allowedClassesContainType(array $allowedClasses, string $lookup): bool
     {
-        if (in_array($lookup, $allowedClasses, true)) {
+        if (isset($allowedClasses[$lookup])) {
             return true;
         }
 
         $bareLookup = CppName::unqualify($lookup);
+        if (isset($allowedClasses[$bareLookup])) {
+            return true;
+        }
+
+        if (in_array($lookup, $allowedClasses, true)) {
+            return true;
+        }
 
         return $bareLookup !== $lookup && in_array($bareLookup, $allowedClasses, true);
+    }
+
+    /**
+     * @param list<string>|array<string, true> $allowedClasses
+     * @return array<string, true>
+     */
+    private function buildAllowedLookup(array $allowedClasses): array
+    {
+        $lookup = [];
+        foreach ($allowedClasses as $key => $value) {
+            $class = is_int($key) ? (string) $value : (string) $key;
+            if ($class === '') {
+                continue;
+            }
+            $lookup[$class] = true;
+            $bare = CppName::unqualify($class);
+            if ($bare !== '') {
+                $lookup[$bare] = true;
+            }
+        }
+
+        return $lookup;
     }
 
     private function normalizedClassLikeLookupKey(string $type): string

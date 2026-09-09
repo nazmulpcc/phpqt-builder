@@ -389,3 +389,29 @@ it('accepts same-class reference returns on instance methods for fluent chaining
     Assert::assertArrayHasKey('globalDefault', $skipped);
     Assert::assertSame('unsupported_reference_return', $skipped['globalDefault']);
 });
+
+it('accepts both list and associative allowedClasses lookups with fast indexing', function (): void {
+    $policy = new MethodExposurePolicy();
+    $classData = [
+        'name' => 'QSampleConsumer',
+        'methods' => [
+            [
+                'name' => 'setTarget',
+                'return_type' => 'void',
+                'access' => 'public',
+                'parameters' => [
+                    ['name' => 'target', 'type' => 'QTarget *', 'has_default' => false],
+                ],
+                'is_static' => false,
+            ],
+        ],
+    ];
+
+    // Tested with associative map
+    $resultMap = $policy->filter($classData, ['QSampleConsumer' => true, 'QTarget' => true]);
+    Assert::assertSame(['setTarget'], array_column($resultMap['selected_methods'], 'name'));
+
+    // Tested with plain list
+    $resultList = $policy->filter($classData, ['QSampleConsumer', 'QTarget']);
+    Assert::assertSame(['setTarget'], array_column($resultList['selected_methods'], 'name'));
+});

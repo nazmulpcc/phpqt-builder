@@ -1803,7 +1803,14 @@ class ClassGenerationService
         ?CppClassTypeResolver $classTypeResolver = null,
         ?TypeResolutionContext $resolutionContext = null,
     ): bool {
+        if (isset($allowedClasses[$type])) {
+            return true;
+        }
+
         $lookup = $this->resolvedTypeLookupKey($type, $classTypeResolver, $resolutionContext);
+        if (isset($allowedClasses[$lookup])) {
+            return true;
+        }
 
         return in_array($lookup, $allowedClasses, true) || in_array($type, $allowedClasses, true);
     }
