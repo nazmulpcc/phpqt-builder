@@ -11,6 +11,7 @@ use QtBuilder\Definition\PhpMethod;
 use QtBuilder\IO\FileWriteStats;
 use QtBuilder\IO\SmartFileWriter;
 use QtBuilder\Scanning\HeaderCandidate;
+use QtBuilder\Support\CppClassTypeResolver;
 use QtBuilder\Support\CppName;
 use QtBuilder\Support\GeneratedTypeIdentity;
 use QtBuilder\Support\ModuleNamespace;
@@ -957,6 +958,7 @@ class BuildPipeline
         $allPreparedClassData = $importedAbi !== null
             ? $importedAbi->mergePreparedClassData($preparedClassDataByClass)
             : $preparedClassDataByClass;
+        $classTypeResolver = CppClassTypeResolver::fromPreparedClassData($allPreparedClassData);
         /** @var array<string, HeaderCandidate> $candidateMap */
         $candidateMap = [];
         foreach ($currentCandidates as $candidate) {
@@ -1082,6 +1084,7 @@ class BuildPipeline
                     $allPreparedClassData,
                     $importedAbi !== null,
                     $enumRegistry,
+                    $classTypeResolver,
                 );
                 unset($errorsByClass[$candidateKey]);
 

@@ -840,6 +840,7 @@ class ClassGenerationService
         array $preparedClassDataByClass = [],
         bool $preferExternalDependencyReasons = false,
         ?EnumHolderRegistry $enumRegistry = null,
+        ?CppClassTypeResolver $classTypeResolver = null,
     ): ClassGenerationResult {
         $className = (string) ($classData['name'] ?? '');
         if ($className === '') {
@@ -850,7 +851,7 @@ class ClassGenerationService
                 'Prepared class data is missing the class name.',
             );
         }
-        $classTypeResolver = CppClassTypeResolver::fromPreparedClassData($preparedClassDataByClass + [$className => $classData]);
+        $classTypeResolver ??= CppClassTypeResolver::fromPreparedClassData($preparedClassDataByClass + [$className => $classData]);
         $resolutionContext = TypeResolutionContext::fromClassData($classData);
         $classData = $this->canonicalizeKnownBaseTypes($classData, $classTypeResolver, $resolutionContext);
         $classData = $this->mergeInheritedTypeMetadata(
@@ -935,6 +936,7 @@ class ClassGenerationService
             $allowedClasses,
             $preparedClassDataByClass,
             $virtualFilter['selected_methods'],
+            $classTypeResolver,
         );
         $classData['methods'] = array_values(array_filter(
             $virtualFilter['selected_methods'],
@@ -1253,6 +1255,7 @@ class ClassGenerationService
         array $allowedClasses,
         array $preparedClassDataByClass,
         array $selectedMethods,
+        ?CppClassTypeResolver $classTypeResolver = null,
     ): array {
         $signals = [];
 
@@ -1263,7 +1266,7 @@ class ClassGenerationService
         }
 
         $className = (string) ($classData['name'] ?? '');
-        $classTypeResolver = CppClassTypeResolver::fromPreparedClassData($preparedClassDataByClass + [$className => $classData]);
+        $classTypeResolver ??= CppClassTypeResolver::fromPreparedClassData($preparedClassDataByClass + [$className => $classData]);
         $resolutionContext = TypeResolutionContext::fromClassData($classData);
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
         if (
