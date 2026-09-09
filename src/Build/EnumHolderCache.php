@@ -100,6 +100,74 @@ class EnumHolderCache
         return new EnumHolderRegistry($holders);
     }
 
+    public function loadFromCacheFile(string $path): ?EnumHolderRegistry
+    {
+        if (!is_file($path)) {
+            return null;
+        }
+
+        $decoded = json_decode((string) file_get_contents($path), true);
+        if (!is_array($decoded)) {
+            return null;
+        }
+
+        $holdersPayload = $decoded['holders'] ?? null;
+        if (!is_array($holdersPayload)) {
+            return null;
+        }
+
+        /** @var array<string, EnumHolderDefinition> $holders */
+        $holders = [];
+        foreach ($holdersPayload as $holderPayload) {
+            if (!is_array($holderPayload)) {
+                continue;
+            }
+
+            $module = is_string($holderPayload['module'] ?? null) ? $holderPayload['module'] : '';
+            $cppType = is_string($holderPayload['cpp_type'] ?? null) ? $holderPayload['cpp_type'] : '';
+            $phpNamespace = is_string($holderPayload['php_namespace'] ?? null) ? $holderPayload['php_namespace'] : '';
+            $phpClassName = is_string($holderPayload['php_class_name'] ?? null) ? $holderPayload['php_class_name'] : '';
+            if ($module === '' || $cppType === '' || $phpNamespace === '' || $phpClassName === '') {
+                continue;
+            }
+
+            $constants = [];
+            foreach (($holderPayload['constants'] ?? []) as $constantPayload) {
+                if (!is_array($constantPayload)) {
+                    continue;
+                }
+
+                $name = is_string($constantPayload['name'] ?? null) ? $constantPayload['name'] : '';
+                $cppName = is_string($constantPayload['cpp_name'] ?? null) ? $constantPayload['cpp_name'] : '';
+                $value = is_string($constantPayload['value'] ?? null) ? $constantPayload['value'] : '';
+                if ($name === '' || $cppName === '') {
+                    continue;
+                }
+
+                $constants[] = new EnumHolderConstant(
+                    name: $name,
+                    cppName: $cppName,
+                    value: $value,
+                );
+            }
+
+            $holders[$cppType] = new EnumHolderDefinition(
+                module: $module,
+                cppType: $cppType,
+                phpNamespace: $phpNamespace,
+                phpClassName: $phpClassName,
+                constants: $constants,
+                isFlagAlias: (bool) ($holderPayload['is_flag_alias'] ?? false),
+                sourceCppType: is_string($holderPayload['source_cpp_type'] ?? null) ? $holderPayload['source_cpp_type'] : null,
+                headerPath: is_string($holderPayload['header'] ?? null) ? $holderPayload['header'] : '',
+            );
+        }
+
+        ksort($holders);
+
+        return new EnumHolderRegistry($holders);
+    }
+
     /**
      * @param list<string> $includePaths
      * @param list<HeaderCandidate> $acceptedCandidates

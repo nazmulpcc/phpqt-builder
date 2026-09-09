@@ -153,7 +153,7 @@ class GenerateCommand extends Command
         }
 
         $workerMode = (string) $input->getOption('worker-mode');
-        if (!in_array($workerMode, ['generate', 'probe', 'facts', 'facts-batch', 'enum-facts', 'emit-batch'], true)) {
+        if (!in_array($workerMode, ['generate', 'probe', 'facts', 'facts-batch', 'enum-facts', 'emit-batch', 'analysis-batch'], true)) {
             return $this->renderFailure(
                 $output,
                 true,
@@ -341,6 +341,119 @@ class GenerateCommand extends Command
                 'status' => 'ok',
                 'file_write_stats' => $fileWriteStats->toArray(),
                 'classmap' => $classmap,
+            ]));
+
+            return self::SUCCESS;
+        }
+
+        if ($workerMode === 'analysis-batch') {
+            $batchFile = (string) $input->getOption('class-batch-file');
+            if (!is_file($batchFile)) {
+                return $this->renderFailure(
+                    $output,
+                    true,
+                    $className,
+                    $headerPath,
+                    'batch_file_not_found',
+                    'Analysis batch file not found: ' . $batchFile,
+                );
+            }
+            $batchData = json_decode((string) file_get_contents($batchFile), true);
+            if (!is_array($batchData)) {
+                return $this->renderFailure(
+                    $output,
+                    true,
+                    $className,
+                    $headerPath,
+                    'invalid_batch_file',
+                    'Invalid analysis batch JSON: ' . $batchFile,
+                );
+            }
+
+            $preparedDataFile = (string) ($batchData['prepared_class_data_file'] ?? '');
+            if (!is_file($preparedDataFile)) {
+                return $this->renderFailure(
+                    $output,
+                    true,
+                    $className,
+                    $headerPath,
+                    'prepared_data_file_not_found',
+                    'Prepared class data file not found: ' . $preparedDataFile,
+                );
+            }
+            $preparedData = json_decode((string) file_get_contents($preparedDataFile), true);
+            if (!is_array($preparedData)) {
+                return $this->renderFailure(
+                    $output,
+                    true,
+                    $className,
+                    $headerPath,
+                    'invalid_prepared_data_file',
+                    'Invalid prepared class data JSON: ' . $preparedDataFile,
+                );
+            }
+
+            $enumRegistry = null;
+            $enumHoldersFile = (string) ($batchData['enum_holders_file'] ?? '');
+            if ($enumHoldersFile !== '' && is_file($enumHoldersFile)) {
+                $enumRegistry = (new \QtBuilder\Build\EnumHolderCache())->loadFromCacheFile($enumHoldersFile);
+            }
+
+            $availableClasses = (array) ($batchData['available_classes'] ?? []);
+            $hasImportedAbi = (bool) ($batchData['imported_abi'] ?? false);
+            $classTypeResolver = \QtBuilder\Support\CppClassTypeResolver::fromPreparedClassData($preparedData);
+
+            $results = [];
+            foreach ((array) ($batchData['candidates'] ?? []) as $entry) {
+                if (!is_array($entry)) {
+                    continue;
+                }
+                $candidateKey = (string) ($entry['key'] ?? '');
+                $candidateHeader = (string) ($entry['header'] ?? '');
+                $candidateClass = (string) ($entry['class'] ?? '');
+                $candidateModule = (string) ($entry['module'] ?? '');
+
+                $classData = $preparedData[$candidateKey] ?? null;
+                if (!is_array($classData)) {
+                    $results[] = [
+                        'key' => $candidateKey,
+                        'class' => $candidateClass,
+                        'header' => $candidateHeader,
+                        'module' => $candidateModule,
+                        'status' => 'error',
+                        'reason_code' => 'missing_class_data',
+                        'reason_message' => 'Prepared class data is missing from the class cache.',
+                    ];
+                    continue;
+                }
+
+                $genResult = $service->generateFromPreparedData(
+                    $classData,
+                    $candidateHeader,
+                    $availableClasses,
+                    $preparedData,
+                    $hasImportedAbi,
+                    $enumRegistry,
+                    $classTypeResolver,
+                );
+
+                $results[] = [
+                    'key' => $candidateKey,
+                    'class' => $genResult->className,
+                    'header' => $genResult->headerPath,
+                    'module' => $candidateModule,
+                    'status' => $genResult->status,
+                    'reason_code' => $genResult->reasonCode,
+                    'reason_message' => $genResult->reasonMessage,
+                    'skipped_methods' => $genResult->skippedMethods,
+                    'php_class' => $genResult->phpClass?->toArray(),
+                    'payload' => $genResult->toArray(),
+                ];
+            }
+
+            $output->writeln($this->encodeJson([
+                'status' => 'ok',
+                'results' => $results,
             ]));
 
             return self::SUCCESS;
