@@ -532,18 +532,6 @@ PHP_METHOD(Qt_Test_QTest, currentDataTag)
     RETURN_STRING(name);
 }
 
-PHP_METHOD(Qt_Test_QTest, currentGlobalDataTag)
-{
-    ZEND_PARSE_PARAMETERS_NONE();
-
-    const char *name = QTest::currentGlobalDataTag();
-    if (name == NULL) {
-        RETURN_NULL();
-    }
-
-    RETURN_STRING(name);
-}
-
 PHP_METHOD(Qt_Test_QTest, currentTestFailed)
 {
     ZEND_PARSE_PARAMETERS_NONE();
@@ -1068,7 +1056,6 @@ static const zend_function_entry qt_qtest_methods[] = {
     ZEND_ME(Qt_Test_QTest, currentAppName, arginfo_class_Qt_Test_QTest_currentAppName, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
     ZEND_ME(Qt_Test_QTest, currentTestFunction, arginfo_class_Qt_Test_QTest_currentTestFunction, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
     ZEND_ME(Qt_Test_QTest, currentDataTag, arginfo_class_Qt_Test_QTest_currentDataTag, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
-    ZEND_ME(Qt_Test_QTest, currentGlobalDataTag, arginfo_class_Qt_Test_QTest_currentGlobalDataTag, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
     ZEND_ME(Qt_Test_QTest, currentTestFailed, arginfo_class_Qt_Test_QTest_currentTestFailed, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
     ZEND_ME(Qt_Test_QTest, currentTestResolved, arginfo_class_Qt_Test_QTest_currentTestResolved, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
     ZEND_ME(Qt_Test_QTest, runningTest, arginfo_class_Qt_Test_QTest_runningTest, ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)

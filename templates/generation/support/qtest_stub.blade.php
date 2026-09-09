@@ -48,8 +48,6 @@ abstract class QTest
 
     public static function currentDataTag(): ?string {}
 
-    public static function currentGlobalDataTag(): ?string {}
-
     public static function currentTestFailed(): bool {}
 
     public static function currentTestResolved(): bool {}
