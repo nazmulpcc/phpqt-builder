@@ -127,7 +127,7 @@ final class GenerationAnalysisCache
             'generation' => $this->serializeGeneration($generation),
         ];
 
-        file_put_contents($path, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '{}');
+        file_put_contents($path, json_encode($payload, JSON_UNESCAPED_SLASHES) ?: '{}');
 
         return $path;
     }

@@ -453,22 +453,14 @@ class BuildPipeline
                 microtime(true) - $generationWarmEnumCacheWriteStartedAt,
             );
 
-            $finalGenerationCachePreparedClassData = $this->preparedClassDataForCandidates(
-                $preparedClassDataByClass,
-                $generation['accepted_candidates'],
-            );
-            $finalGenerationCacheClassNamespaces = $this->classNamespaces(
-                $generation['accepted_candidates'],
-                $request->importedAbi,
-            );
             $generationCacheWriteStartedAt = microtime(true);
             $generationAnalysisCache->write(
                 $metadataDir,
                 $request,
-                $generation['accepted_candidates'],
-                $generation['skipped_classes'],
-                $finalGenerationCachePreparedClassData,
-                $finalGenerationCacheClassNamespaces,
+                $acceptedCandidates,
+                $skippedClasses,
+                $generationCachePreparedClassData,
+                $classNamespaces,
                 $enumRegistry,
                 $generation,
             );
@@ -2267,7 +2259,7 @@ class BuildPipeline
         return [
             'extension_name' => $context->extensionName,
             'qt_root_path' => $context->installation->rootPath,
-            'qt_version' => $context->installation->version,
+            'qt_version' => $context->installation->qtVersion,
             'build_mode' => $context->buildMode,
             'modules' => array_values($context->modules),
         ];
