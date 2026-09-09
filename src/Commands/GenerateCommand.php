@@ -153,7 +153,7 @@ class GenerateCommand extends Command
         }
 
         $workerMode = (string) $input->getOption('worker-mode');
-        if (!in_array($workerMode, ['generate', 'probe', 'facts', 'facts-batch', 'enum-facts'], true)) {
+        if (!in_array($workerMode, ['generate', 'probe', 'facts', 'facts-batch', 'enum-facts', 'emit-batch'], true)) {
             return $this->renderFailure(
                 $output,
                 true,
@@ -272,6 +272,75 @@ class GenerateCommand extends Command
                     static fn(\QtBuilder\Build\EnumHolderDefinition $holder): array => $holder->toArray(),
                     $holders,
                 ),
+            ]));
+
+            return self::SUCCESS;
+        }
+
+        if ($workerMode === 'emit-batch') {
+            $batchFile = (string) $input->getOption('class-batch-file');
+            if (!is_file($batchFile)) {
+                return $this->renderFailure(
+                    $output,
+                    true,
+                    $className,
+                    $headerPath,
+                    'batch_file_not_found',
+                    'Emit batch file not found: ' . $batchFile,
+                );
+            }
+            $batchData = json_decode((string) file_get_contents($batchFile), true);
+            if (!is_array($batchData)) {
+                return $this->renderFailure(
+                    $output,
+                    true,
+                    $className,
+                    $headerPath,
+                    'invalid_batch_file',
+                    'Invalid emit batch JSON: ' . $batchFile,
+                );
+            }
+
+            $generator = new ExtensionGenerator();
+            $fileWriteStats = new \QtBuilder\IO\FileWriteStats();
+            $classmap = [];
+            $batchOutputDir = (string) ($batchData['output_dir'] ?? $outputDir);
+            $batchClassNamespaces = (array) ($batchData['class_namespaces'] ?? []);
+            $batchClassNativeTypes = (array) ($batchData['class_native_types'] ?? []);
+            $batchClassMetadata = (array) ($batchData['class_metadata'] ?? []);
+            $batchClassHeaders = (array) ($batchData['class_headers'] ?? []);
+            $supportsRuntimeNotify = (bool) ($batchData['supports_runtime_notify_functor_connect'] ?? true);
+
+            foreach ((array) ($batchData['classes'] ?? []) as $classEntry) {
+                if (!is_array($classEntry) || !is_array($classEntry['php_class'] ?? null)) {
+                    continue;
+                }
+                $targetClassName = (string) ($classEntry['name'] ?? '');
+                $phpClass = \QtBuilder\Definition\PhpClass::fromArray($classEntry['php_class']);
+                $files = $generator->generate(
+                    $phpClass,
+                    $batchClassNamespaces[$targetClassName] ?? 'Qt\\Core',
+                    $batchOutputDir,
+                    $batchClassNamespaces,
+                    $batchClassNativeTypes,
+                    $batchClassMetadata,
+                    false,
+                    $supportsRuntimeNotify,
+                );
+                $fileWriteStats->merge($generator->lastWriteStats());
+                $classmap[] = [
+                    'class' => $phpClass->name,
+                    'qualified_name' => $phpClass->nativeCppType ?? $phpClass->name,
+                    'generation_id' => $phpClass->resolvedGenerationId(),
+                    'header' => $batchClassHeaders[$targetClassName] ?? '',
+                    'files' => $files,
+                ];
+            }
+
+            $output->writeln($this->encodeJson([
+                'status' => 'ok',
+                'file_write_stats' => $fileWriteStats->toArray(),
+                'classmap' => $classmap,
             ]));
 
             return self::SUCCESS;

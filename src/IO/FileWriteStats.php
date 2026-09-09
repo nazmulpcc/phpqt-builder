@@ -64,5 +64,18 @@ final class FileWriteStats
             'total' => $this->total(),
         ];
     }
+
+    /**
+     * @param array<string, mixed> $payload
+     */
+    public static function fromArray(array $payload): self
+    {
+        $stats = new self();
+        $stats->created = (int) ($payload['created'] ?? 0);
+        $stats->updated = (int) ($payload['updated'] ?? 0);
+        $stats->unchanged = (int) ($payload['unchanged'] ?? 0);
+
+        return $stats;
+    }
 }
 

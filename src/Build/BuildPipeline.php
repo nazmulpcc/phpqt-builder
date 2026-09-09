@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace QtBuilder\Build;
 
+use QtBuilder\Build\EmissionBatchResult;
+use QtBuilder\Build\EmissionTask;
+use QtBuilder\Build\EmissionWorkerPool;
 use QtBuilder\CodeGen\ExtensionGenerator;
 use QtBuilder\Containers\QListSpecializationResolver;
 use QtBuilder\Definition\PhpClass;
@@ -587,6 +590,7 @@ class BuildPipeline
             $analysis->classNamespaces,
             $analysis->generatedClassHeaders,
             $output,
+            $request->jobs,
         );
         if ($context->installation->osFamily === 'Windows') {
             $this->relocateWindowsSourceBuckets($context);
@@ -1819,6 +1823,7 @@ class BuildPipeline
         array $classNamespaces,
         array $classHeaders,
         OutputInterface $output,
+        int $jobs = 1,
     ): array {
         $generator = new ExtensionGenerator();
         $supportsRuntimeNotifyFunctorConnect = $context->installation->supportsRuntimeNotifyFunctorConnect();
@@ -1853,35 +1858,108 @@ class BuildPipeline
             );
             $emitProgressBar?->start();
 
-            foreach ($generatedClasses as $className) {
-                $phpClass = $generatedPhpClasses[$className] ?? null;
-                if ($phpClass === null) {
-                    throw new \RuntimeException(sprintf(
-                        'Stable generation set is missing the PHP class definition for %s.',
-                        $className,
-                    ));
+            if ($jobs > 1 && count($generatedClasses) > 20) {
+                $batchDir = $context->metadataDir() . '/emit-batches';
+                @mkdir($batchDir, 0755, true);
+
+                $chunkSize = (int) ceil(count($generatedClasses) / $jobs);
+                $chunks = array_chunk($generatedClasses, max(1, $chunkSize));
+                $tasks = [];
+                $batchFiles = [];
+
+                foreach ($chunks as $chunkIndex => $chunkClasses) {
+                    $batchEntries = [];
+                    foreach ($chunkClasses as $className) {
+                        $phpClass = $generatedPhpClasses[$className] ?? null;
+                        if ($phpClass === null) {
+                            throw new \RuntimeException(sprintf(
+                                'Stable generation set is missing the PHP class definition for %s.',
+                                $className,
+                            ));
+                        }
+                        $batchEntries[] = [
+                            'name' => $className,
+                            'php_class' => $phpClass->toArray(),
+                        ];
+                    }
+
+                    $batchPayload = [
+                        'output_dir' => $outputDir,
+                        'class_namespaces' => $classNamespaces,
+                        'class_native_types' => $classNativeTypes,
+                        'class_metadata' => $classMetadata,
+                        'class_headers' => $classHeaders,
+                        'supports_runtime_notify_functor_connect' => $supportsRuntimeNotifyFunctorConnect,
+                        'classes' => $batchEntries,
+                    ];
+
+                    $batchFile = $batchDir . '/batch_' . $chunkIndex . '.json';
+                    file_put_contents($batchFile, json_encode($batchPayload, JSON_UNESCAPED_SLASHES));
+                    $batchFiles[] = $batchFile;
+
+                    $tasks[] = new EmissionTask(
+                        batchFile: $batchFile,
+                        outputDir: $outputDir,
+                        classCount: count($chunkClasses),
+                    );
                 }
 
-                $files = $generator->generate(
-                    $phpClass,
-                    $classNamespaces[$className] ?? 'Qt\\Core',
-                    $outputDir,
-                    $classNamespaces,
-                    $classNativeTypes,
-                    $classMetadata,
-                    false,
-                    $supportsRuntimeNotifyFunctorConnect,
+                $pool = new EmissionWorkerPool();
+                $results = $pool->run(
+                    $tasks,
+                    $jobs,
+                    static function (int $completed, int $total, EmissionBatchResult $result) use ($emitProgressBar): void {
+                        $emitProgressBar?->setProgress($completed);
+                    },
+                    count($generatedClasses),
                 );
-                $fileWriteStats->merge($generator->lastWriteStats());
-                $classmap[] = [
-                    'class' => $phpClass->name,
-                    'qualified_name' => $phpClass->nativeCppType ?? $phpClass->name,
-                    'generation_id' => $phpClass->resolvedGenerationId(),
-                    'header' => $classHeaders[$className] ?? '',
-                    'files' => $files,
-                ];
-                $emitProgressBar?->advance();
+
+                foreach ($results as $result) {
+                    if ($result->status !== 'ok') {
+                        throw new \RuntimeException('Emit worker failed: ' . ($result->errorMessage ?? 'Unknown error'));
+                    }
+                    $fileWriteStats->merge($result->fileWriteStats);
+                    foreach ($result->classmap as $entry) {
+                        $classmap[] = $entry;
+                    }
+                }
+
+                foreach ($batchFiles as $batchFile) {
+                    @unlink($batchFile);
+                }
+            } else {
+                foreach ($generatedClasses as $className) {
+                    $phpClass = $generatedPhpClasses[$className] ?? null;
+                    if ($phpClass === null) {
+                        throw new \RuntimeException(sprintf(
+                            'Stable generation set is missing the PHP class definition for %s.',
+                            $className,
+                        ));
+                    }
+
+                    $files = $generator->generate(
+                        $phpClass,
+                        $classNamespaces[$className] ?? 'Qt\\Core',
+                        $outputDir,
+                        $classNamespaces,
+                        $classNativeTypes,
+                        $classMetadata,
+                        false,
+                        $supportsRuntimeNotifyFunctorConnect,
+                    );
+                    $fileWriteStats->merge($generator->lastWriteStats());
+                    $classmap[] = [
+                        'class' => $phpClass->name,
+                        'qualified_name' => $phpClass->nativeCppType ?? $phpClass->name,
+                        'generation_id' => $phpClass->resolvedGenerationId(),
+                        'header' => $classHeaders[$className] ?? '',
+                        'files' => $files,
+                    ];
+                    $emitProgressBar?->advance();
+                }
             }
+
+            usort($classmap, static fn(array $a, array $b): int => strcmp((string) ($a['class'] ?? ''), (string) ($b['class'] ?? '')));
 
             if ($emitProgressBar !== null) {
                 $emitProgressBar->finish();
