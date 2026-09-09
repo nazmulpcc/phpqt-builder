@@ -822,3 +822,34 @@ it('skips unchanged core scaffold files on repeated finalize', function (): void
         ->and($secondStats['written'])->toBe(0)
         ->and($after)->toBe($before);
 });
+
+it('emits qtest support files with nullable return type on qFindTestData', function (): void {
+    $outputDir = qt_temp_dir('qtbuilder-qtest-') . '/ext/classes';
+    $installation = new QtInstallation(
+        rootPath: '/opt/qt',
+        osFamily: 'Darwin',
+        includeRoots: ['/opt/qt/include'],
+        libraryRoots: ['/opt/qt/lib'],
+        moduleHeaderRoots: ['QtTest' => '/opt/qt/include/QtTest'],
+        tools: [],
+    );
+    $context = new ExtensionBuildContext(
+        'qt',
+        '0.1.0',
+        dirname($outputDir, 2),
+        dirname($outputDir),
+        $installation,
+        ['QtCore', 'QtGui', 'QtWidgets', 'QtTest'],
+        includeQTestSupport: true,
+    );
+
+    $generator = new ExtensionGenerator();
+    $files = $generator->generateQTestSupport($outputDir, $context);
+
+    expect(is_file($outputDir . '/qt_qtest.h'))->toBeTrue()
+        ->and(is_file($outputDir . '/qt_qtest.cpp'))->toBeTrue()
+        ->and(is_file($outputDir . '/qt_qtest.stub.php'))->toBeTrue();
+
+    $stubContent = (string) file_get_contents($outputDir . '/qt_qtest.stub.php');
+    expect($stubContent)->toContain('function qFindTestData(string $basepath, ?string $file = null, int $line = 0, ?string $builddir = null, ?string $sourcedir = null): ?string');
+});

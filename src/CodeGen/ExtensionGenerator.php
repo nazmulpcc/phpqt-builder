@@ -198,6 +198,16 @@ class ExtensionGenerator
     /**
      * @return list<string>
      */
+    public function generateQTestSupport(string $outputDir, ExtensionBuildContext $context): array
+    {
+        $this->lastWriteStats = new FileWriteStats();
+
+        return $this->writeQTestSupport($outputDir, $context);
+    }
+
+    /**
+     * @return list<string>
+     */
     public function generateEnumHolderSupport(string $outputDir, EnumHolderDefinition $definition): array
     {
         $this->lastWriteStats = new FileWriteStats();
@@ -359,6 +369,41 @@ class ExtensionGenerator
             $this->lastWriteStats->record($result);
             $files[] = $path;
         }
+
+        return $files;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function writeQTestSupport(string $outputDir, ExtensionBuildContext $context): array
+    {
+        $files = $this->writePhpCompatHeader($outputDir);
+
+        $headerFile = $outputDir . '/qt_qtest.h';
+        $sourceFile = $outputDir . '/qt_qtest.cpp';
+        $stubFile = $outputDir . '/qt_qtest.stub.php';
+
+        $headerResult = $this->fileWriter->write(
+            $headerFile,
+            $this->cleanOutput($this->blade->run('generation.support.qtest_header', ['ctx' => $context])),
+        );
+        $this->lastWriteStats->record($headerResult);
+        $files[] = $headerFile;
+
+        $sourceResult = $this->fileWriter->write(
+            $sourceFile,
+            $this->cleanOutput($this->blade->run('generation.support.qtest_source', ['ctx' => $context])),
+        );
+        $this->lastWriteStats->record($sourceResult);
+        $files[] = $sourceFile;
+
+        $stubResult = $this->fileWriter->write(
+            $stubFile,
+            $this->cleanOutput($this->blade->run('generation.support.qtest_stub', ['ctx' => $context])),
+        );
+        $this->lastWriteStats->record($stubResult);
+        $files[] = $stubFile;
 
         return $files;
     }

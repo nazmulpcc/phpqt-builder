@@ -108,7 +108,7 @@ class ClassGenerationService
 
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
         if ($parentClass !== null && !$this->allowedClassesContain($allowedClasses, $parentClass, $classTypeResolver, $resolutionContext)) {
-            if ($this->canIgnoreUnavailableParent($parentClass)) {
+            if ($this->canIgnoreUnavailableParent($className, $parentClass)) {
                 $classData['bases'] = array_values(array_filter(
                     (array) ($classData['bases'] ?? []),
                     static fn(mixed $base): bool => is_string($base) && $base !== $parentClass,
@@ -877,7 +877,7 @@ class ClassGenerationService
 
         $parentClass = is_string($classData['bases'][0] ?? null) ? $classData['bases'][0] : null;
         if ($parentClass !== null && !$this->allowedClassesContain($allowedClasses, $parentClass, $classTypeResolver, $resolutionContext)) {
-            if ($this->canIgnoreUnavailableParent($parentClass)) {
+            if ($this->canIgnoreUnavailableParent($className, $parentClass)) {
                 $classData['bases'] = array_values(array_filter(
                     (array) ($classData['bases'] ?? []),
                     static fn(mixed $base): bool => is_string($base) && $base !== $parentClass,
@@ -2075,9 +2075,17 @@ class ClassGenerationService
         return $classData;
     }
 
-    private function canIgnoreUnavailableParent(string $parentClass): bool
+    private function canIgnoreUnavailableParent(string $className, string $parentClass): bool
     {
-        return $parentClass === 'QIODeviceBase';
+        if ($parentClass === 'QIODeviceBase') {
+            return true;
+        }
+
+        if (($className === 'QSignalSpy' || $className === 'QTestEventList') && str_starts_with($parentClass, 'QList<')) {
+            return true;
+        }
+
+        return false;
     }
 
     /**

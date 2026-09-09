@@ -54,6 +54,8 @@ it('accepts whitelisted concrete classes that would otherwise match prefix or su
         'QStringMatcher',
         'QByteArrayMatcher',
         'QTextList',
+        'QSignalSpy',
+        'QTestEventList',
     ];
 
     foreach ($whitelisted as $className) {

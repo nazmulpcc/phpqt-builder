@@ -76,6 +76,8 @@ class ClassExposurePolicy
         'QStringMatcher',
         'QByteArrayMatcher',
         'QTextList',
+        'QSignalSpy',
+        'QTestEventList',
     ];
 
     public function decideCandidate(HeaderCandidate $candidate): ExposureDecision

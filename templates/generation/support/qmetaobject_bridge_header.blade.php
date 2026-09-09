@@ -37,14 +37,15 @@ extern "C" {
 #include <private/qmetaobjectbuilder_p.h>
 #include <private/qobject_p.h>
 
+class QtPhpMetaObjectBridge;
+
 struct QtPhpDynamicMetaObjectData : public QDynamicMetaObjectData {
+    QtPhpMetaObjectBridge *bridge;
     QMetaObject *meta;
-    explicit QtPhpDynamicMetaObjectData(QMetaObject *m) : meta(m) {}
+    explicit QtPhpDynamicMetaObjectData(QtPhpMetaObjectBridge *b, QMetaObject *m) : bridge(b), meta(m) {}
     void objectDestroyed(QObject *) override {}
     QMetaObject *toDynamicMetaObject(QObject *) override { return meta; }
-    int metaCall(QObject *o, QMetaObject::Call c, int id, void **a) override {
-        return o ? o->qt_metacall(c, id, a) : id;
-    }
+    int metaCall(QObject *, QMetaObject::Call call, int id, void **args) override;
 };
 
 #ifndef PHP_QT_API

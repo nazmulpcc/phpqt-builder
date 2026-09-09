@@ -225,7 +225,7 @@ QtPhpMetaObjectBridge::QtPhpMetaObjectBridge(QObject *parent, zend_class_entry *
     buildDynamicMetaObject();
 
     if (m_dynamicMetaObject) {
-        auto *dmd = new QtPhpDynamicMetaObjectData(m_dynamicMetaObject);
+        auto *dmd = new QtPhpDynamicMetaObjectData(this, m_dynamicMetaObject);
         static_cast<QObjectPrivate *>(QObject::d_ptr.data())->metaObject = dmd;
     }
 
@@ -312,6 +312,14 @@ const QMetaObject *QtPhpMetaObjectBridge::metaObject() const
         return m_dynamicMetaObject;
     }
     return &QObject::staticMetaObject;
+}
+
+int QtPhpDynamicMetaObjectData::metaCall(QObject *, QMetaObject::Call call, int id, void **args)
+{
+    if (bridge == nullptr) {
+        return id;
+    }
+    return bridge->qt_metacall(call, id, args);
 }
 
 static inline bool qt_php_metaobject_qt_arg_to_zval(int metaType, void *arg, zval *out)

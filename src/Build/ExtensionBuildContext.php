@@ -38,6 +38,7 @@ readonly class ExtensionBuildContext
         public array $importIncludeRoots = [],
         public bool $includeBuildInfoSupport = false,
         public bool $includeThreadRuntimeSupport = false,
+        public bool $includeQTestSupport = false,
         public ?RuntimeManifest $runtimeManifest = null,
         public ?string $currentQtModule = null,
         public string $buildMode = RuntimeManifest::MODE_MONOLITHIC,
@@ -51,6 +52,7 @@ readonly class ExtensionBuildContext
         array $generatedClassIds = [],
         array $enumHolders = [],
         bool $includeSignalConnectionSupport = false,
+        ?bool $includeQTestSupport = null,
     ): self
     {
         return new self(
@@ -70,6 +72,7 @@ readonly class ExtensionBuildContext
             $this->importIncludeRoots,
             $this->includeBuildInfoSupport,
             $this->includeThreadRuntimeSupport,
+            $includeQTestSupport ?? $this->includeQTestSupport,
             $this->runtimeManifest,
             $this->currentQtModule,
             $this->buildMode,
@@ -151,6 +154,11 @@ readonly class ExtensionBuildContext
                     'classes/qt_qmetaobject_bridge.h',
                 ]
                 : [],
+            $this->includeQTestSupport
+                ? [
+                    'classes/qt_qtest.h',
+                ]
+                : [],
         ));
     }
 
@@ -177,6 +185,11 @@ readonly class ExtensionBuildContext
                     'classes/qt_signalattribute.cpp',
                     'classes/qt_slotattribute.cpp',
                     'classes/qt_qmetaobject_bridge.cpp',
+                ]
+                : [],
+            $this->includeQTestSupport
+                ? [
+                    'classes/qt_qtest.cpp',
                 ]
                 : [],
         ));
@@ -247,7 +260,15 @@ readonly class ExtensionBuildContext
             $this->includeSignalConnectionSupport
                 ? ['qt_qphpsignalconnection', 'qt_signalattribute', 'qt_slotattribute']
                 : [],
+            $this->includeQTestSupport
+                ? ['qt_qtest']
+                : [],
         ));
+    }
+
+    public function includesModule(string $module): bool
+    {
+        return in_array($module, $this->modules, true);
     }
 
     /**

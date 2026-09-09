@@ -561,6 +561,7 @@ class BuildPipeline
             ])),
             includeBuildInfoSupport: true,
             includeThreadRuntimeSupport: true,
+            includeQTestSupport: in_array('QtTest', $request->modules, true),
             runtimeManifest: $runtimeManifest,
             buildMode: RuntimeManifest::MODE_MONOLITHIC,
         );
@@ -1910,6 +1911,11 @@ class BuildPipeline
 
         if ($context->includeThreadRuntimeSupport) {
             $generator->generateThreadRuntimeSupport($outputDir);
+            $fileWriteStats->merge($generator->lastWriteStats());
+        }
+
+        if ($context->includeQTestSupport) {
+            $generator->generateQTestSupport($outputDir, $context);
             $fileWriteStats->merge($generator->lastWriteStats());
         }
 
