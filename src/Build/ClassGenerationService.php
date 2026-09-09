@@ -48,6 +48,26 @@ class ClassGenerationService
         private readonly SmartPointerAliasResolver $smartPointerAliasResolver = new SmartPointerAliasResolver(),
     ) {}
 
+    /** @var array<string, bool> */
+    private array $qobjectDerivedCache = [];
+
+    /** @var array<string, bool> */
+    private array $widgetDescendantCache = [];
+
+    /** @var array<string, array{enum_names: list<string>, flag_aliases: array<string, string>}> */
+    private array $inheritedTypeMetadataCache = [];
+
+    /** @var array<string, array<string, mixed>|null> */
+    private array $filteredBaseClassDataCache = [];
+
+    public function clearHierarchyCaches(): void
+    {
+        $this->qobjectDerivedCache = [];
+        $this->widgetDescendantCache = [];
+        $this->inheritedTypeMetadataCache = [];
+        $this->filteredBaseClassDataCache = [];
+    }
+
     /**
      * @param list<string> $includePaths
      * @param list<string> $allowedClasses
@@ -901,9 +921,13 @@ class ClassGenerationService
             $classData,
             $filtered['selected_methods'],
             function (string $baseClass) use ($preparedClassDataByClass, $allowedClasses, $preferExternalDependencyReasons, $enumRegistry, $classTypeResolver, $resolutionContext): ?array {
+                if (array_key_exists($baseClass, $this->filteredBaseClassDataCache)) {
+                    return $this->filteredBaseClassDataCache[$baseClass];
+                }
+
                 $baseClassData = $this->preparedClassDataForType($baseClass, $preparedClassDataByClass, $classTypeResolver, $resolutionContext);
                 if (!is_array($baseClassData)) {
-                    return null;
+                    return $this->filteredBaseClassDataCache[$baseClass] = null;
                 }
 
                 $filtered = $this->methodPolicy->filter(
@@ -915,7 +939,7 @@ class ClassGenerationService
                 );
                 $baseClassData['selected_methods'] = $filtered['selected_methods'];
 
-                return $baseClassData;
+                return $this->filteredBaseClassDataCache[$baseClass] = $baseClassData;
             },
         );
         $signalFilter = $this->filterSignalCallbackMethods(
@@ -2165,6 +2189,13 @@ class ClassGenerationService
     ): array {
         $className = is_string($classData['name'] ?? null) ? $classData['name'] : '';
         if ($className !== '') {
+            if (isset($this->inheritedTypeMetadataCache[$className])) {
+                $classData['enum_names'] = $this->inheritedTypeMetadataCache[$className]['enum_names'];
+                $classData['flag_aliases'] = $this->inheritedTypeMetadataCache[$className]['flag_aliases'];
+
+                return $classData;
+            }
+
             if (isset($visited[$className])) {
                 return $classData;
             }
@@ -2217,8 +2248,16 @@ class ClassGenerationService
             }
         }
 
-        $classData['enum_names'] = array_values(array_unique($enumNames));
+        $enumNames = array_values(array_unique($enumNames));
+        $classData['enum_names'] = $enumNames;
         $classData['flag_aliases'] = $flagAliases;
+
+        if ($className !== '') {
+            $this->inheritedTypeMetadataCache[$className] = [
+                'enum_names' => $enumNames,
+                'flag_aliases' => $flagAliases,
+            ];
+        }
 
         return $classData;
     }
@@ -2286,6 +2325,10 @@ class ClassGenerationService
             return true;
         }
 
+        if ($className !== '' && isset($this->widgetDescendantCache[$className])) {
+            return $this->widgetDescendantCache[$className];
+        }
+
         if ($className !== '') {
             if (isset($visited[$className])) {
                 return false;
@@ -2294,22 +2337,37 @@ class ClassGenerationService
             $visited[$className] = true;
         }
 
+        $isWidget = false;
         foreach ((array) ($classData['bases'] ?? []) as $baseClass) {
             if (!is_string($baseClass) || $baseClass === '' || $baseClass === $className) {
                 continue;
             }
 
             if ($baseClass === 'QWidget') {
-                return true;
+                $isWidget = true;
+                break;
+            }
+
+            if (isset($this->widgetDescendantCache[$baseClass])) {
+                if ($this->widgetDescendantCache[$baseClass]) {
+                    $isWidget = true;
+                    break;
+                }
+                continue;
             }
 
             $baseClassData = $baseClassLoader($baseClass);
             if (is_array($baseClassData) && $this->isWidgetDescendantClassData($baseClassData, $baseClassLoader, $visited)) {
-                return true;
+                $isWidget = true;
+                break;
             }
         }
 
-        return false;
+        if ($className !== '') {
+            $this->widgetDescendantCache[$className] = $isWidget;
+        }
+
+        return $isWidget;
     }
 
     /**
@@ -4580,13 +4638,27 @@ class ClassGenerationService
             return true;
         }
 
+        if ($className !== '' && isset($this->qobjectDerivedCache[$className])) {
+            return $this->qobjectDerivedCache[$className];
+        }
+
+        $result = false;
         foreach ((array) ($classData['bases'] ?? []) as $baseClass) {
             if (!is_string($baseClass) || $baseClass === '') {
                 continue;
             }
 
             if ($baseClass === 'QObject') {
-                return true;
+                $result = true;
+                break;
+            }
+
+            if (isset($this->qobjectDerivedCache[$baseClass])) {
+                if ($this->qobjectDerivedCache[$baseClass]) {
+                    $result = true;
+                    break;
+                }
+                continue;
             }
 
             if (isset($visited[$baseClass])) {
@@ -4596,11 +4668,16 @@ class ClassGenerationService
 
             $baseClassData = $baseLoader($baseClass);
             if (is_array($baseClassData) && $this->isQObjectDerivedClassData($baseClassData, $baseLoader, $visited)) {
-                return true;
+                $result = true;
+                break;
             }
         }
 
-        return false;
+        if ($className !== '') {
+            $this->qobjectDerivedCache[$className] = $result;
+        }
+
+        return $result;
     }
 
     private function stripQObjectRuntimeMethods(PhpClass $phpClass): PhpClass
