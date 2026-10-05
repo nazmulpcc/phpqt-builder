@@ -75,6 +75,109 @@ it('preserves qualified native cpp types for namespaced classes', function (): v
         ->and($class->parent)->toBe('QObject');
 });
 
+it('uses canonical class identities for native and php types', function (): void {
+    $builder = new ClassDefinitionBuilder();
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'QAliasTypeHolder', 'qualified_name' => 'QAliasTypeHolder', 'module' => 'QtCore'],
+        ['name' => 'Value', 'qualified_name' => 'QAliasOwner::Value', 'module' => 'QtCore'],
+    ]);
+
+    $class = $builder->build([
+        'name' => 'QAliasTypeHolder',
+        'qualified_name' => 'QAliasTypeHolder',
+        'module' => 'QtCore',
+        'is_abstract' => false,
+        'is_struct' => false,
+        'bases' => [],
+        'properties' => [[
+            'name' => 'storedValue',
+            'type' => 'Value',
+            'canonical_type' => 'QAliasOwner::Value',
+            'access' => 'public',
+            'is_static' => false,
+        ]],
+        'methods' => [
+            [
+                'name' => 'value',
+                'return_type' => 'Value',
+                'canonical_return_type' => 'QAliasOwner::Value',
+                'access' => 'public',
+                'parameters' => [],
+                'is_static' => false,
+                'is_const' => true,
+                'is_virtual' => false,
+                'is_pure_virtual' => false,
+                'is_override' => false,
+            ],
+            [
+                'name' => 'setValue',
+                'return_type' => 'void',
+                'canonical_return_type' => 'void',
+                'access' => 'public',
+                'parameters' => [[
+                    'name' => 'value',
+                    'type' => 'const Value &',
+                    'canonical_type' => 'const QAliasOwner::Value &',
+                    'has_default' => false,
+                ]],
+                'is_static' => false,
+                'is_const' => false,
+                'is_virtual' => false,
+                'is_pure_virtual' => false,
+                'is_override' => false,
+            ],
+        ],
+        'signals' => [],
+    ], $resolver);
+
+    expect($class->properties[0]->phpType)->toBe('\\Qt\\Core\\QAliasOwner\\Value')
+        ->and($class->properties[0]->cppType)->toBe('QAliasOwner::Value')
+        ->and($class->methods[0]->returnType)->toBe('\\Qt\\Core\\QAliasOwner\\Value')
+        ->and($class->methods[0]->overloads[0]->returnType)->toBe('QAliasOwner::Value')
+        ->and($class->methods[1]->parameters[0]->phpType)->toBe('\\Qt\\Core\\QAliasOwner\\Value')
+        ->and($class->methods[1]->overloads[0]->parameters[0]->cppType)->toBe('const QAliasOwner::Value &');
+});
+
+it('keeps semantic scalar aliases for alias-specific native marshalling', function (): void {
+    $builder = new ClassDefinitionBuilder();
+    $resolver = new CppClassTypeResolver([
+        ['name' => 'QUuid', 'qualified_name' => 'QUuid', 'module' => 'QtCore'],
+    ]);
+
+    $class = $builder->build([
+        'name' => 'QUuid',
+        'qualified_name' => 'QUuid',
+        'module' => 'QtCore',
+        'is_abstract' => false,
+        'is_struct' => false,
+        'bases' => [],
+        'properties' => [],
+        'methods' => [[
+            'name' => 'fromUInt128',
+            'return_type' => 'quint128',
+            'canonical_return_type' => 'unsigned __int128',
+            'access' => 'public',
+            'parameters' => [[
+                'name' => 'uuid',
+                'type' => 'quint128',
+                'canonical_type' => 'unsigned __int128',
+                'has_default' => false,
+            ]],
+            'is_static' => true,
+            'is_const' => false,
+            'is_virtual' => false,
+            'is_pure_virtual' => false,
+            'is_override' => false,
+        ]],
+        'signals' => [],
+    ], $resolver);
+
+    expect($class->methods[0]->returnType)->toBe('string')
+        ->and($class->methods[0]->overloads[0]->returnType)->toBe('quint128')
+        ->and($class->methods[0]->parameters[0]->phpType)->toBe('string')
+        ->and($class->methods[0]->overloads[0]->parameters[0]->cppType)->toBe('quint128');
+});
+
 it('canonicalizes same-namespace class references for namespaced classes', function (): void {
     $builder = new ClassDefinitionBuilder();
     $resolver = new CppClassTypeResolver([

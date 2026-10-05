@@ -23,6 +23,7 @@ Linux and macOS are the main happy path: clone, install dependencies, run `php q
 - [Usage](#usage)
 - [Supported Qt Modules](#supported-qt-modules)
 - [Examples](#examples)
+- [Testing and Live Interaction](#testing-and-live-interaction)
 - [Architecture](#architecture)
 - [Threading](#threading)
 - [Platform Support](#platform-support)
@@ -235,6 +236,10 @@ These require additional Qt modules. Build only what the example needs.
 | `multithread-downloader` | QtCore (ZTS) | QThread workers with publish/on events |
 
 > **Threading note:** `multithread-downloader` requires a ZTS PHP build. All other examples work on both ZTS and NTS.
+
+## Testing and Live Interaction
+
+PHPQt applications can be verified through isolated runtime tests, headless QML screenshots, QtTest input synthesis, and direct interaction with a visible native window. See [Testing and Live Interaction for PHPQt Applications](docs/testing-and-live-interaction.md) for the recommended project layout, environment profiles, visual-driver pattern, live debugging workflow, and CI strategy.
 
 ---
 

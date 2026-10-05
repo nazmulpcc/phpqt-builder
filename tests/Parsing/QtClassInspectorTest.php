@@ -109,6 +109,32 @@ it('extracts enum constants with scalar values', function (): void {
         ->and($constants['On']['value'])->toBe(1);
 });
 
+it('preserves declared type aliases and exposes their canonical native types', function (): void {
+    $fixtureRoot = qt_fixture_path('alias-types');
+    $includeRoot = $fixtureRoot . '/include';
+    $header = $includeRoot . '/QtCore/qaliastypeholder.h';
+
+    $inspector = new QtClassInspector(new ClangArgumentBuilder([
+        $includeRoot,
+        $includeRoot . '/QtCore',
+    ]));
+
+    $classData = $inspector->inspect($header, 'QAliasTypeHolder');
+    expect($classData)->not->toBeNull();
+
+    $methods = [];
+    foreach ($classData['methods'] as $method) {
+        $methods[$method['name']] = $method;
+    }
+
+    expect($methods['value']['return_type'])->toBe('Value')
+        ->and($methods['value']['canonical_return_type'])->toBe('QAliasOwner::Value')
+        ->and($methods['setValue']['parameters'][0]['type'])->toBe('const Value &')
+        ->and($methods['setValue']['parameters'][0]['canonical_type'])->toBe('const QAliasOwner::Value &')
+        ->and($classData['properties'][0]['type'])->toBe('Value')
+        ->and($classData['properties'][0]['canonical_type'])->toBe('QAliasOwner::Value');
+});
+
 it('reads constructor access directly from cparser output', function (): void {
     $fixtureRoot = qt_fixture_path('policy-qt');
     $includeRoot = $fixtureRoot . '/include';

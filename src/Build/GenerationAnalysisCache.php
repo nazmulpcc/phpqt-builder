@@ -10,7 +10,7 @@ use QtBuilder\Support\GeneratedTypeIdentity;
 
 final class GenerationAnalysisCache
 {
-    private const SCHEMA_VERSION = 1;
+    private const SCHEMA_VERSION = 2;
 
     /**
      * @param list<HeaderCandidate> $acceptedCandidates

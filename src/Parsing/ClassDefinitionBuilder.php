@@ -120,7 +120,7 @@ class ClassDefinitionBuilder
     // ------------------------------------------------------------------
 
     /**
-     * @param list<array{name: string, type: string, access: string, is_static: bool}> $fields
+     * @param list<array{name: string, type: string, canonical_type?: string, access: string, is_static: bool}> $fields
      * @return list<PhpProperty>
      */
     private function buildProperties(
@@ -138,16 +138,18 @@ class ClassDefinitionBuilder
                 continue;
             }
 
-            $cppType = $this->canonicalizeCppType(
-                (string) ($field['type'] ?? ''),
+            $nativeCppType = $this->nativeCppType(
+                $field,
+                'canonical_type',
+                'type',
                 $classTypeResolver,
                 $resolutionContext,
             );
 
             $properties[] = new PhpProperty(
                 name: $field['name'],
-                phpType: $this->typeMapper->map($cppType, $className, $classTypeResolver, $resolutionContext, $smartPointerAliases),
-                cppType: $cppType,
+                phpType: $this->typeMapper->map($nativeCppType, $className, $classTypeResolver, $resolutionContext, $smartPointerAliases),
+                cppType: $nativeCppType,
                 access: $field['access'],
                 isStatic: $field['is_static'],
             );
@@ -196,6 +198,7 @@ class ClassDefinitionBuilder
                 if ($m['name'] === $className) {
                     $m['name'] = '__construct';
                     $m['return_type'] = 'void'; // constructors have no return type
+                    $m['canonical_return_type'] = 'void';
                 }
                 return $m;
             },
@@ -278,19 +281,26 @@ class ClassDefinitionBuilder
         $parameters = $this->normalizeWritableParameterDefaults($variant['parameters']);
         $params = array_map(
             function (array $p) use ($className, $classTypeResolver, $resolutionContext, $smartPointerAliases): OverloadParameter {
-                $cppType = $this->canonicalizeCppType(
+                $declaredCppType = $this->canonicalizeCppType(
                     (string) ($p['type'] ?? ''),
                     $classTypeResolver,
                     $resolutionContext,
                 );
-                $metadata = $this->analyzeCppParameterType($cppType);
-                $phpType = $this->typeMapper->map($cppType, $className, $classTypeResolver, $resolutionContext, $smartPointerAliases);
+                $nativeCppType = $this->nativeCppType(
+                    $p,
+                    'canonical_type',
+                    'type',
+                    $classTypeResolver,
+                    $resolutionContext,
+                );
+                $metadata = $this->analyzeCppParameterType($nativeCppType);
+                $phpType = $this->typeMapper->map($nativeCppType, $className, $classTypeResolver, $resolutionContext, $smartPointerAliases);
                 if ($this->shouldExpandStringLikeForClass($className) && $this->canAcceptPhpStringForParameter($metadata)) {
-                    $phpType = $this->expandStringLikeParameterPhpType($phpType, $cppType);
+                    $phpType = $this->expandStringLikeParameterPhpType($phpType, $declaredCppType);
                 }
-                $smartPointerTargetCppType = $this->resolveSmartPointerTargetCppType($cppType, $smartPointerAliases);
+                $smartPointerTargetCppType = $this->resolveSmartPointerTargetCppType($declaredCppType, $smartPointerAliases);
                 $writableByRefMeta = $this->analyzeWritableByRefParameter(
-                    $cppType,
+                    $nativeCppType,
                     $phpType,
                     $metadata,
                     (bool) ($p['has_default'] ?? false),
@@ -298,7 +308,7 @@ class ClassDefinitionBuilder
 
                 return new OverloadParameter(
                     name: (string) ($p['name'] ?? ''),
-                    cppType: $cppType,
+                    cppType: $nativeCppType,
                     hasDefault: (bool) ($p['has_default'] ?? false),
                     smartPointerTargetCppType: $smartPointerTargetCppType,
                     isReference: $metadata['is_reference'],
@@ -314,10 +324,18 @@ class ClassDefinitionBuilder
             $parameters,
         );
 
-        $returnCppType = $this->canonicalizeCppType(
+        $declaredReturnCppType = $this->canonicalizeCppType(
             (string) ($variant['return_type'] ?? 'void'),
             $classTypeResolver,
             $resolutionContext,
+        );
+        $returnCppType = $this->nativeCppType(
+            $variant,
+            'canonical_return_type',
+            'return_type',
+            $classTypeResolver,
+            $resolutionContext,
+            'void',
         );
         $declaringClass = $this->canonicalizeCppType(
             (string) ($variant['declaring_class'] ?? ''),
@@ -328,7 +346,7 @@ class ClassDefinitionBuilder
         return new MethodOverload(
             declaringClass: $declaringClass,
             returnType: $returnCppType,
-            smartPointerReturnTargetCppType: $this->resolveSmartPointerTargetCppType($returnCppType, $smartPointerAliases),
+            smartPointerReturnTargetCppType: $this->resolveSmartPointerTargetCppType($declaredReturnCppType, $smartPointerAliases),
             parameters: $params,
             access: (string) ($variant['access'] ?? 'public'),
             isConst: $variant['is_const'],
@@ -396,10 +414,13 @@ class ClassDefinitionBuilder
                 continue;
             }
 
-            $cppType = $this->canonicalizeCppType(
-                $returnType,
+            $cppType = $this->nativeCppType(
+                $v,
+                'canonical_return_type',
+                'return_type',
                 $classTypeResolver,
                 $resolutionContext,
+                'void',
             );
             $phpTypes[] = $this->typeMapper->map($cppType, $className, $classTypeResolver, $resolutionContext, $smartPointerAliases);
         }
@@ -475,15 +496,22 @@ class ClassDefinitionBuilder
                     continue;
                 }
 
-                $paramType = $this->canonicalizeCppType(
+                $declaredParamType = $this->canonicalizeCppType(
                     (string) ($params[$i]['type'] ?? ''),
+                    $classTypeResolver,
+                    $resolutionContext,
+                );
+                $paramType = $this->nativeCppType(
+                    $params[$i],
+                    'canonical_type',
+                    'type',
                     $classTypeResolver,
                     $resolutionContext,
                 );
                 $mappedParamPhpType = $this->typeMapper->map($paramType, $className, $classTypeResolver, $resolutionContext, $smartPointerAliases);
                 $paramMeta = $this->analyzeCppParameterType($paramType);
                 $paramPhpType = ($this->shouldExpandStringLikeForClass($className) && $this->canAcceptPhpStringForParameter($paramMeta))
-                    ? $this->expandStringLikeParameterPhpType($mappedParamPhpType, $paramType)
+                    ? $this->expandStringLikeParameterPhpType($mappedParamPhpType, $declaredParamType)
                     : $mappedParamPhpType;
                 $phpTypes[] = $paramPhpType;
                 $writableMeta = $this->analyzeWritableByRefParameter(
@@ -552,6 +580,47 @@ class ClassDefinitionBuilder
         }
 
         return $classTypeResolver->canonicalizeType($cppType, $resolutionContext);
+    }
+
+    /**
+     * Prefer libclang's canonical spelling for known generated class types,
+     * while falling back to the declared spelling for cached or synthetic data.
+     *
+     * @param array<string, mixed> $payload
+     */
+    private function nativeCppType(
+        array $payload,
+        string $canonicalKey,
+        string $declaredKey,
+        ?CppClassTypeResolver $classTypeResolver,
+        ?TypeResolutionContext $resolutionContext,
+        string $fallback = '',
+    ): string {
+        $declared = is_string($payload[$declaredKey] ?? null)
+            ? (string) $payload[$declaredKey]
+            : $fallback;
+        $resolvedDeclared = $this->canonicalizeCppType($declared, $classTypeResolver, $resolutionContext);
+        $canonical = is_string($payload[$canonicalKey] ?? null)
+            ? trim((string) $payload[$canonicalKey])
+            : '';
+        if (
+            $canonical === ''
+            || $canonical === 'unknown'
+            || $classTypeResolver === null
+            || $resolutionContext === null
+        ) {
+            return $resolvedDeclared;
+        }
+
+        $resolvedCanonical = $this->canonicalizeCppType($canonical, $classTypeResolver, $resolutionContext);
+
+        // Canonical spellings are essential for class aliases declared in a
+        // different owner (for example QDtls's GeneratorParameters alias). Keep
+        // semantic scalar aliases such as quint128 intact because TypeBridge
+        // deliberately provides alias-specific marshalling for them.
+        return $classTypeResolver->resolveQualifiedClassName($resolvedCanonical, $resolutionContext) !== null
+            ? $resolvedCanonical
+            : $resolvedDeclared;
     }
 
     /**

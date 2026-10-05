@@ -12,6 +12,7 @@ use CParser\FieldCursor;
 use CParser\MethodCursor;
 use CParser\NamespaceCursor;
 use CParser\ParameterCursor;
+use CParser\Type;
 use CParser\TypeAliasCursor;
 use CParser\TranslationUnit;
 use CParser\TranslationUnitFlags;
@@ -829,20 +830,23 @@ class QtClassInspector
     }
 
     /**
-     * @return array{name: string, type: string, access: string, is_static: bool}
+     * @return array{name: string, type: string, canonical_type: string, access: string, is_static: bool}
      */
     public function extractField(FieldCursor $field): array
     {
+        $type = $field->getType();
+
         return [
             'name' => $field->getSpelling(),
-            'type' => $field->getType()?->toString() ?? 'unknown',
+            'type' => $type?->toString() ?? 'unknown',
+            'canonical_type' => $this->canonicalTypeSpelling($type),
             'access' => self::accessLabel($field->getAccessSpecifier()),
             'is_static' => $field->isStatic(),
         ];
     }
 
     /**
-     * @return array{name: string, declaring_class: string, return_type: string, access: string, parameters: list<array<string, mixed>>, is_static: bool, is_const: bool, is_virtual: bool, is_pure_virtual: bool, is_override: bool, is_final: bool, is_signal: bool, is_slot: bool}
+     * @return array{name: string, declaring_class: string, return_type: string, canonical_return_type: string, access: string, parameters: list<array<string, mixed>>, is_static: bool, is_const: bool, is_virtual: bool, is_pure_virtual: bool, is_override: bool, is_final: bool, is_signal: bool, is_slot: bool}
      */
     public function extractMethod(MethodCursor $method): array
     {
@@ -852,13 +856,15 @@ class QtClassInspector
         }
 
         $annotations = $this->methodAnnotations($method);
+        $returnType = $method->getReturnType();
 
         return [
             'name' => $method->getSpelling(),
             'declaring_class' => $method->getParent() instanceof Cursor
                 ? $this->qualifiedCursorName($method->getParent())
                 : '',
-            'return_type' => $method->getReturnType()->toString(),
+            'return_type' => $returnType->toString(),
+            'canonical_return_type' => $this->canonicalTypeSpelling($returnType),
             'access' => self::accessLabel($method->getAccessSpecifier()),
             'parameters' => $parameters,
             'is_static' => $method->isStatic(),
@@ -873,15 +879,29 @@ class QtClassInspector
     }
 
     /**
-     * @return array{name: string, type: string, has_default: bool}
+     * @return array{name: string, type: string, canonical_type: string, has_default: bool}
      */
     public function extractParameter(ParameterCursor $param): array
     {
+        $type = $param->getType();
+
         return [
             'name' => $param->getSpelling(),
-            'type' => $param->getType()?->toString() ?? 'unknown',
+            'type' => $type?->toString() ?? 'unknown',
+            'canonical_type' => $this->canonicalTypeSpelling($type),
             'has_default' => $param->hasDefaultValue(),
         ];
+    }
+
+    private function canonicalTypeSpelling(?Type $type): string
+    {
+        if ($type === null) {
+            return 'unknown';
+        }
+
+        $canonical = trim($type->getCanonicalType()->toString());
+
+        return $canonical !== '' ? $canonical : $type->toString();
     }
 
     /**
